@@ -2,6 +2,7 @@ package com.vscodroid.service
 
 import android.net.LocalSocket
 import android.net.LocalSocketAddress
+import android.os.ParcelFileDescriptor
 import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
@@ -11,12 +12,14 @@ import java.io.File
 import java.io.IOException
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.SocketAddress
 import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
 import java.nio.channels.SelectionKey
 import java.nio.channels.Selector
 import java.nio.channels.ServerSocketChannel
 import java.nio.channels.SocketChannel
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.SynchronousQueue
 import java.util.concurrent.ThreadPoolExecutor
@@ -33,10 +36,23 @@ private val IDLE_NANOS = TimeUnit.MINUTES.toNanos(2)
 // Chromium checks that an unused socket is still open before it sends on it.
 private val FIRST_BYTE_NANOS = TimeUnit.SECONDS.toNanos(10)
 private const val MAX_CONNECTIONS = 32
+// How long the listener waits for a connection it closed to leave before the client that needed
+// its slot is admitted. Both pumps are woken by the close and leave at once; one still connecting
+// to the backend can take IO_POLL_MS, and the client is refused then, as it was before.
+private const val MAKE_ROOM_WAIT_MS = 500L
 private const val BUFFER_BYTES = 32 * 1024
 
-/** Keeps the WebView origin owned even when its editor backend stops. */
-internal class EditorGateway : Closeable {
+/**
+ * Keeps the WebView origin owned even when its editor backend stops.
+ *
+ * [ownClients] answers, for the address the listener is bound to, with the client ends of the
+ * connections to it that this process made itself, and throws when it cannot say; see
+ * [ownLoopbackClients] and [admit]. [slots] is how many connections are relayed at a time.
+ */
+internal class EditorGateway(
+    private val ownClients: (InetSocketAddress) -> Set<InetSocketAddress> = ::ownLoopbackClients,
+    private val slots: Int = MAX_CONNECTIONS,
+) : Closeable {
     private data class Backend(val path: File, val owner: String, val generation: Long)
     private val lock = Any()
     private var listener: ServerSocketChannel? = null
@@ -51,8 +67,10 @@ internal class EditorGateway : Closeable {
     // How many listeners bind has opened, never decremented: see [listenersOpened].
     private var opened = 0L
     private val connections = mutableSetOf<Connection>()
+    // Two threads a connection, and two more: the pumps of a connection that has just left may
+    // not be back in the pool when the client that takes its slot asks for its own.
     private val workers = ThreadPoolExecutor(
-        0, MAX_CONNECTIONS * 2, 30, TimeUnit.SECONDS, SynchronousQueue(),
+        0, slots * 2 + 2, 30, TimeUnit.SECONDS, SynchronousQueue(),
         { task -> Thread(null, task, "VSCodroid editor relay", 256 * 1024L).apply { isDaemon = true } },
     )
 
@@ -173,14 +191,7 @@ internal class EditorGateway : Closeable {
                 client.socket().tcpNoDelay = true
                 client.socket().sendBufferSize = BUFFER_BYTES * 2
                 client.socket().receiveBufferSize = BUFFER_BYTES * 2
-                // The backend is the one selected for the listener that accepted the client. A listener
-                // released between the accept and this lock is no longer [listener], and the backend
-                // selected meanwhile belongs to the one bound after it, which this client never reached.
-                val connection = synchronized(lock) {
-                    val target = backend
-                    if (closed || listener !== channel || target == null || connections.size >= MAX_CONNECTIONS) null
-                    else Connection(client, target).also { connections.add(it) }
-                }
+                val connection = admit(channel, client)
                 if (connection == null) {
                     client.use {
                         it.write(ByteBuffer.wrap(
@@ -211,10 +222,60 @@ internal class EditorGateway : Closeable {
         }
     }
 
+    /**
+     * Gives [client] a connection to the backend selected for [channel], or null when it is to be
+     * refused: no backend, a listener released or closed, or no slot.
+     *
+     * Any app on the device can connect to the origin, and thirty-two connections that each send a
+     * byte now and then held every slot for as long as their owner liked, with the page refused
+     * meanwhile. So when every slot is taken the oldest connection that another program opened is
+     * closed and the client gets its slot. A connection this process opened is never closed for
+     * one: the WebView's network stack runs in this process, so those are the page's, with the
+     * requests the app makes itself. With every slot held by this process the client is refused.
+     */
+    private fun admit(channel: ServerSocketChannel, client: SocketChannel): Connection? {
+        var full = false
+        // The backend is the one selected for the listener that accepted the client. A listener
+        // released between the accept and this lock is no longer [listener], and the backend
+        // selected meanwhile belongs to the one bound after it, which this client never reached.
+        fun place(): Connection? = synchronized(lock) {
+            val target = backend
+            full = !closed && listener === channel && target != null && connections.size >= slots
+            if (closed || listener !== channel || target == null || full) null
+            else Connection(client, target).also { connections.add(it) }
+        }
+        place()?.let { return it }
+        if (!full) return null
+        // Without an answer about whose the connections are, none is closed: the client is refused.
+        val ours = try {
+            ownClients(channel.socket().localSocketAddress as InetSocketAddress)
+        } catch (_: Exception) {
+            return null
+        }
+        // In the order they were admitted, so the first is the oldest.
+        val oldest = synchronized(lock) { connections.firstOrNull { it.clientEnd !in ours } } ?: return null
+        oldest.close()
+        try {
+            oldest.left.await(MAKE_ROOM_WAIT_MS, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            return null
+        }
+        return place()
+    }
+
     private inner class Connection(val client: SocketChannel, val target: Backend) : Closeable {
         private val ended = AtomicBoolean()
         private val pumps = AtomicInteger(1)
         @Volatile private var local: EditorBackend? = null
+        // The address and port the client connected from, which tell its owner; see [admit].
+        val clientEnd: InetSocketAddress? = client.socket().remoteSocketAddress as? InetSocketAddress
+        // The selectors the pumps wait on, which [close] wakes so that neither waits out a poll
+        // after it. Guarded by its own monitor, which a selector is also closed under: one woken
+        // after its close writes to a descriptor number that may be another file's by then.
+        private val selectors = ArrayList<Selector>(2)
+        /** Counted down when both pumps have left and the slot is free. */
+        val left = CountDownLatch(1)
         private val admitted = System.nanoTime()
         private val lastProgress = AtomicLong(admitted)
 
@@ -264,12 +325,26 @@ internal class EditorGateway : Closeable {
             checkIdle()
         }
 
+        /** Runs [pump] with a selector on the client for [interest], one that [close] wakes. */
+        private inline fun selecting(interest: Int, pump: (Selector) -> Unit) {
+            val selector = Selector.open()
+            synchronized(selectors) { selectors.add(selector) }
+            try {
+                client.register(selector, interest)
+                pump(selector)
+            } finally {
+                synchronized(selectors) {
+                    selectors.remove(selector)
+                    runCatching { selector.close() }
+                }
+            }
+        }
+
         private fun toBackend(destination: EditorBackend) {
             val bytes = ByteArray(BUFFER_BYTES)
             val buffer = ByteBuffer.wrap(bytes)
             var heard = false
-            Selector.open().use { selector ->
-                client.register(selector, SelectionKey.OP_READ)
+            selecting(SelectionKey.OP_READ) { selector ->
                 while (true) {
                     checkIdle()
                     buffer.clear()
@@ -304,8 +379,7 @@ internal class EditorGateway : Closeable {
 
         private fun fromBackend(source: EditorBackend) {
             val bytes = ByteArray(BUFFER_BYTES)
-            Selector.open().use { selector ->
-                client.register(selector, SelectionKey.OP_WRITE)
+            selecting(SelectionKey.OP_WRITE) { selector ->
                 while (true) {
                     checkIdle()
                     val count = try { source.read(bytes) } catch (failure: ErrnoException) { retry(failure); continue }
@@ -334,12 +408,14 @@ internal class EditorGateway : Closeable {
             runCatching { client.socket().shutdownOutput() }
             runCatching { client.close() }
             runCatching { local?.close() }
+            synchronized(selectors) { selectors.forEach { it.wakeup() } }
         }
 
         fun finished() {
             if (pumps.decrementAndGet() == 0) {
                 close()
                 synchronized(lock) { connections.remove(this) }
+                left.countDown()
             }
         }
     }
@@ -363,6 +439,60 @@ internal class EditorGateway : Closeable {
         // How long release and close wait for the accept thread to leave its channel.
         private const val ACCEPT_END_WAIT_MS = 2000L
     }
+}
+
+/**
+ * The client ends of the connections to [listener] that this process opened itself.
+ *
+ * Nothing tells a loopback listener who its client is: every app connects from a loopback
+ * address, and /proc/net/tcp is not readable by an app. A connection of this process has its
+ * other end among the process's own descriptors, though, and that end names both addresses. Each
+ * socket descriptor is looked at through a duplicate, closed at once. Only what reads as a socket
+ * is duplicated, because closing a duplicate of a file gives up the locks the process holds on
+ * that file; a descriptor closed and given to a file between the look and the duplicate is the
+ * one case left, and it needs every slot to be taken at that moment.
+ *
+ * Throws when the descriptors cannot be listed or one of the sockets cannot be looked at: an
+ * answer that left out a connection of this process would have it closed as another's.
+ */
+internal fun ownLoopbackClients(listener: InetSocketAddress): Set<InetSocketAddress> {
+    val ends = ArrayList<Pair<SocketAddress?, SocketAddress?>>()
+    val names = File("/proc/self/fd").list() ?: throw IOException("The descriptors cannot be listed")
+    for (name in names) {
+        val number = name.toIntOrNull() ?: continue
+        val kind = try { Os.readlink("/proc/self/fd/$number") } catch (_: ErrnoException) { continue }
+        if (!kind.startsWith("socket:")) continue
+        val copy = try {
+            ParcelFileDescriptor.fromFd(number)
+        } catch (failure: IOException) {
+            // Closed since the listing. Any other failure leaves a socket nobody has looked at.
+            if ((failure.cause as? ErrnoException)?.errno == OsConstants.EBADF) continue
+            throw failure
+        }
+        copy.use {
+            // Not connected, or of a family with no such address: not a client of the listener.
+            val peer = try { Os.getpeername(it.fileDescriptor) } catch (_: Exception) { return@use }
+            ends += Os.getsockname(it.fileDescriptor) to peer
+        }
+    }
+    return clientsOf(listener, ends)
+}
+
+/**
+ * Of [ends], each the local and the remote address of one socket of this process, the local
+ * addresses of those connected to [listener].
+ *
+ * The whole address is compared on both sides, not the port alone. Another app can connect from
+ * 127.0.0.2 with the listener's own port number as its source port, and the socket this process
+ * accepted for it then has that port on both ends; it can also connect from the port number one
+ * of this process's own connections uses, at another loopback address. Neither is a socket
+ * connected to [listener], and neither has the client end of one.
+ */
+internal fun clientsOf(
+    listener: InetSocketAddress,
+    ends: List<Pair<SocketAddress?, SocketAddress?>>,
+): Set<InetSocketAddress> = ends.mapNotNullTo(HashSet()) { (local, peer) ->
+    (local as? InetSocketAddress)?.takeIf { peer == listener && local != listener }
 }
 
 internal class EditorBackend(private val socket: LocalSocket) : Closeable {

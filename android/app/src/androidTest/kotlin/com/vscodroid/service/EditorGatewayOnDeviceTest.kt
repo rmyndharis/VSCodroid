@@ -6,6 +6,7 @@ import android.net.LocalSocket
 import android.net.LocalSocketAddress
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -172,6 +173,142 @@ class EditorGatewayOnDeviceTest {
             java.net.ServerSocket(port, 1, InetAddress.getByName("127.0.0.1")).close()
             fail("the frontend origin was released")
         } catch (_: IOException) { }
+    }
+
+    /**
+     * A backend that sends every byte back, on as many connections as come. Its threads are
+     * daemons outside [workers]: the close of a listening socket does not wake a thread that
+     * waits in accept on it, so the one that takes the connections has no end to wait for.
+     */
+    private fun echoing(server: LocalServerSocket) {
+        Thread {
+            runCatching {
+                while (!closing.get()) {
+                    val connection = server.accept()
+                    resources.add(connection)
+                    Thread {
+                        runCatching {
+                            while (true) {
+                                val byte = connection.inputStream.read()
+                                if (byte < 0) break
+                                connection.outputStream.write(byte)
+                            }
+                        }
+                    }.apply { isDaemon = true }.start()
+                }
+            }
+        }.apply { isDaemon = true }.start()
+    }
+
+    /**
+     * A connection another process holds: toybox's nc, which sends what it is given and prints
+     * what comes back. Returned once the byte it sent has come back, so it has its slot.
+     */
+    private fun outsider(port: Int): Process =
+        holding(ProcessBuilder("/system/bin/toybox", "nc", "127.0.0.1", port.toString()))
+
+    /**
+     * A connection another process holds from the address and the port it chose, which nc does
+     * not offer: [ChosenSourceClient], loaded from the test APK by a runtime of its own.
+     */
+    private fun outsider(port: Int, from: String, sourcePort: Int): Process {
+        val builder = ProcessBuilder(
+            "/system/bin/app_process", "/system/bin", ChosenSourceClient::class.java.name,
+            from, sourcePort.toString(), port.toString(),
+        ).redirectError(ProcessBuilder.Redirect.INHERIT)
+        builder.environment()["CLASSPATH"] =
+            InstrumentationRegistry.getInstrumentation().context.packageCodePath
+        return holding(builder)
+    }
+
+    private fun holding(builder: ProcessBuilder): Process {
+        val process = builder.start()
+        resources.add(Closeable { process.destroy() })
+        process.outputStream.apply { write('x'.code); flush() }
+        assertEquals("the other process did not get a connection", 'x'.code, process.inputStream.read())
+        return process
+    }
+
+    /** A client of this process that has its slot: the byte it sent has come back. */
+    private fun insider(gateway: EditorGateway): Socket =
+        Socket(InetAddress.getByName("127.0.0.1"), gateway.boundPort!!).also {
+            it.soTimeout = 20000
+            resources.add(it)
+            it.getOutputStream().write('x'.code)
+            assertEquals('x'.code, it.getInputStream().read())
+        }
+
+    private fun Socket.stillServed(): Boolean {
+        getOutputStream().write('y'.code)
+        return getInputStream().read() == 'y'.code
+    }
+
+    /**
+     * A gateway of four slots, so that filling it takes four child processes: the system allows
+     * every app's children thirty-two between them, and ends some when there are more.
+     */
+    private fun fourSlots(name: String): EditorGateway {
+        val (path, server) = server(name)
+        echoing(server)
+        return EditorGateway(slots = 4).also {
+            resources.add(it)
+            it.bind(0)
+            it.selectBackend(path, "run")
+        }
+    }
+
+    /**
+     * What the gateway rests on when it makes room: that it can tell a connection this process
+     * opened from one another process opened. Nothing in the JVM suite can show that, because
+     * every client there is the suite's own.
+     */
+    @Test(timeout = 60000)
+    fun aClientOfThisProcessTakesTheSlotOfTheOldestConnectionAnotherProcessHolds() {
+        val small = fourSlots("held.sock")
+        val held = List(4) { outsider(small.boundPort!!) }
+
+        val ours = insider(small)
+
+        assertEquals("the oldest connection of the other process kept its slot", -1, held[0].inputStream.read())
+        held[1].outputStream.apply { write('z'.code); flush() }
+        assertEquals("a later connection of the other process was closed as well", 'z'.code, held[1].inputStream.read())
+        assertTrue(ours.stillServed())
+    }
+
+    @Test(timeout = 60000)
+    fun noConnectionOfThisProcessIsClosedForAClientOfAnotherProcess() {
+        val small = fourSlots("ours.sock")
+        val ours = List(4) { insider(small) }
+
+        val refused = ProcessBuilder("/system/bin/toybox", "nc", "127.0.0.1", small.boundPort!!.toString()).start()
+        resources.add(Closeable { refused.destroy() })
+        assertEquals("HTTP/1.1 503 Service Unavailable", refused.inputStream.bufferedReader().readLine())
+        ours.forEach { assertTrue("a connection of the app was closed for another process", it.stillServed()) }
+    }
+
+    /**
+     * Another process chooses the address and the port it connects from. From 127.0.0.2 with the
+     * listener's own port number, the socket accepted for it has that number on both ends; from
+     * the port number one of this process's connections uses, it shares that number. Told by
+     * the port alone, both read as connections of this process and kept their slots for good.
+     */
+    @Test(timeout = 60000)
+    fun aConnectionAnotherProcessMakesFromAChosenAddressAndPortIsNotTakenForTheApps() {
+        val small = fourSlots("chosen.sock")
+        val port = small.boundPort!!
+        val page = insider(small)
+        val held = listOf(
+            outsider(port, from = "127.0.0.2", sourcePort = page.localPort),
+            outsider(port, from = "127.0.0.2", sourcePort = port),
+            outsider(port, from = "127.0.0.3", sourcePort = port),
+        )
+
+        val second = insider(small)
+        assertEquals("a connection from the page's port number elsewhere kept its slot", -1, held[0].inputStream.read())
+        val third = insider(small)
+        assertEquals("a connection from the listener's port number kept its slot", -1, held[1].inputStream.read())
+
+        listOf(page, second, third).forEach { assertTrue(it.stillServed()) }
     }
 
     private fun java.io.InputStream.readExactly(count: Int): ByteArray {
