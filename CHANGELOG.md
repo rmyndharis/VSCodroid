@@ -69,6 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Coming back from the Open Folder picker after more than five minutes no longer reloads the editor ahead of the folder you chose.
 - The About dialog is no longer opened on a screen that has already closed, which could end the app.
 - The notice about an old system WebView is marked as seen when it is dismissed, so a screen closed under it no longer hides it for good.
+- A file deleted on the device whose copy was being removed when the app was killed is no longer put back on the device under a made-up name at the next open.
 
 ## [1.9.0] - 2026-11-16
 

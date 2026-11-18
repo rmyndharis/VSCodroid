@@ -2500,7 +2500,7 @@ class SafSyncEngine(private val context: Context) {
                 if (!before.isRegularFile || identity != identityLine(
                         relativePath, before.lastModifiedTime().toMillis(), before.size(),
                     )) return@use false
-                val preserved = selected.sibling("removed$LOCAL_COPY_SUFFIX${UUID.randomUUID()}")
+                val preserved = selected.sibling(removalCaptureName())
                 requireCurrentParent(selected, file, mirrorDir)
                 // Capture the entry before proving its bytes, so a replacement at its old name survives.
                 selected.parent.move(selected.leaf, selected.parent, preserved)
@@ -6367,10 +6367,10 @@ class SafSyncEngine(private val context: Context) {
         /**
          * The default for [providerClaimWaitMs]: ten seconds.
          *
-         * Far below [OUTBOUND_TURN_WAIT_MS] on purpose. A delete, a rename and the create inside a
-         * turn wait for the claim while holding their mirror's turn, and a save of the same mirror
-         * is waiting for that turn; the longer wait is the one that gives up on a stalled provider,
-         * and this one must not be the reason it does.
+         * Far below [OUTBOUND_TURN_WAIT_MS] on purpose. A delete and the create inside a turn wait
+         * for the claim while holding their mirror's turn, and a save of the same mirror is waiting
+         * for that turn; the longer wait is the one that gives up on a stalled provider, and this one
+         * must not be the reason it does. A save and a rename take the claim before the turn.
          */
         internal const val PROVIDER_CLAIM_WAIT_MS = 10_000L
 
@@ -6384,6 +6384,17 @@ class SafSyncEngine(private val context: Context) {
          * uploadable, watchable and visible in the explorer like any other file.
          */
         internal const val LOCAL_COPY_SUFFIX = ".local-"
+
+        /**
+         * The name a copy taken for deletion waits under while its bytes are proved, then is removed.
+         *
+         * A machine-temporary name, like the other scratch files of this engine: a process that dies
+         * between the move and the removal leaves the copy of a document the user deleted on the device,
+         * and under an ordinary name the next open took it for work only this app has and created it on
+         * the device again. A copy that proves to be an edit is moved to its own `<name>.local-<time>`
+         * from here, which is the name that is uploaded.
+         */
+        internal fun removalCaptureName(): String = "removed-${UUID.randomUUID()}$PARTIAL_SUFFIX"
 
         /**
          * `<name>.local-<time>`, the name a mirror copy is kept under beside [name]. A name too
