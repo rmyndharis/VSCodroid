@@ -1243,8 +1243,8 @@ class VSCodroidWebViewClient(
             return interfaceBundleResponse(requested)
         }
         return interceptCdnRequest(
-            request, allowedPort, connectionToken, resourceRoots, sensitiveLocations, openFolder,
-            workspaceMembers = workspaceMembers,
+            request, allowedPort, tokenWhileBound(allowedPort, connectionToken), resourceRoots, sensitiveLocations,
+            openFolder, workspaceMembers = workspaceMembers,
         )
     }
 
@@ -1655,7 +1655,7 @@ class VSCodroidWebViewClient(
                 swController.setServiceWorkerClient(object : ServiceWorkerClient() {
                     override fun shouldInterceptRequest(request: WebResourceRequest): WebResourceResponse? {
                         return interceptCdnRequest(
-                            request, port, connectionToken,
+                            request, port, tokenWhileBound(port, connectionToken),
                             resourceRoots, sensitiveLocations, openFolder, workspaceMembers = workspaceMembers,
                         )
                     }
@@ -1796,6 +1796,8 @@ class VSCodroidWebViewClient(
             // permission. Forwarding anyway let whatever held it serve bytes into
             // the webview frames [isOurOrigin] trusts, `pre/index.html` among them,
             // so nothing goes to the port until there is a token to send with it.
+            // The callers hand the token over through [tokenWhileBound], which is
+            // also none while the gateway does not hold the port.
             //
             // Waited for rather than refused at once, because readiness is also
             // withdrawn for the seconds it takes to adopt back a server that
@@ -1866,6 +1868,19 @@ class VSCodroidWebViewClient(
         private const val TOKEN_POLL_MS = 100L
 
         private val tokenWaiters = Semaphore(TOKEN_WAITERS)
+
+        /**
+         * [token], and none while the app's own listener does not hold [port].
+         *
+         * The CDN arm sends the token to `127.0.0.1:<port>`, and that is the app's server only while
+         * [EditorGateway] holds the port. A Stop Server gives a temporary port back; a start after it
+         * makes a new token, and a page of the earlier origin that is still asking for resources would
+         * be handed it, at a port any other app may have bound meanwhile. The other places that carry
+         * a credential to the page's origin ask the gateway the same way ([trustedAuthOrigin], the
+         * secret key route).
+         */
+        internal fun tokenWhileBound(port: Int, token: () -> String?): () -> String? =
+            { if (EditorGateway.instance.isBound(port)) token() else null }
 
         /**
          * The connection token, waited for while there is none: null when none

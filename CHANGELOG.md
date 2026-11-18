@@ -60,6 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A toolchain removal that runs while a file is being written no longer deletes that file's temporary file, which made the write fail.
 - A .bashrc that starts with VSCodroid's header but has text of its own after it is kept as ~/.vscodroid/bashrc.before-repair before the repair replaces it.
 - A toolchain install whose links could not be made fails and asks for free space, instead of being recorded as installed with a tree that does not run.
+- After Stop Server, a webview of the earlier editor page is no longer sent the new connection token at the old port.
 
 ## [1.9.0] - 2026-11-16
 

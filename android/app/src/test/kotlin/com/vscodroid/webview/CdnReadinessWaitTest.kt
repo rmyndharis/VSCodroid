@@ -5,6 +5,7 @@ import android.webkit.ServiceWorkerClient
 import android.webkit.ServiceWorkerController
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
+import com.vscodroid.service.EditorGateway
 import com.vscodroid.service.mockEditorGateway
 import com.vscodroid.service.restartBackoffMs
 import com.vscodroid.util.Logger
@@ -283,6 +284,8 @@ class CdnReadinessWaitTest {
     @Test
     fun `the client's requests wait on the live token`() {
         Recorder().use { server ->
+            // The origin the client was built for: the token goes only to a port the gateway holds.
+            EditorGateway.instance.bind(server.port)
             val readyAt = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(300)
             val client = VSCodroidWebViewClient(
                 allowedPort = server.port,
@@ -319,6 +322,7 @@ class CdnReadinessWaitTest {
         mockkConstructor(ServiceWorkerClient::class)
 
         Recorder().use { server ->
+            EditorGateway.instance.bind(server.port)
             val readyAt = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(300)
             VSCodroidWebViewClient.setupServiceWorkerInterception(
                 server.port, emptyList(), emptyList(), { null },
