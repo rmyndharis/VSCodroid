@@ -390,6 +390,8 @@ class PublishedResourceRootsTest {
                 File(dataDir, "cache/webview_vscodroid"),
             ).map { it.canonicalPath } + listOf(
                 ".aws", ".gnupg", ".config/gh", ".docker", ".kube", ".git-credentials", ".netrc", ".npmrc",
+                ".config/git", ".config/gcloud", ".azure", ".cargo", ".m2", ".gradle", ".pypirc",
+                ".claude", ".codex", ".gemini",
             ).map { File(filesDir, "home/$it").canonicalPath },
             sensitive
         )

@@ -213,9 +213,14 @@ internal fun sensitiveLocations(context: Context): List<String> {
     ).mapNotNull(::canonicalOrNull)
 }
 
-/** Where the tools a developer signs in with keep their tokens, under the home directory. */
+/**
+ * Where the tools a developer signs in with keep their tokens, under the home directory: the cloud and package
+ * tools, and the AI tools this app runs or offers (Claude Code, Codex, the Antigravity engine).
+ */
 private val CREDENTIAL_PATHS_IN_HOME = listOf(
     ".aws", ".gnupg", ".config/gh", ".docker", ".kube", ".git-credentials", ".netrc", ".npmrc",
+    ".config/git", ".config/gcloud", ".azure", ".cargo", ".m2", ".gradle", ".pypirc",
+    ".claude", ".codex", ".gemini",
 )
 
 /**
