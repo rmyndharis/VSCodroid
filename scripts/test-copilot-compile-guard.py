@@ -7,7 +7,9 @@ The stage is cut out of the script between its two step banners and run under
 bash with npm replaced, so what runs is the shipped text and not a copy of it.
 The stub stands in for the compile. It leaves the extension's source tree as its
 postinstall does and, in .build, whatever the scenario names: the SDK entry, an
-empty or partial sdk directory, or nothing.
+empty or partial sdk directory, or nothing. Beside sdk the source package holds
+a directory the packaging copies, one its ignore file leaves out, and a file a
+general rule of that file leaves out.
 """
 
 import os
@@ -30,11 +32,23 @@ step() { :; }
 elapsed() { :; }
 npm() {
     echo "$*" >> "$SRC/npm-calls"
-    local n sdk from
+    local n sdk from package built
     n=$(( $(wc -l < "$SRC/npm-calls") ))
-    sdk="$SRC/.build/extensions/copilot/node_modules/@github/copilot/sdk"
-    from="$SRC/extensions/copilot/node_modules/@github/copilot/sdk"
+    built="$SRC/.build/extensions/copilot/node_modules/@github/copilot"
+    package="$SRC/extensions/copilot/node_modules/@github/copilot"
+    sdk="$built/sdk"
+    from="$package/sdk"
     mkdir -p "$from/definitions/sidekick" "$from/builtin-skills/skill"
+    mkdir -p "$package/queries" "$package/prebuilds" "$package/builtin/tests" "$SRC/build"
+    echo js > "$from/index.js"
+    echo '{}' > "$package/package.json"
+    echo q > "$package/queries/a.scm"
+    echo q2 > "$package/queries/b.scm"
+    echo native > "$package/prebuilds/big.node"
+    echo readme > "$package/README.md"
+    echo case > "$package/builtin/tests/case.js"
+    echo hidden > "$package/.hidden"
+    printf '# natives\n@github/copilot/prebuilds/**\n**/README.md\n' > "$SRC/build/.moduleignore"
     echo a > "$from/definitions/one.yaml"
     echo b > "$from/definitions/sidekick/two.yaml"
     echo c > "$from/builtin-skills/skill/SKILL.md"
@@ -49,9 +63,26 @@ npm() {
                       echo a > "$sdk/definitions/one.yaml" ;;
         empty)        mkdir -p "$sdk" ;;
         nothing)      ;;
+        short)        mkdir -p "$sdk" "$built/queries"; echo js > "$sdk/index.js"
+                      printf q > "$built/queries/a.scm" ;;
+        left-out)     mkdir -p "$sdk"; echo js > "$sdk/index.js"
+                      echo readme > "$built/README.md" ;;
     esac
 }
 """
+
+# The whole package of a build that worked: sdk, and what the packaging copies beside it.
+PACKAGE = {
+    "package.json": "{}\n",
+    "queries/a.scm": "q\n",
+    "queries/b.scm": "q2\n",
+    **{"sdk/" + name: text for name, text in {
+        "index.js": "js\n",
+        "definitions/one.yaml": "a\n",
+        "definitions/sidekick/two.yaml": "b\n",
+        "builtin-skills/skill/SKILL.md": "c\n",
+    }.items()},
+}
 
 # The sdk directory of a build that worked: the entry and what the postinstall writes next to it.
 COMPLETE = {
@@ -85,7 +116,9 @@ class CopilotCompileStageTest(unittest.TestCase):
                 capture_output=True, text=True, timeout=30,
             )
             calls = (source / "npm-calls").read_text().splitlines()
-            tree = snapshot(source / ".build/extensions/copilot/node_modules/@github/copilot/sdk")
+            package = source / ".build/extensions/copilot/node_modules/@github/copilot"
+            tree = snapshot(package / "sdk")
+            self.package = snapshot(package)
         return result, calls, tree
 
     def test_a_compile_that_leaves_the_sdk_entry_runs_once(self):
@@ -124,6 +157,25 @@ class CopilotCompileStageTest(unittest.TestCase):
                 result, _, _ = self.run_stage("entry-first", source_tree)
                 self.assertEqual(result.returncode, 1, result.stderr)
                 self.assertIn(name, result.stderr)
+
+    def test_the_whole_package_is_completed_from_the_source(self):
+        # The copy held the SDK entry and nothing else: every directory the postinstall
+        # was rewriting had been missed.
+        result, _, _ = self.run_stage("entry-first")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.package, PACKAGE)
+        self.assertIn("6 put back", result.stdout)
+
+    def test_a_file_cut_short_is_written_again(self):
+        result, _, _ = self.run_stage("short")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.package, PACKAGE)
+
+    def test_a_file_the_packaging_leaves_out_stops_the_stage(self):
+        result, _, _ = self.run_stage("left-out")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("README.md", result.stderr)
+        self.assertNotIn("queries/a.scm", self.package, "the stage went on to copy after it had failed")
 
 
 if __name__ == "__main__":

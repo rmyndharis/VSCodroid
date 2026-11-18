@@ -69,6 +69,129 @@ PRUNED = (
     "node_modules/@vscode/sandbox-runtime/vendor/seccomp/x64",
 )
 
+# Every file of the Copilot extension's @github/copilot package, as the build
+# packages it at this pin (@github/copilot 1.0.73, Code - OSS 1.139.1).
+#
+# The build copies that package into the tree while the extension's own build
+# runs its postinstall a second time, and that postinstall deletes and rewrites
+# each of the package's directories (copyCopilotCLIFolders in
+# extensions/copilot/script/postinstall.ts: rm, mkdir, cp). A copy that reads a
+# directory in that moment takes part of it and reports nothing, so a tree came
+# out short with every other check green: one published server lacked
+# definitions/rubber-duck.agent.yaml and definitions/task.agent.yaml, and the
+# sixteen files of sdk/queries/ were there in one build and gone in the next
+# (the server published on 2026-11-17 was without them). build-vscode-oss.sh now
+# completes the copy from the source once the compile has exited; this list is
+# what holds the result to account, on the build side before a tree is
+# published and on the fetch side before one is used.
+#
+# A new pin brings another version of the package and another list. Take it
+# from a tree built at that pin, after two builds have agreed on it:
+#   (cd <tree>/extensions/copilot/node_modules/@github/copilot &&
+#    find . -type f | sed 's#^\./##' | LC_ALL=C sort)
+COPILOT_PACKAGE = "extensions/copilot/node_modules/@github/copilot"
+COPILOT_PACKAGE_FILES = frozenset("""
+    LICENSE.md
+    builtin-skills/customize-cloud-agent/SKILL.md
+    builtin/customize-cloud-agent/SKILL.md
+    copilot-sdk/extension.js
+    copilot-sdk/index.js
+    definitions/code-review.agent.yaml
+    definitions/explore.agent.yaml
+    definitions/rem-agent.agent.yaml
+    definitions/research.agent.yaml
+    definitions/rubber-duck.agent.yaml
+    definitions/security-review.agent.yaml
+    definitions/sidekick/cloud-session-search.yaml
+    definitions/sidekick/github-context-memory.yaml
+    definitions/sidekick/github-context.yaml
+    definitions/sidekick/session-search.yaml
+    definitions/sidekick/subconscious-agent.yaml
+    definitions/sidekick/test-sidekick-persistent.yaml
+    definitions/sidekick/test-sidekick-restart.yaml
+    definitions/sidekick/test-sidekick-trigger-once.yaml
+    definitions/task.agent.yaml
+    npm-loader.js
+    package.json
+    preloads/extension_bootstrap.mjs
+    preloads/extension_sdk_resolver.mjs
+    queries/bash-highlights.scm
+    queries/c-highlights.scm
+    queries/cpp-highlights.scm
+    queries/csharp-highlights.scm
+    queries/css-highlights.scm
+    queries/go-highlights.scm
+    queries/html-highlights.scm
+    queries/java-highlights.scm
+    queries/javascript-highlights.scm
+    queries/json-highlights.scm
+    queries/php-highlights.scm
+    queries/python-highlights.scm
+    queries/ruby-highlights.scm
+    queries/rust-highlights.scm
+    queries/scala-highlights.scm
+    queries/typescript-highlights.scm
+    schemas/api.schema.json
+    schemas/session-events.schema.json
+    sdk/builtin-skills/customize-cloud-agent/SKILL.md
+    sdk/definitions/code-review.agent.yaml
+    sdk/definitions/explore.agent.yaml
+    sdk/definitions/rem-agent.agent.yaml
+    sdk/definitions/research.agent.yaml
+    sdk/definitions/rubber-duck.agent.yaml
+    sdk/definitions/security-review.agent.yaml
+    sdk/definitions/sidekick/cloud-session-search.yaml
+    sdk/definitions/sidekick/github-context-memory.yaml
+    sdk/definitions/sidekick/github-context.yaml
+    sdk/definitions/sidekick/session-search.yaml
+    sdk/definitions/sidekick/subconscious-agent.yaml
+    sdk/definitions/sidekick/test-sidekick-persistent.yaml
+    sdk/definitions/sidekick/test-sidekick-restart.yaml
+    sdk/definitions/sidekick/test-sidekick-trigger-once.yaml
+    sdk/definitions/task.agent.yaml
+    sdk/index.js
+    sdk/prebuilds/linux-arm64/cli-native.node
+    sdk/prebuilds/linux-arm64/runtime.node
+    sdk/queries/bash-highlights.scm
+    sdk/queries/c-highlights.scm
+    sdk/queries/cpp-highlights.scm
+    sdk/queries/csharp-highlights.scm
+    sdk/queries/css-highlights.scm
+    sdk/queries/go-highlights.scm
+    sdk/queries/html-highlights.scm
+    sdk/queries/java-highlights.scm
+    sdk/queries/javascript-highlights.scm
+    sdk/queries/json-highlights.scm
+    sdk/queries/php-highlights.scm
+    sdk/queries/python-highlights.scm
+    sdk/queries/ruby-highlights.scm
+    sdk/queries/rust-highlights.scm
+    sdk/queries/scala-highlights.scm
+    sdk/queries/typescript-highlights.scm
+    sdk/ripgrep/bin/linux-arm64/rg
+    sdk/tgrep/bin/linux-arm64/tgrep
+    shims.txt
+    tgrep/bin/linux-arm64/tgrep
+    tree-sitter-bash.wasm
+    tree-sitter-c.wasm
+    tree-sitter-c_sharp.wasm
+    tree-sitter-cpp.wasm
+    tree-sitter-css.wasm
+    tree-sitter-go.wasm
+    tree-sitter-html.wasm
+    tree-sitter-java.wasm
+    tree-sitter-javascript.wasm
+    tree-sitter-json.wasm
+    tree-sitter-php.wasm
+    tree-sitter-python.wasm
+    tree-sitter-ruby.wasm
+    tree-sitter-rust.wasm
+    tree-sitter-scala.wasm
+    tree-sitter-tsx.wasm
+    tree-sitter-typescript.wasm
+    tree-sitter.wasm
+""".split())
+
 failed = False
 
 
@@ -475,6 +598,30 @@ def main(tree):
               "@github/copilot LICENSE.md is the GitHub Copilot CLI License",
               f"{len(terms)} bytes and not the terms NOTICE.md says ship here")
 
+    # The whole package, file by file; COPILOT_PACKAGE_FILES says what takes
+    # files out of it without a word. Only where the package is there at all:
+    # its absence is the REQUIRED lines' to report.
+    package = tree / COPILOT_PACKAGE
+    if present(package, COPILOT_PACKAGE):
+        try:
+            found = {path.relative_to(package).as_posix()
+                     for path in package.rglob("*") if path.is_symlink() or path.is_file()}
+        except OSError as e:
+            found = None
+            check(False, "@github/copilot can be listed", str(e))
+        if found is not None:
+            missing = sorted(COPILOT_PACKAGE_FILES - found)
+            extra = sorted(found - COPILOT_PACKAGE_FILES)
+            said = []
+            if missing:
+                said.append(f"{len(missing)} missing: {', '.join(missing[:8])}")
+            if extra:
+                said.append(f"{len(extra)} not in the list: {', '.join(extra[:8])}")
+            check(not missing and not extra,
+                  f"@github/copilot holds its {len(COPILOT_PACKAGE_FILES)} files and no other",
+                  "; ".join(said) + "; the build completes this package from its source, "
+                  "so a tree built before it did is short, and a new pin needs a new list")
+
     # The line readiness waits for. ProcessManager.probeReadiness refuses to call
     # a spawned start ready until the output reader has seen this sentence,
     # which server-main.js prints from its listen callback; the text is
@@ -869,6 +1016,31 @@ def self_test() -> int:
                       f"{'present' if present else 'absent'}, no line read {want!r}")
                 return 1
     print("  ok     self-test: the Copilot CLI licence is required and read")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tree = pathlib.Path(tmp)
+        package = tree / COPILOT_PACKAGE
+        for name in COPILOT_PACKAGE_FILES:
+            (package / name).parent.mkdir(parents=True, exist_ok=True)
+            (package / name).write_text("x")
+        label = f"@github/copilot holds its {len(COPILOT_PACKAGE_FILES)} files and no other"
+        lost = "definitions/task.agent.yaml"
+        for change, want in (
+            (lambda: None, f"ok      {label}"),
+            (lambda: (package / lost).unlink(), f"FAIL    {label}  1 missing: {lost}"),
+            (lambda: (package / lost).write_text("x"), f"ok      {label}"),
+            (lambda: (package / "definitions/one-more.agent.yaml").write_text("x"),
+             f"FAIL    {label}  1 not in the list: definitions/one-more.agent.yaml"),
+        ):
+            change()
+            out = io.StringIO()
+            failed = False
+            with contextlib.redirect_stdout(out):
+                main(tree)
+            if want not in out.getvalue():
+                print(f"  FAIL   self-test: no line read {want!r}")
+                return 1
+    print("  ok     self-test: a Copilot package short of a file, or with one more, is refused")
 
     with tempfile.TemporaryDirectory() as tmp:
         tree = pathlib.Path(tmp)

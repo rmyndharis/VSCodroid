@@ -54,6 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A connection to the editor's port that sends nothing is closed after 10 seconds instead of two minutes, so silent connections from another app no longer hold all 32 slots for that long.
 - Another app that keeps connections open to the editor's port can no longer keep the editor from starting or loading: with every connection in use, a new one takes the place of the oldest that another app opened.
 - A file made in a device folder at the moment the app keeps a copy beside it as `<name>.local-<time>`, or puts a copy back under its own name, is no longer replaced by that copy.
+- The server build completes the Copilot extension's `@github/copilot` package from its source, so a build no longer comes out with files missing: one published build had lost two, and the sixteen files of `sdk/queries` were in some builds and not in others.
+- A server tree whose `@github/copilot` package is not the expected set of files is refused when it is built and when it is fetched.
 
 ## [1.9.0] - 2026-11-16
 
