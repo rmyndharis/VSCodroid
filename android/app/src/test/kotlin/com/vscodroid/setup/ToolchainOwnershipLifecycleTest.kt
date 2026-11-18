@@ -221,6 +221,28 @@ class ToolchainOwnershipLifecycleTest {
         assertEquals("old ruby bytes", rubyPayload.readText())
     }
 
+    /**
+     * A link that cannot be made leaves a tree that does not run. It used to be logged and the install recorded as
+     * complete, with only Remove offered afterwards.
+     */
+    @Test
+    fun `an install whose link cannot be made fails with the files reclaimed and no record`() {
+        val pack = javaPack().also {
+            File(it, "toolchain_java.json").writeText(
+                """{"name":"java","displayName":"Java 21","installRoot":"$newRoot","binaries":["$newRoot/bin/java"],""" +
+                    """"symlinks":{"java":"$newRoot/bin/java"}}""",
+            )
+        }
+        every { Os.symlink(any(), any()) } throws FileNotFoundException("No space left on device")
+        val m = manager()
+
+        assertFalse(install(m, pack))
+
+        assertEquals(listOf(AssetPackStatus.FAILED to ToolchainFailure.STORAGE), reports)
+        assertEquals(emptySet<String>(), m.getInstalledToolchains().toSet(), "a tree with no links was recorded as installed")
+        assertFalse(File(filesDir, "$newRoot/bin/java").exists(), "the copy was left behind with nothing naming it")
+    }
+
     @Test
     fun `uninstall keeps an unreadable record and reports it as an internal failure`() {
         stateFile.writeText(damaged)

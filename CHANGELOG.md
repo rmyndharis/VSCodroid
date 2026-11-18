@@ -59,6 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A .bashrc that is a link, as when it is kept in a dotfiles repository, stays a link when VSCodroid adds its blocks to it; the repository's file gets them.
 - A toolchain removal that runs while a file is being written no longer deletes that file's temporary file, which made the write fail.
 - A .bashrc that starts with VSCodroid's header but has text of its own after it is kept as ~/.vscodroid/bashrc.before-repair before the repair replaces it.
+- A toolchain install whose links could not be made fails and asks for free space, instead of being recorded as installed with a tree that does not run.
 
 ## [1.9.0] - 2026-11-16
 
