@@ -2031,7 +2031,7 @@ class FirstRunSetup(
             // separate; only the write is shared.
             if (content != original || additions.isNotEmpty()) {
                 val names = added.joinToString(" and ")
-                if (writeAtomically(bashrc) {
+                if (writeAtomically(bashrc, throughLink = true) {
                     it.write(content.toByteArray(Charsets.ISO_8859_1))
                     it.write(additions.toString().toByteArray())
                 }) {
@@ -2347,7 +2347,7 @@ class FirstRunSetup(
 # On-demand toolchain env vars
 [ -f "${'$'}HOME/.vscodroid/toolchain-env.sh" ] && . "${'$'}HOME/.vscodroid/toolchain-env.sh"
 """
-                if (writeAtomically(bashrc) { it.write(existing); it.write(block.toByteArray()) }) {
+                if (writeAtomically(bashrc, throughLink = true) { it.write(existing); it.write(block.toByteArray()) }) {
                     Logger.i(tag, "Appended toolchain-env.sh sourcing to .bashrc")
                 } else {
                     Logger.w(tag, "Could not append toolchain-env.sh sourcing; .bashrc is unchanged")
@@ -2529,7 +2529,7 @@ esac
         // The two surviving halves go out as the bytes they came in as; only the
         // block this method owns is encoded. PROMPT_BLOCK is not pure ASCII, so
         // it cannot ride the Latin-1 mapping out with them.
-        if (!writeAtomically(bashrc) {
+        if (!writeAtomically(bashrc, throughLink = true) {
                 it.write(bytes, 0, start)
                 it.write(PROMPT_BLOCK.toByteArray())
                 it.write(bytes, end, bytes.size - end)
@@ -2578,7 +2578,7 @@ esac
         val start = content.indexOf(block)
         val end = start + block.length
 
-        val written = writeAtomically(bashrc) {
+        val written = writeAtomically(bashrc, throughLink = true) {
             it.write(bytes, 0, start)
             it.write(STARTUP_DIR_BLOCK.toByteArray())
             it.write(bytes, end, bytes.size - end)
@@ -3348,7 +3348,7 @@ claude() {
             # On-demand toolchain env vars
             [ -f "${'$'}HOME/.vscodroid/toolchain-env.sh" ] && . "${'$'}HOME/.vscodroid/toolchain-env.sh"
         """.trimIndent() + "\n\n" + STARTUP_DIR_BLOCK + "\n"
-        return writeAtomically(bashrc) { it.write(initial.toByteArray()) }
+        return writeAtomically(bashrc, throughLink = true) { it.write(initial.toByteArray()) }
     }
 
     private fun createBashProfile() {
@@ -5933,10 +5933,33 @@ internal fun isSymlinkMode(stMode: Int): Boolean = (stMode and 0xF000) == 0xA000
  *
  * @return true if [dest] now holds what [write] produced. On false, [dest] is
  *   untouched -- it keeps its previous contents, or stays absent.
+ *
+ * [throughLink] writes into the file a link at [dest] names instead of replacing the link, for the
+ * files a person owns and may link elsewhere. The default replaces it, which the extraction of the
+ * app's own files relies on.
  */
 internal fun writeAtomically(
     dest: File,
     onError: ((String) -> Unit)? = null,
+    throughLink: Boolean = false,
+    write: (OutputStream) -> Unit,
+): Boolean = writeAtomicallyTo(if (throughLink) linkTarget(dest) else dest, onError, write)
+
+/**
+ * [file], or the regular file it is a link to. A dotfile a person keeps in a repository and links into
+ * the home directory is replaced by a copy when the rename lands on the link, and the repository's file
+ * is then no longer the one the shell reads. A link to nothing, or to anything but a file, is left to be
+ * replaced as before.
+ */
+private fun linkTarget(file: File): File = try {
+    if (Files.isSymbolicLink(file.toPath())) file.toPath().toRealPath().toFile().takeIf { it.isFile } ?: file else file
+} catch (_: IOException) {
+    file
+}
+
+private fun writeAtomicallyTo(
+    dest: File,
+    onError: ((String) -> Unit)?,
     write: (OutputStream) -> Unit,
 ): Boolean {
     val path = dest.absolutePath
@@ -6144,10 +6167,22 @@ internal fun <T> holdingWriteLock(dest: File, block: () -> T): T {
     }
 }
 
+/**
+ * A path as the writers and the sweep both name it: through its links. The app's files are reached as
+ * `/data/user/0/<package>/...` by most callers and as `/data/data/<package>/...` by the ones that
+ * canonicalise, and the sweep has to see one name for one file.
+ */
+private fun spelling(file: File): String = try { file.canonicalPath } catch (_: IOException) { file.absolutePath }
+
 /** The temporary files [writeAtomically] is writing right now, so a sweep never takes one for a stray. */
 private val LIVE_TEMPS: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
-/** The directories this process has swept for strays, so each is listed once however many files it gets. */
+/**
+ * The directories this process has swept for strays, so each is listed once however many files it gets.
+ * By the spelling a caller used, which answers "again?" for the thousands of writes of an extraction without
+ * a call to the filesystem, and by the canonical one, which makes two spellings of one directory one.
+ */
+private val SWEPT_RAW: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 private val SWEPT_FOR_STRAYS: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
 /**
@@ -6162,11 +6197,16 @@ private val SWEPT_FOR_STRAYS: MutableSet<String> = java.util.concurrent.Concurre
  * of a toolchain that put files there.
  */
 internal fun sweepStrayTemps(dir: File) {
-    if (!SWEPT_FOR_STRAYS.add(dir.absolutePath)) return
+    if (!SWEPT_RAW.add(dir.absolutePath)) return
+    if (!SWEPT_FOR_STRAYS.add(spelling(dir))) return
     val names = dir.list { _, name -> name.startsWith(".vscodroid-") && name.endsWith(".tmp~") } ?: return
+    if (names.isEmpty()) return
+    // Read after the listing, and named by the canonical path like the strays: a write puts its
+    // temporary file in [LIVE_TEMPS] before it creates it, so one that was listed is already there.
+    val live = LIVE_TEMPS.mapTo(HashSet()) { spelling(File(it)) }
     for (name in names) {
         val stray = File(dir, name)
-        if (stray.absolutePath !in LIVE_TEMPS && Files.isRegularFile(stray.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+        if (spelling(stray) !in live && Files.isRegularFile(stray.toPath(), LinkOption.NOFOLLOW_LINKS)) {
             stray.delete()
         }
     }

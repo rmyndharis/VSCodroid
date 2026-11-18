@@ -683,6 +683,38 @@ __vscodroid_pip_note() {
         assertTrue(written.contains(currentMarker), "the rewritten file has no prompt block")
     }
 
+    /**
+     * A `.bashrc` a person keeps in a repository and links into the home directory is written through,
+     * so it stays a link and the repository's file is the one that gets the block.
+     */
+    @Test
+    fun `a bashrc that is a link keeps being a link when a block is added to it`() {
+        val theirs = File(filesDir, "dotfiles/.bashrc").apply {
+            parentFile.mkdirs()
+            writeText("# my own shell setup\nalias g='git'\n")
+        }
+        bashrc.delete()
+        Files.createSymbolicLink(bashrc.toPath(), theirs.toPath())
+        File(filesDir, "usr/lib/node_modules/npm/bin/npm-cli.js").apply { parentFile.mkdirs(); writeText("") }
+
+        FirstRunSetup(context).createNpmWrappers()
+
+        assertTrue(Files.isSymbolicLink(bashrc.toPath()), "the link was replaced by a copy")
+        assertTrue(theirs.readText().startsWith("# my own shell setup\nalias g='git'\n"), "their text did not survive")
+        assertTrue(theirs.readText().contains("npm()"), "the block went somewhere the shell does not read")
+    }
+
+    @Test
+    fun `every writer of the bashrc writes through a link`() {
+        val source = com.vscodroid.SourceScan.read("src/main/kotlin/com/vscodroid/setup/FirstRunSetup.kt")
+        val writers = Regex("""writeAtomically\(bashrc\b""").findAll(source).count()
+        val through = Regex("""writeAtomically\(bashrc, throughLink = true\)""").findAll(source).count()
+
+        assertTrue(writers > 0 && writers == through) {
+            "$writers writers of the bashrc, $through of them write through a link"
+        }
+    }
+
     @Test
     fun `a bashrc cut off after our header is cleared and written again`() {
         // The other shape an interrupted write leaves: our first line, and then

@@ -56,6 +56,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The server build completes the Copilot extension's `@github/copilot` package from its source, so a build no longer comes out with files missing: one published build had lost two, and the sixteen files of `sdk/queries` were in some builds and not in others.
 - A server tree whose `@github/copilot` package is not the expected set of files is refused when it is built and when it is fetched.
 - The Codex toolchain card quotes 375 MB, up from 360 MB, so the pack of a newer Codex build still fits its recorded size.
+- A .bashrc that is a link, as when it is kept in a dotfiles repository, stays a link when VSCodroid adds its blocks to it; the repository's file gets them.
+- A toolchain removal that runs while a file is being written no longer deletes that file's temporary file, which made the write fail.
 
 ## [1.9.0] - 2026-11-16
 
