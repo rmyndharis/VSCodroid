@@ -250,8 +250,18 @@ class SafSyncEngine(private val context: Context) {
         return OutboundAccess(access, observed, outboundTurnWaitMs)
     }
 
-    private fun <T> withCurrent(access: OutboundAccess?, action: () -> T): T? =
-        if (access == null) action() else access.run(action)
+    /**
+     * Runs [action] with the mirror to itself, see [OutboundAccess.run]; null when it must not run.
+     *
+     * [giveBack] is for the provider claim a write took before it asked for the turn, and runs
+     * before the turn is released, whether or not [action] ran. The claim is per provider and a
+     * save asks for it without waiting, and a write waiting for the turn is handed it the moment
+     * it is freed and asks for the claim next: a claim given back after the turn was found still
+     * held in that gap, and the save that had only waited was held back instead of sent. A
+     * delete and a create take and give back their claim inside the turn, which is the same.
+     */
+    private fun <T> withCurrent(access: OutboundAccess?, giveBack: (() -> Unit)? = null, action: () -> T): T? =
+        if (access == null) action() else access.run(giveBack, action)
 
     private fun <T> withCurrentMemory(access: OutboundAccess?, action: () -> T): T? =
         if (access == null) action() else access.update(action)
@@ -5350,9 +5360,11 @@ class SafSyncEngine(private val context: Context) {
                             deferWriteBack(localFile, job.safDocUri)
                         } else try {
                             if (!keepsDeviceEdit(localFile, job.safDocUri, mirrorRoot, access, preserveUnknown = true)) {
-                                if (withCurrent(access) { writeLocalToSaf(localFile, job.safDocUri, mirrorRoot, mutation) } == null) {
-                                    announceLost(localFile)
+                                // The claim goes back before the turn does; see [withCurrent].
+                                val written = withCurrent(access, { releaseProviderMutation(mutation) }) {
+                                    writeLocalToSaf(localFile, job.safDocUri, mirrorRoot, mutation)
                                 }
+                                if (written == null) announceLost(localFile)
                             }
                         } finally {
                             releaseProviderMutation(mutation)
@@ -5524,7 +5536,8 @@ class SafSyncEngine(private val context: Context) {
                     if (mutation == null) {
                         announceDroppedRename(localFile, job.renamedSaves, mirrorRoot)
                     } else try {
-                        if (withCurrent(access) {
+                        // The claim goes back before the turn does; see [withCurrent].
+                        if (withCurrent(access, { releaseProviderMutation(mutation) }) {
                             val moved = when {
                                 job.safSourceParentUri != null && targetParentUri != null ->
                                     moveInSaf(job.safDocUri, job.safSourceParentUri, targetParentUri)
@@ -7716,8 +7729,12 @@ private class OutboundAccess(
      * thrown wait would lose it. It is set aside
      * for the action, which must not meet it (a stream copy fails on a thread carrying
      * one), and handed back after.
+     *
+     * [giveBack] runs last, with the turn still held, once [action] has run or has been refused
+     * as stale. It does not run when the turn was never obtained; the caller that took what
+     * [giveBack] gives back releases it anyway in that case.
      */
-    fun <T> run(action: () -> T): T? {
+    fun <T> run(giveBack: (() -> Unit)? = null, action: () -> T): T? {
         if (!current()) return null
         var interrupted = false
         try {
@@ -7737,7 +7754,8 @@ private class OutboundAccess(
                 if (Thread.interrupted()) interrupted = true
                 return if (current()) action() else null
             } finally {
-                mirror.lock.unlock()
+                // While the turn is still held: whoever waits for it is woken by the unlock.
+                try { giveBack?.invoke() } finally { mirror.lock.unlock() }
             }
         } finally {
             if (interrupted) Thread.currentThread().interrupt()

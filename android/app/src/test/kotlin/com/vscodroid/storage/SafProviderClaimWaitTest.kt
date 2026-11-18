@@ -19,6 +19,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -514,6 +515,10 @@ class SafProviderClaimWaitTest {
         val blockOtherWrite: AtomicBoolean,
         val otherWriteStarted: CountDownLatch,
         val allowOtherWriteFinish: CountDownLatch,
+        val holdRename: AtomicBoolean,
+        val renameInside: CountDownLatch,
+        val releaseRename: CountDownLatch,
+        val writtenDocs: MutableList<String>,
     )
 
     private fun setupRenameFixture(): RenameFixture {
@@ -579,9 +584,17 @@ class SafProviderClaimWaitTest {
         val renamedCalls = mutableListOf<Pair<String, String>>()
         val createdCalls = mutableListOf<Pair<String, String>>()
         val failedNames = mutableListOf<String>()
+        val holdRename = AtomicBoolean(false)
+        val renameInside = CountDownLatch(1)
+        val releaseRename = CountDownLatch(1)
+        val writtenDocs = java.util.concurrent.CopyOnWriteArrayList<String>()
         every { DocumentsContract.renameDocument(any(), any(), any()) } answers {
             val docId = secondArg<Uri>().toString().removePrefix("doc-uri:")
             val targetName = thirdArg<String>()
+            if (holdRename.get()) {
+                renameInside.countDown()
+                releaseRename.await(15, TimeUnit.SECONDS)
+            }
             renamedCalls += docId to targetName
             renamedOnDevice.set(true)
             uriWithId("doc:$targetName")
@@ -601,6 +614,7 @@ class SafProviderClaimWaitTest {
                 otherWriteStarted.countDown()
                 allowOtherWriteFinish.await(5, TimeUnit.SECONDS)
             }
+            writtenDocs += docId
             ByteArrayOutputStream()
         }
         engine.onWriteBackFailed = { failedNames += it.name }
@@ -614,6 +628,10 @@ class SafProviderClaimWaitTest {
             blockOtherWrite = blockOtherWrite,
             otherWriteStarted = otherWriteStarted,
             allowOtherWriteFinish = allowOtherWriteFinish,
+            holdRename = holdRename,
+            renameInside = renameInside,
+            releaseRename = releaseRename,
+            writtenDocs = writtenDocs,
         )
     }
 
@@ -643,6 +661,64 @@ class SafProviderClaimWaitTest {
         assertTrue(fixture.failedNames.isEmpty(), "a rename that completed within the wait raised a notice")
         assertTrue(ms >= 300, "the rename did not wait for the claim ($ms ms)")
         assertFalse(fixture.engine.retryHeldBack(WatchSession(mirror)), "completed rename left a held retry entry")
+    }
+
+    /**
+     * A rename gives its provider claim back before it gives the turn back, as a save does.
+     *
+     * The claim is per provider, and a save asks for it without waiting. A save that has waited
+     * for the turn behind a rename takes the turn the moment it is freed and asks for the claim
+     * next, so with the claim given back after the turn the two met in that gap now and then:
+     * the claim was found held and the save that had only had to wait was held back and
+     * announced as kept inside the app.
+     *
+     * Read off the threads instead of raced: the claim registry's monitor is held here, which
+     * stops whoever gives a claim back or takes one. The rename, let go, comes to give its claim
+     * back and stops there. The save must still be waiting for the turn, not at the registry.
+     */
+    @Test
+    fun `a save waiting for its turn behind a rename is not handed it before the rename gives back the provider claim`() {
+        val fixture = setupRenameFixture()
+        fixture.holdRename.set(true)
+        val otherFile = File(mirror, "other.txt").apply { writeText("updated bytes") }
+        fixture.engine.handleMirrorEvent(FileObserver.MODIFY, otherFile, mirror, treeUri)
+        val waiting = WatchSession(mirror).also {
+            it.queue.add(checkNotNull(fixture.engine.session.queue.poll()) { "no save was queued" })
+        }
+        renameDirectory(fixture.engine)
+        val renaming = Thread { fixture.engine.runWriteBackLoop { false } }.apply { isDaemon = true; start() }
+        try {
+            assertTrue(fixture.renameInside.await(5, TimeUnit.SECONDS), "the rename never reached the provider")
+            val saving = Thread { fixture.engine.runWriteBackLoop(waiting) { false } }.apply { isDaemon = true; start() }
+            saving.join(400)
+            assertTrue(saving.isAlive, "the save did not wait for the rename's turn")
+
+            val registry = SafSyncEngine::class.java.getDeclaredField("providerMutations")
+                .apply { isAccessible = true }.get(null)!!
+            synchronized(registry) {
+                fixture.releaseRename.countDown()
+                // Generous: the polling stops as soon as the rename is there, and a loaded machine is slow to get it there.
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+                while (renaming.state != Thread.State.BLOCKED && System.nanoTime() < deadline) Thread.sleep(5)
+                assertEquals(Thread.State.BLOCKED, renaming.state, "the rename never came to give its claim back")
+                Thread.sleep(400)
+                assertNotEquals(
+                    Thread.State.BLOCKED, saving.state,
+                    "the save was handed the turn while the rename still held the provider claim",
+                )
+            }
+            renaming.join(15_000)
+            saving.join(15_000)
+
+            assertFalse(renaming.isAlive)
+            assertFalse(saving.isAlive)
+            assertEquals(listOf("doc:old" to "renamed"), fixture.renamedCalls)
+            assertTrue("doc:other.txt" in fixture.writtenDocs, "the save was held back and not sent")
+            assertEquals(emptyList<String>(), fixture.failedNames, "a save that only had to wait was announced as lost")
+        } finally {
+            fixture.releaseRename.countDown()
+            renaming.join(5_000)
+        }
     }
 
     @Test
