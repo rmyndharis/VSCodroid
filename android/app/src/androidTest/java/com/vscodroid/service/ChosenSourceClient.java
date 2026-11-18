@@ -9,13 +9,16 @@ import java.net.Socket;
 /**
  * A client that connects to a loopback port from the address and the port it is told to use.
  *
- * {@code EditorGatewayOnDeviceTest} runs it with {@code app_process}, in a process of its own:
- * toybox's nc connects from wherever the system picks, and what the test needs is a connection
- * that another process makes from a source it chose. It sends what it reads from its input,
- * writes what comes back to its output, and ends when the connection is closed.
+ * EditorGatewayOnDeviceTest runs it with app_process, in a process of its own: toybox's nc
+ * connects from wherever the system picks, and what the test needs is a connection that another
+ * process makes from a source it chose. It sends what it reads from its input, writes what comes
+ * back to its output, and ends when the connection is closed.
  *
- * <p>Arguments: the source address, the source port, the port to connect to. Java, and nothing
- * but {@code java.*}, because it is loaded from the test APK alone, without the app's classes.
+ * Arguments: the source address, the source port, the port to connect to. Java, and nothing but
+ * the java packages, because it is loaded from the test APK alone, without the app's classes.
+ *
+ * No inline tag in this comment: with one, the lint of the Kotlin test that names this class
+ * fails on JDK 17, where lint's own parser calls a List method that JDK 21 added.
  */
 public final class ChosenSourceClient {
     private ChosenSourceClient() {}
