@@ -221,8 +221,8 @@ create.
 **Output artifacts**:
 
 - `libbash.so` in `jniLibs/arm64-v8a/`
-- `usr/bin/bash`, a symlink to it that `FirstRunSetup.setupToolSymlinks()` rebuilds at the first launch of
-  every process, because a reinstall moves `nativeLibraryDir` and dangles every absolute link
+- `usr/bin/bash`, a symlink to it that `FirstRunSetup.setupToolSymlinks()` rebuilds on every launch, off the
+  main thread, because a reinstall moves `nativeLibraryDir` and dangles every absolute link
 
 The terminal profile names the symlink, never the `.so`: VS Code decides whether it can inject
 shell integration by switching on the executable's basename, and `libbash.so` matches no case.
