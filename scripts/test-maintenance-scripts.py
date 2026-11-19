@@ -423,9 +423,9 @@ class MaintenanceScriptsTest(unittest.TestCase):
         def escape(code, braced=False):
             return "\\u" + ("{%x}" % code if braced else "%04x" % code)
 
-        def patch(context, added):
-            return ("Subject: plain words\n\ndiff --git a/f.ts b/f.ts\n--- a/f.ts\n+++ b/f.ts\n"
-                    "@@ -1,2 +1,2 @@\n " + context + "\n-old line\n+" + added + "\n")
+        def patch(context, added, target="f.ts", removed="old line"):
+            return ("Subject: plain words\n\ndiff --git a/" + target + " b/" + target + "\n--- a/" + target
+                    + "\n+++ b/" + target + "\n@@ -1,2 +1,2 @@\n " + context + "\n-" + removed + "\n+" + added + "\n")
 
         refused = {
             "README.md": "a " + em + " b\n",
@@ -446,6 +446,11 @@ class MaintenanceScriptsTest(unittest.TestCase):
             "patches/0003-escaped.patch": patch("same", "const s = 'a " + escape(0x2014) + " b';"),
             # An added line whose own text starts with `++ ` is not the file header it looks like.
             "patches/0004-plus.patch": patch("same", "++ counter " + em),
+            # ...and neither is one that follows a removed line that starts `-- `: the pair reads like
+            # the `---` and `+++` of a file header outside a hunk, and is two lines of the hunk inside it.
+            "patches/0006-minus.patch": patch("same", "++ counter " + em, target="f.sql", removed="-- old comment"),
+            # A page decodes the character references a patch adds to it, whatever the patch file is called.
+            "patches/0007-page.patch": patch("same", "<p>a &mdash; b</p>", target="f.html"),
             # Copied into the server tree, where product.json names the app to its users.
             "branding/product.json": '{"nameLong": "a ' + escape(0x2013) + ' b"}\n',
             "branding/workbench/x.svg": "<svg><text>a &#%d; b</text></svg>\n" % 0x2014,

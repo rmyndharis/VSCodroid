@@ -67,7 +67,10 @@ What is deliberately NOT checked, and why
   `diff --git` or `--- a/` line onward. Those are upstream source, and a
   context line has to match the file it is applied to byte for byte. The
   description above that point is ours, and so is every added `+` line below
-  it: both are checked.
+  it: both are checked. An added line is read as the file it lands in, named
+  by the `+++ b/` line, so a character reference added to a page is seen as
+  one; and a hunk is followed by the counts in its `@@` line, so an added
+  line that starts `++ ` is not taken for a file header.
 * Anything git does not track, which is what keeps build output and
   downloaded toolchains out of the result.
 
@@ -138,23 +141,49 @@ def tracked(paths):
     return [p for p in out.decode("utf-8", "surrogateescape").split("\0") if p]
 
 
+# `@@ -a,b +c,d @@`: how many lines of the old and of the new file the hunk holds; a count that is left
+# out means one.
+HUNK = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
+
+
 def checkable_lines(path, text):
-    """The (number, line, added) triples this gate is allowed to judge, where
-    `added` marks a line a patch adds to the editor's source."""
+    """The (number, line, landing) triples this gate is allowed to judge. `landing` is None for a line
+    judged as the file it is in. For a line a patch adds it is the path of the file that line lands in:
+    the editor's build compiles it, or a page shows it, as that file and not as the `.patch`."""
     lines = enumerate(text.split("\n"), start=1)
     if not path.endswith(".patch"):
-        return [(number, line, False) for number, line in lines]
-    judged, in_diff, previous = [], False, ""
+        return [(number, line, None) for number, line in lines]
+    judged, in_diff, landing = [], False, path
+    old_left = new_left = 0
     for number, line in lines:
+        if old_left or new_left:
+            # Inside a hunk every line belongs to it and only its first character says which side: a
+            # removed line `-- x` and an added line `++ y` read `--- x` and `+++ y` without being headers.
+            if line.startswith("+"):
+                judged.append((number, line, landing))
+                new_left -= 1
+            elif line.startswith("-"):
+                old_left -= 1
+            elif not line.startswith("\\"):  # "\ No newline at end of file" belongs to neither side
+                old_left -= 1
+                new_left -= 1
+            continue
+        hunk = HUNK.match(line)
+        if hunk:
+            in_diff = True
+            old_left = 1 if hunk.group(1) is None else int(hunk.group(1))
+            new_left = 1 if hunk.group(2) is None else int(hunk.group(2))
+            continue
         if line.startswith("diff --git ") or line.startswith("--- a/"):
             in_diff = True
-        # Below the diff line only an added line is ours. `+++ ` names a file only
-        # right after the `--- ` line; anywhere else it adds a line that starts `++ `.
+        if line.startswith("+++ b/"):
+            landing = line[len("+++ b/"):].split("\t")[0]
+        # Outside a hunk (a description above the diff, or a hunk whose counts ran out early), the
+        # description is judged as it is, and below the diff line only an added line is ours.
         if not in_diff:
-            judged.append((number, line, False))
-        elif line.startswith("+") and not (line.startswith("+++ ") and previous.startswith("--- ")):
-            judged.append((number, line, True))
-        previous = line
+            judged.append((number, line, None))
+        elif line.startswith("+") and not line.startswith("+++ "):
+            judged.append((number, line, landing))
     return judged
 
 
@@ -233,8 +262,8 @@ def offences(path):
         # problem that a different gate should report.
         return []
     found = []
-    for number, line, added in checkable_lines(path, text):
-        found.extend(line_offences(path, number, line, added))
+    for number, line, landing in checkable_lines(path, text):
+        found.extend(line_offences(path if landing is None else landing, number, line, landing is not None))
     # The passes walk the same line, so a file holding one of each would
     # otherwise report the second line before the first column of the first.
     found.sort(key=lambda offence: offence[:2])
