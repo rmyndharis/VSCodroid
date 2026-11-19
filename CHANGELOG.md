@@ -66,7 +66,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Coming back from the Open Folder picker after more than five minutes no longer reloads the editor ahead of the folder you chose.
 - The About dialog is no longer opened on a screen that has already closed, which could end the app.
 - The notice about an old system WebView is marked as seen when it is dismissed, so a screen closed under it no longer hides it for good.
-- A file deleted on the device whose copy was being removed when the app was killed is no longer put back on the device under a made-up name at the next open, except for a copy 1.9.0 had already renamed.
+- A file deleted on the device whose copy was being removed when the app was killed is no longer put back on the device under a made-up name at the next open.
+- A copy of a file deleted on the device that a killed removal left in the folder is deleted at the next open; one left by 1.9.0 under a made-up name is no longer created on the device.
 - A settings file whose lines end in a bare carriage return is read the way the editor reads it: the readers of the heap ceiling and of the managed settings no longer miss keys that follow a comment.
 - A save made while another write to the same device folder was still finishing is no longer held back and announced as kept inside the app; it is sent.
 - The privacy policy states that the Antigravity engine's version check (`--version`) still runs the downloaded program while the engine is turned off.

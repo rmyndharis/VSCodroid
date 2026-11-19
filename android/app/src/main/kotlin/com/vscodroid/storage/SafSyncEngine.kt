@@ -1232,6 +1232,15 @@ class SafSyncEngine(private val context: Context) {
         // partition, and phase 3 frees mirror files, so either could change the answer.
         val belowFloor = failedCopies > 0 && usableSpaceOf(mirrorDir) < OPEN_SPACE_FLOOR_BYTES
 
+        // Before phase 2b: the copy of a deleted document that an earlier open was cut off from
+        // removing is no work of the user's, and under the name builds up to 1.9.0 gave it, phase
+        // 2b would create it on the device. Guarded by the same two facts as phase 2b and phase 3.
+        val discardedCaptures = if (enumerationComplete && documents.isNotEmpty()) {
+            previousRecord?.let { discardCutOffRemovalCopies(mirrorDir, it, documents.mapTo(HashSet()) { d -> d.relativePath }) } ?: 0
+        } else {
+            0
+        }
+
         // Phase 2b: put onto the device what only the mirror has.
         //
         // Guarded by the same two facts [reconcileDeletions] needs, and for a mirrored
@@ -1282,7 +1291,8 @@ class SafSyncEngine(private val context: Context) {
             "Initial sync complete: $filesDone files ($skippedLarge too large, " +
                 "$failedCopies could not be copied, $keptLocal kept, " +
                 "$uploadsDone written back, $setAside set aside, $putBack put back, " +
-                "${recorded.size} vouched for, $removed removed, $clearedPartials partial copies cleared) in ${elapsed}ms"
+                "${recorded.size} vouched for, $removed removed, $clearedPartials partial copies cleared, " +
+                "$discardedCaptures cut-off removals cleared) in ${elapsed}ms"
         )
 
         // Only the copies that were attempted and failed. A document skipped for size is
@@ -1338,6 +1348,77 @@ class SafSyncEngine(private val context: Context) {
                 }
             } catch (e: Exception) {
                 Logger.w(tag, "Kept a partial copy beside $relative: ${e.message}")
+            }
+        }
+        return removed
+    }
+
+    /**
+     * Removes the copy a removal took from its name and was killed before it could delete.
+     *
+     * [removeRecordedCopy] moves the mirror copy of a document the device deleted to
+     * [removalCaptureName] while it proves the bytes, and deletes it after. A process that dies in
+     * between leaves that entry for good: its name keeps it from being sent, the row that named the
+     * copy is dropped at the next open because nothing is at the name any more, and nothing else looks
+     * for it. Builds up to 1.9.0 gave it the name `removed.local-<uuid>`, an ordinary one, so their
+     * next open sent it to the device as work only this app had.
+     *
+     * Such an entry sits in the directory of the row it was taken for, so the search is one listing of
+     * each directory that holds a row whose document the device no longer lists and the mirror no
+     * longer holds. An entry goes only when it is a regular file with the length of such a row and the
+     * SHA-256 of that row's digest: the bytes of a document the device deleted. Anything else stays,
+     * an entry with such a name included, because it may be work, and so does one the device lists:
+     * an older build sent its copy there, where it is a document like any other. Runs before
+     * [uploadMirrorOnlyDocuments], which would send the older name, and while the rows still stand:
+     * phase 3 drops them.
+     *
+     * @return how many entries it removed.
+     */
+    private fun discardCutOffRemovalCopies(
+        mirrorDir: File,
+        previous: Map<String, ByteArray?>,
+        onDevice: Set<String>,
+    ): Int {
+        val goneRows = HashMap<File, MutableList<Pair<Long, ByteArray>>>()
+        for ((identity, digest) in previous) {
+            if (digest == null) continue
+            val fields = identity.split('\t')
+            val length = fields.getOrNull(2)?.toLongOrNull() ?: continue
+            val path = unescapeRecordPath(fields[0])
+            if (path.isEmpty() || path in onDevice) continue
+            val file = File(mirrorDir, path)
+            // A row this build cannot make a path of is left to phase 3, which reads rows the same way.
+            val held = try {
+                Files.exists(file.toPath(), LinkOption.NOFOLLOW_LINKS)
+            } catch (_: Exception) {
+                continue
+            }
+            if (held) continue
+            goneRows.getOrPut(file.parentFile ?: continue) { ArrayList() } += length to digest
+        }
+        var removed = 0
+        for ((directory, rows) in goneRows) {
+            val names = directory.list { _, name -> isRemovalCaptureName(name) } ?: continue
+            for (name in names) {
+                val capture = File(directory, name)
+                try {
+                    if (capture.toRelativeString(mirrorDir) in onDevice) continue
+                    openOutboundPath(capture, mirrorDir).use { selected ->
+                        val attributes = selected.attributes()
+                        if (!attributes.isRegularFile) return@use
+                        val sameLength = rows.filter { it.first == attributes.size() }
+                        if (sameLength.isEmpty()) return@use
+                        val digest = inboundEntry(selected)?.digest ?: return@use
+                        if (sameLength.none { it.second.contentEquals(digest) }) return@use
+                        // A last look: what was hashed must still be what is removed.
+                        if (!sameInboundAttributes(attributes, selected.attributes())) return@use
+                        requireCurrentParent(selected, capture, mirrorDir)
+                        selected.parent.deleteFile(selected.leaf)
+                        removed++
+                    }
+                } catch (e: Exception) {
+                    Logger.d(tag, "Kept ${capture.name}: ${e.javaClass.simpleName}")
+                }
             }
         }
         return removed
@@ -6395,6 +6476,15 @@ class SafSyncEngine(private val context: Context) {
          * from here, which is the name that is uploaded.
          */
         internal fun removalCaptureName(): String = "removed-${UUID.randomUUID()}$PARTIAL_SUFFIX"
+
+        private const val UUID_PATTERN = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+
+        /** [removalCaptureName]'s shape, and `removed.local-<uuid>`, which builds up to 1.9.0 used. */
+        private val REMOVAL_CAPTURE_NAME = Regex(
+            "removed-$UUID_PATTERN${Regex.escape(PARTIAL_SUFFIX)}|removed${Regex.escape(LOCAL_COPY_SUFFIX)}$UUID_PATTERN",
+        )
+
+        internal fun isRemovalCaptureName(name: String): Boolean = REMOVAL_CAPTURE_NAME.matches(name)
 
         /**
          * `<name>.local-<time>`, the name a mirror copy is kept under beside [name]. A name too
