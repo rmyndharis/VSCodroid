@@ -434,6 +434,37 @@ fs.writeFileSync(
         "const http = require('http');\nconst createServer = http.createServer;\n" +
         "http.createServer = function () { const s = createServer.apply(this, arguments); globalThis.__relay = s; return s; };\n",
 );
+// The relay moves the engine to a random port from 20000 to 59999 without asking whether anything holds it,
+// and the drivers below bind that port as the stand-in engine. On a busy machine the bind can find it taken,
+// which says nothing about the relay, so such a run is made again with another port, up to four times in all.
+// Any other failure, and a fourth taken port, is raised as it is.
+const retryOnTakenPort = (run) => {
+    for (let attempt = 1; ; attempt++) {
+        try {
+            return run();
+        } catch (e) {
+            if (attempt >= 4 || !/EADDRINUSE/.test(String(e.stderr) + String(e.message))) throw e;
+        }
+    }
+};
+{
+    const taken = () => Object.assign(new Error('Command failed'), { stderr: 'Error: listen EADDRINUSE: address already in use 127.0.0.1:49438' });
+    let calls = 0;
+    assert.strictEqual(retryOnTakenPort(() => { if (++calls < 3) throw taken(); return 'ran'; }), 'ran', 'a taken port was not asked again');
+    assert.strictEqual(calls, 3, `a run that met a taken port twice was made ${calls} times`);
+    calls = 0;
+    assert.throws(() => retryOnTakenPort(() => { calls++; throw taken(); }), /Command failed/, 'a port taken four times was not raised');
+    assert.strictEqual(calls, 4, `a port taken every time was tried ${calls} times, wanted 4`);
+    calls = 0;
+    assert.throws(() => retryOnTakenPort(() => { calls++; throw new Error('the driver said no'); }), /the driver said no/, 'another failure was swallowed');
+    assert.strictEqual(calls, 1, `a failure that is not a taken port was made ${calls} times`);
+    checked += 3;
+}
+const runHubDriver = (driver) => retryOnTakenPort(() => JSON.parse(execFileSync(
+    process.execPath,
+    ['--require', FAKE_ANDROID, '--require', RECORD_HUB, '--require', FIX, driver, HUB_ENGINE],
+    { env: { ...process.env, HOME: HUB_HOME, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 60000 },
+).trim().split('\n').pop()));
 const HUB_DRIVER = path.join(tmp, 'hub-driver.js');
 fs.writeFileSync(HUB_DRIVER, `
 const http = require('http');
@@ -808,11 +839,7 @@ for (const [label, extra] of [
     assert.deepStrictEqual(spawnedUnder(call, { home: HUB_HOME }), call, `a hub start with ${label} was started`);
     checked++;
 }
-const hubRun = JSON.parse(execFileSync(
-    process.execPath,
-    ['--require', FAKE_ANDROID, '--require', RECORD_HUB, '--require', FIX, HUB_DRIVER, HUB_ENGINE],
-    { env: { ...process.env, HOME: HUB_HOME, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 60000 },
-).trim().split('\n').pop());
+const hubRun = runHubDriver(HUB_DRIVER);
 assert.deepStrictEqual(hubRun.noteAfterSpawn, { pid: 4242, port: hubRun.back }, 'the note does not name the engine that was started and the port it was given');
 assert.strictEqual(hubRun.noteAfterExit, false, 'the note outlived the engine it names');
 assert.strictEqual(hubRun.spawned[0], BIONIC_LINKER, 'the engine was not started through the linker');
@@ -899,11 +926,7 @@ setTimeout(() => { console.error('the driver gave up waiting'); process.exit(1);
     process.exit(0);
 })().catch((e) => { console.error(e); process.exit(1); });
 `);
-const capRun = JSON.parse(execFileSync(
-    process.execPath,
-    ['--require', FAKE_ANDROID, '--require', RECORD_HUB, '--require', FIX, CAP_DRIVER, HUB_ENGINE],
-    { env: { ...process.env, HOME: HUB_HOME, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 60000 },
-).trim().split('\n').pop());
+const capRun = runHubDriver(CAP_DRIVER);
 assert.strictEqual(capRun.refused, 8, `40 connections held at the relay: ${capRun.refused} closed unanswered, wanted the 8 past 32`);
 assert.strictEqual(capRun.afterRelease, 200, `the relay did not take a request once the held connections were gone: ${capRun.afterRelease}`);
 assert.ok(capRun.requestTimeout > 0 && capRun.requestTimeout <= 60000, `a request may take ${capRun.requestTimeout} ms to send its body`);
