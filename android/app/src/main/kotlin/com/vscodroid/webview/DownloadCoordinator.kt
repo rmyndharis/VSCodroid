@@ -541,7 +541,8 @@ class DownloadCoordinator(
         try {
             host.measureDestination(destination)
         } catch (e: Exception) {
-            Logger.w(tag, "Could not measure the chosen document", e)
+            // The class and not the exception: its message names the document the page chose to save to.
+            Logger.w(tag, "Could not measure the chosen document: ${e.javaClass.simpleName}")
             null
         }
 
@@ -778,7 +779,8 @@ class DownloadCoordinator(
                 // above this catches: it would reach the uncaught handler on the
                 // provider thread and take the process with it, and the download
                 // would keep its claim for ever on the way out.
-                Logger.w(tag, "Could not open the chosen document", e)
+                // The class and not the exception, for the reason [measure] gives.
+                Logger.w(tag, "Could not open the chosen document: ${e.javaClass.simpleName}")
                 null
             }
             mainThread.execute { onDestinationOpened(request, sink, owned, chosenName) }
@@ -871,7 +873,7 @@ class DownloadCoordinator(
                     false
                 }
                 failure != null -> {
-                    Logger.w(tag, "Write to the chosen document failed", failure)
+                    Logger.w(tag, "Write to the chosen document failed: ${failure.javaClass.simpleName}")
                     fail(request, "writing to the chosen document failed")
                     false
                 }
@@ -977,7 +979,7 @@ class DownloadCoordinator(
             // already released.
             request.sink = null
             if (failure != null) {
-                Logger.w(tag, "Closing the chosen document failed", failure)
+                Logger.w(tag, "Closing the chosen document failed: ${failure.javaClass.simpleName}")
                 if (pending === request) fail(request, "the file could not be finished")
                 else {
                     closeAndDiscard(request)
