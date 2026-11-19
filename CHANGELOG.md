@@ -60,6 +60,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A toolchain removal that runs while a file is being written no longer deletes that file's temporary file, which made the write fail.
 - A .bashrc that starts with VSCodroid's header but has text of its own after it is kept as ~/.vscodroid/bashrc.before-repair before the repair replaces it.
 - A toolchain install whose links could not be made fails and asks for free space, instead of being recorded as installed with a tree that does not run.
+- After Stop Server, a webview of the earlier editor page is no longer sent the new connection token at the old port.
+- A workspace folder that holds the sign-in files of Claude Code, Codex, the Antigravity engine or the cargo, Maven, Gradle, Azure, Google Cloud and git tools is no longer readable by webviews.
+- The Antigravity engine switch keeps holding the engine back when an extension changes the HOME of the extension host.
+- The Antigravity engine's version check ends an engine an earlier editor session left running when the setting is off.
+- A client that resets the connection while the Antigravity panel's relay refuses it no longer raises an unhandled error in the extension host.
+- The log no longer carries the device folder or the download target named by a failed folder sync or a download that could not be removed.
+- Coming back from the Open Folder picker after more than five minutes no longer reloads the editor ahead of the folder you chose.
+- The About dialog is no longer opened on a screen that has already closed, which could end the app.
+- The notice about an old system WebView is marked as seen when it is dismissed, so a screen closed under it no longer hides it for good.
 
 ## [1.9.0] - 2026-11-16
 

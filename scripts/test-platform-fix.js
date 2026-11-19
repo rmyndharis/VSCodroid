@@ -434,6 +434,37 @@ fs.writeFileSync(
         "const http = require('http');\nconst createServer = http.createServer;\n" +
         "http.createServer = function () { const s = createServer.apply(this, arguments); globalThis.__relay = s; return s; };\n",
 );
+// The relay moves the engine to a random port from 20000 to 59999 without asking whether anything holds it,
+// and the drivers below bind that port as the stand-in engine. On a busy machine the bind can find it taken,
+// which says nothing about the relay, so such a run is made again with another port, up to four times in all.
+// Any other failure, and a fourth taken port, is raised as it is.
+const retryOnTakenPort = (run) => {
+    for (let attempt = 1; ; attempt++) {
+        try {
+            return run();
+        } catch (e) {
+            if (attempt >= 4 || !/EADDRINUSE/.test(String(e.stderr) + String(e.message))) throw e;
+        }
+    }
+};
+{
+    const taken = () => Object.assign(new Error('Command failed'), { stderr: 'Error: listen EADDRINUSE: address already in use 127.0.0.1:49438' });
+    let calls = 0;
+    assert.strictEqual(retryOnTakenPort(() => { if (++calls < 3) throw taken(); return 'ran'; }), 'ran', 'a taken port was not asked again');
+    assert.strictEqual(calls, 3, `a run that met a taken port twice was made ${calls} times`);
+    calls = 0;
+    assert.throws(() => retryOnTakenPort(() => { calls++; throw taken(); }), /Command failed/, 'a port taken four times was not raised');
+    assert.strictEqual(calls, 4, `a port taken every time was tried ${calls} times, wanted 4`);
+    calls = 0;
+    assert.throws(() => retryOnTakenPort(() => { calls++; throw new Error('the driver said no'); }), /the driver said no/, 'another failure was swallowed');
+    assert.strictEqual(calls, 1, `a failure that is not a taken port was made ${calls} times`);
+    checked += 3;
+}
+const runHubDriver = (driver) => retryOnTakenPort(() => JSON.parse(execFileSync(
+    process.execPath,
+    ['--require', FAKE_ANDROID, '--require', RECORD_HUB, '--require', FIX, driver, HUB_ENGINE],
+    { env: { ...process.env, HOME: HUB_HOME, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 60000 },
+).trim().split('\n').pop()));
 const HUB_DRIVER = path.join(tmp, 'hub-driver.js');
 fs.writeFileSync(HUB_DRIVER, `
 const http = require('http');
@@ -521,6 +552,19 @@ setTimeout(() => { console.error('the driver gave up waiting'); process.exit(1);
         socket.on('close', () => resolve(data.split('\\r\\n')[0]));
         socket.setTimeout(3000, () => { socket.destroy(); });
     });
+    // A client that resets the connection right after a refused upgrade: the relay's end of it must not raise an
+    // error nobody listens for.
+    const uncaught = [];
+    process.on('uncaughtException', (e) => uncaught.push(e.code || e.message));
+    await new Promise((resolve) => {
+        const socket = net.connect(front, '127.0.0.1', () => {
+            socket.write('GET /ws HTTP/1.1\\r\\nHost: evil.example:' + front + '\\r\\nConnection: Upgrade\\r\\nUpgrade: websocket\\r\\n\\r\\n');
+            setTimeout(() => { socket.resetAndDestroy(); resolve(); }, 20);
+        });
+        socket.on('error', () => {});
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    out.uncaughtAfterRefusedUpgrade = uncaught;
     // An engine that resets in the middle of a body: the client must be let go, not left waiting.
     out.abortedBody = await getAs(front, '/abort', '127.0.0.1:' + front);
     // A client that walks away from a response the engine is still writing: the engine has to see it go.
@@ -658,6 +702,39 @@ for (const [label, text, on] of [
     checked++;
 }
 
+// Where ~/.gemini and the machine settings are is read when the file is loaded. An extension in the shared host
+// may reassign or delete HOME later, and the decision must not follow it: the gate would be skipped (no
+// ~/.gemini under the new HOME) or read a file of its own.
+const homeChangedMain = (statement) => {
+    const file = path.join(tmp, `home-changed-${homes++}.js`);
+    fs.writeFileSync(
+        file,
+        `${statement}\n` +
+            "const result = require('child_process').spawn(...JSON.parse(process.argv[2]));\n" +
+            "if (result !== 'child') throw new Error('the return value was lost: ' + result);\n",
+    );
+    return file;
+};
+for (const [label, statement] of [
+    ['HOME reassigned to a directory with no ~/.gemini', `process.env.HOME = ${JSON.stringify(tmp)};`],
+    ['HOME deleted', 'delete process.env.HOME;'],
+    ['HOME reassigned to a home whose setting is on', `process.env.HOME = ${JSON.stringify(HUB_HOME)};`],
+]) {
+    const call = [OFF_ENGINE, HUB_ARGS, SPAWN_OPTIONS];
+    assert.deepStrictEqual(spawnedUnder(call, { home: OFF_HOME, main: homeChangedMain(statement) }), call, `setting off, ${label}: the engine's hub was started`);
+    checked++;
+}
+{
+    const call = [HUB_ENGINE, HUB_ARGS, SPAWN_OPTIONS];
+    for (const [label, statement] of [
+        ['HOME reassigned to a home whose setting is off', `process.env.HOME = ${JSON.stringify(OFF_HOME)};`],
+        ['HOME deleted', 'delete process.env.HOME;'],
+    ]) {
+        assert.strictEqual(spawnedUnder(call, { home: HUB_HOME, main: homeChangedMain(statement) })[0], BIONIC_LINKER, `setting on, ${label}: the engine's hub was held back`);
+        checked++;
+    }
+}
+
 // With the setting off, whatever is asked of a program in ~/.gemini is left as written, which fails with
 // EACCES as it did before: the engine's Go flag parser takes -hub and --hub=true for --hub, it listens in a
 // second mode as well, and the extension and the engine update themselves. Only `agy --version`, the
@@ -762,11 +839,7 @@ for (const [label, extra] of [
     assert.deepStrictEqual(spawnedUnder(call, { home: HUB_HOME }), call, `a hub start with ${label} was started`);
     checked++;
 }
-const hubRun = JSON.parse(execFileSync(
-    process.execPath,
-    ['--require', FAKE_ANDROID, '--require', RECORD_HUB, '--require', FIX, HUB_DRIVER, HUB_ENGINE],
-    { env: { ...process.env, HOME: HUB_HOME, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 60000 },
-).trim().split('\n').pop());
+const hubRun = runHubDriver(HUB_DRIVER);
 assert.deepStrictEqual(hubRun.noteAfterSpawn, { pid: 4242, port: hubRun.back }, 'the note does not name the engine that was started and the port it was given');
 assert.strictEqual(hubRun.noteAfterExit, false, 'the note outlived the engine it names');
 assert.strictEqual(hubRun.spawned[0], BIONIC_LINKER, 'the engine was not started through the linker');
@@ -794,6 +867,7 @@ assert.strictEqual(hubRun.foreignHostPort.status, 403, 'a request naming this ho
 assert.strictEqual(hubRun.noHostReached, 0, 'the engine saw a request that named another host');
 assert.strictEqual(hubRun.localhostHost.status, 200, 'a request naming localhost and the relay\'s own port was refused');
 assert.ok(/^HTTP\/1\.1 403 /.test(hubRun.foreignUpgrade), 'a WebSocket upgrade naming another host was tunnelled: ' + hubRun.foreignUpgrade);
+assert.deepStrictEqual(hubRun.uncaughtAfterRefusedUpgrade, [], 'a client that reset the connection after a refused upgrade made the relay raise an error nobody listens for');
 assert.ok(hubRun.abortedBody.error && hubRun.abortedBody.error !== 'no answer', 'a client was left waiting for a body the engine abandoned: ' + JSON.stringify(hubRun.abortedBody));
 assert.ok(hubRun.killedWhenFrontIsTaken, 'the engine kept running with no relay when the extension\'s port was taken by someone else');
 assert.strictEqual(hubRun.engineSawClientLeave, true, 'a client that left a response did not reach the engine: the relay kept its side open');
@@ -852,11 +926,7 @@ setTimeout(() => { console.error('the driver gave up waiting'); process.exit(1);
     process.exit(0);
 })().catch((e) => { console.error(e); process.exit(1); });
 `);
-const capRun = JSON.parse(execFileSync(
-    process.execPath,
-    ['--require', FAKE_ANDROID, '--require', RECORD_HUB, '--require', FIX, CAP_DRIVER, HUB_ENGINE],
-    { env: { ...process.env, HOME: HUB_HOME, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 60000 },
-).trim().split('\n').pop());
+const capRun = runHubDriver(CAP_DRIVER);
 assert.strictEqual(capRun.refused, 8, `40 connections held at the relay: ${capRun.refused} closed unanswered, wanted the 8 past 32`);
 assert.strictEqual(capRun.afterRelease, 200, `the relay did not take a request once the held connections were gone: ${capRun.afterRelease}`);
 assert.ok(capRun.requestTimeout > 0 && capRun.requestTimeout <= 60000, `a request may take ${capRun.requestTimeout} ms to send its body`);
@@ -878,7 +948,7 @@ if (fs.existsSync('/proc/self/cmdline')) {
     fs.writeFileSync(REAP_DRIVER, `
 const cp = require('child_process');
 const fs = require('fs');
-const [engine, mode, note] = process.argv.slice(2);
+const [engine, mode, note, call] = process.argv.slice(2);
 let pid;
 let dummy = null;
 if (mode === 'dead') {
@@ -893,7 +963,7 @@ if (mode === 'dead') {
     pid = dummy.pid;
 }
 fs.writeFileSync(note, JSON.stringify({ pid: pid, port: 41999 }));
-const started = cp.spawn(engine, ['--hub', '--hub-port=41500']);
+const started = cp.spawn(engine, call === 'version' ? ['--version'] : ['--hub', '--hub-port=41500']);
 started.on('error', () => {});
 const done = (result) => { console.log(JSON.stringify({ result: result })); if (dummy) dummy.kill('SIGKILL'); process.exit(0); };
 if (dummy) {
@@ -930,6 +1000,15 @@ if (dummy) {
             { env: { ...process.env, ...standInEnv, HOME: home, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 30000 },
         ).trim().split('\n').pop());
         assert.strictEqual(got.result, 'ended by SIGTERM', `an engine left running when the setting is turned off: ${got.result}`);
+        checked++;
+        // The extension's check of the engine's version is let through with the setting off, and ends an earlier
+        // engine all the same: the extension host that started it may have ended without a word.
+        const versionRun = JSON.parse(execFileSync(
+            process.execPath,
+            ['--require', FAKE_ANDROID, '--require', FIX, REAP_DRIVER, engineIn(home), 'match', path.join(home, '.vscodroid/antigravity-hub.json'), 'version'],
+            { env: { ...process.env, ...standInEnv, HOME: home, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 30000 },
+        ).trim().split('\n').pop());
+        assert.strictEqual(versionRun.result, 'ended by SIGTERM', `the version check left an engine running with the setting off: ${versionRun.result}`);
         checked++;
     }
 

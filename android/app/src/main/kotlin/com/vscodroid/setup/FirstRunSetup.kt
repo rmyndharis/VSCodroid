@@ -3089,8 +3089,8 @@ claude() {
         //
         // One case has a settings file on disk before any setup has ever been
         // recorded in SharedPreferences: an Android Auto Backup restore onto a
-        // new device (backup_rules.xml includes home/.vscodroid/ and excludes
-        // shared_prefs/). When the restored document already carries
+        // new device (backup_rules.xml includes only home/.vscodroid/data/Machine,
+        // where this document lives, and nothing of shared_prefs/). When the restored document already carries
         // `vscodroid.layout.compactScreen`, it was written by a post-migration
         // build, so any pair in it matching [MOVED_DEFAULTS] was put there by
         // the user and must not be stripped.

@@ -490,8 +490,12 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
     private val folderPickerLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
+        folderPickerPending = false
         uri?.let { handleSafFolderSelected(it) }
     }
+
+    /** The folder picker is open, so its answer is on its way to this page; see [fileChooserIsPending]. */
+    private var folderPickerPending = false
 
     /**
      * The device file picker behind `<input type=file>`, which is what the
@@ -686,7 +690,8 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 // Reported and not raised: this only ever runs on a path that has
                 // already failed, and a delete that fails leaves a file the user
                 // can delete themselves, which is not worth a second message.
-                Logger.w(tag, "Could not remove the unfinished download", e)
+                // The class and not the exception: its message names the document the page chose.
+                Logger.w(tag, "Could not remove the unfinished download: ${e.javaClass.simpleName}")
             }
         }
 
@@ -1548,10 +1553,13 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         // here on the main thread, and an uncaught throw ends the process with the
         // server in it.
         try {
+            folderPickerPending = true
             folderPickerLauncher.launch(null)
         } catch (e: ActivityNotFoundException) {
+            folderPickerPending = false
             Logger.w(tag, "No document tree picker on this device", e)
         } catch (e: IllegalStateException) {
+            folderPickerPending = false
             Logger.w(tag, "The folder picker is no longer registered", e)
         }
     }
@@ -1911,7 +1919,8 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 // screen, because the window that carried the dialog is what has
                 // gone; the notice below is a toast and outlives it.
                 if (!isFinishing && !isDestroyed) dialog.dismiss()
-                Logger.e(tag, "SAF permission revoked during sync", e)
+                // The class and not the exception: its message quotes the tree URI, see [openSafFolder].
+                Logger.e(tag, "SAF permission revoked during sync: ${e.javaClass.simpleName}")
                 reportSyncFailure(
                     getString(R.string.saf_sync_denied),
                     restoreWatcherAfterFailure(previouslyWatched, uri)
@@ -1935,7 +1944,8 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
             } catch (e: Exception) {
                 // Guarded for the reason the handler above it is.
                 if (!isFinishing && !isDestroyed) dialog.dismiss()
-                Logger.e(tag, "SAF sync failed", e)
+                // The class and not the exception: its message can name a path or the tree URI.
+                Logger.e(tag, "SAF sync failed: ${e.javaClass.simpleName}")
                 // Never null: many exceptions carry no message, and the sentence then
                 // ended in the word null.
                 reportSyncFailure(
@@ -2353,16 +2363,18 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
     }
 
     /**
-     * Whether an `<input type=file>` is still waiting for the device picker.
+     * Whether an `<input type=file>` or the Open Folder picker is still waiting for the device picker.
      *
      * Asked of the chrome client on the current WebView, which is where
      * [deliverFileChooserResult] takes the answer, so the two cannot disagree
      * about which document is owed one. A client that was replaced with its page
      * reports nothing pending, which is right: there is no selection left to
-     * protect.
+     * protect. The folder picker is the same trip through another app, and a
+     * reload on the way back would come ahead of its answer, raise the leave-page
+     * dialog over the sync progress and load the page twice.
      */
     private fun fileChooserIsPending(): Boolean =
-        (webView?.webChromeClient as? VSCodroidWebChromeClient)?.hasPendingFileChooser == true
+        (webView?.webChromeClient as? VSCodroidWebChromeClient)?.hasPendingFileChooser == true || folderPickerPending
 
     /**
      * Whether the create-document picker for a download is still waiting to be
@@ -7000,9 +7012,9 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      *
      * It has to be a media query rather than anything sampled in Kotlin: this runs
      * once per page load, and MainActivity's `configChanges` in the manifest absorbs
-     * `orientation`, `screenSize` and `screenLayout` among others, with no
-     * `onConfigurationChanged`, so nothing re-invokes the injection when the window
-     * changes. Line numbers are left off deliberately: both citations here named
+     * `orientation`, `screenSize` and `screenLayout` among others, and its
+     * `onConfigurationChanged` does not inject this again, so nothing re-invokes the
+     * injection when the window changes. Line numbers are left off deliberately: both citations here named
      * the right attribute and the wrong line within a day of being written. Letting the browser hold the condition costs nothing and never goes
      * stale.
      */
@@ -7886,6 +7898,9 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * Shows the About dialog. Called from AndroidBridge via JS.
      */
     fun showAboutDialog() {
+        // The bridge posts this, so it can run after this screen is gone, and show() on a window whose
+        // token is dead throws on the main thread.
+        if (isFinishing || isDestroyed) return
         // The stand-in is a resource for the reason `tls_unknown_host` is one:
         // it is rendered inside a translated sentence, so a Kotlin literal here
         // leaves one English word in the middle of an otherwise translated
@@ -8375,7 +8390,8 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         // 113.0.5672.136. VSCodroid is tested a..." and never what to do about it
         // (measured on an API 34 image).
         if (!WebViewVersion.shouldWarn(version, workspacePrefs.getString(KEY_WEBVIEW_WARNED, null))) return
-        workspacePrefs.edit { putString(KEY_WEBVIEW_WARNED, version) }
+        // Remembered when the dialog is answered, not before it is shown: a screen that ends under it, or a
+        // process that is killed, would otherwise leave a warning nobody saw marked as given.
         AlertDialog.Builder(this)
             .setTitle(getString(R.string.webview_below_minimum_title))
             .setMessage(
@@ -8387,6 +8403,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
             )
             .setPositiveButton(getString(R.string.webview_update)) { _, _ -> openStoreListing(pkg.packageName) }
             .setNegativeButton(getString(R.string.crash_dismiss), null)
+            .setOnDismissListener { workspacePrefs.edit { putString(KEY_WEBVIEW_WARNED, version) } }
             .show()
     }
 
