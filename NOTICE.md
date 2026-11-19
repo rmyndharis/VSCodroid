@@ -78,7 +78,9 @@ anything here can run it.
 
 Excluded as first-party: `libglibc-shim.so` and its companion stubs, which carry
 glibc's soname but are built from this repository's own source, and
-`libexec-trampoline.so`, built from `scripts/exec-trampoline.c` here.
+`libexec-trampoline.so`, `libclaude-launch.so`, `libseccomp-shim.so` and
+`libmove-noreplace.so`, built from `scripts/exec-trampoline.c`,
+`scripts/claude-launch.c`, `scripts/seccomp-shim.c` and `scripts/move-noreplace.c` here.
 
 Naming a project is not the notice. MIT, the BSD family, ISC, NCSA, the ICU
 licence and Apache-2.0 section 4 all ask for the copyright and permission text to

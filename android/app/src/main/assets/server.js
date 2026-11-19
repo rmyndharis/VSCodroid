@@ -353,10 +353,12 @@ if (!fs.existsSync(rehEntryPoint)) {
     // resolves its own configuration with `userLocale` and `osLocale` hardcoded
     // to "en" and then assigns the result over this variable, before anything
     // reads it, so the value here reaches nothing. The node extension host is
-    // not a way round it either: the server builds that child's environment
-    // through `resolveNLSConfiguration`, which answers `resolvedLanguage: "en"`
-    // without a `languagepacks.json`, so `vscode.env.language` and `vscode.l10n`
-    // stay English there.
+    // not a way round it for the host's own messages: the server builds that
+    // child's environment through `resolveNLSConfiguration`, which answers
+    // `resolvedLanguage: "en"` without a `languagepacks.json`. What an extension
+    // reads through `vscode.env.language` and `vscode.l10n` is another path: the
+    // shipped `extensionHostProcess.js` takes it from `appLanguage`, which the web
+    // client sends (read there, not measured on a device).
     //
     // An extension MANIFEST takes a different path and needs no language pack:
     // `RemoteExtensionsScannerService.scanExtensions` is keyed on the language

@@ -360,9 +360,11 @@ object Environment {
      * answer that moved under an existing install would leave every terminal
      * starting somewhere the editor is not. Moving the user's own files is not
      * something to do behind their back either. The directory's own existence is
-     * the record, because nothing creates it any more: a fresh install never has
-     * one and an install that does can only have got it from a release where it
-     * was the default.
+     * the record, because nothing in the app creates it any more: a fresh install
+     * never has one and an install that does got it from a release where it was
+     * the default, or from something else that can write there while the phone is
+     * still on Android 10 (see [projectsDirFor], where the `~/projects` link of an
+     * install that works in the internal folder settles that case).
      *
      * Clear Data still wipes whichever of the two is in use, and work that has to
      * stay reachable from outside the app still belongs in a folder opened

@@ -433,8 +433,11 @@ with no section naming the version a user installed.
 2. Bump versionName and versionCode together in android/app/build.gradle.kts. The same version is written by hand in docs/04-TECHNICAL_SPEC.md (the `versionCode` and `versionName` block), in the `versionCode` and `versionName` block under this plan's release steps, and as the placeholder of `VSCodroid Version` in .github/ISSUE_TEMPLATE/bug_report.yml; no script checks them, so change all four.
    release.yml refuses a tag that disagrees with versionName, and refuses a
    versionCode that is not greater than the previous v* tag's
-3. Land both on main. The tag is taken from main, so there is one line of
-   history and nothing to cherry-pick afterwards
+3. Land both on main, on the day of the tag. The tag is taken from main, so there
+   is one line of history and nothing to cherry-pick afterwards. `pages.yml` builds
+   the site from `CHANGELOG.md` on every push to main and drops only `[Unreleased]`,
+   so the release notes are public as soon as this lands: landed days before the
+   tag, the site names a release that does not exist yet
 4. Run the minified build on an emulator before tagging. R8 and the resource
    shrinker run on the release build type alone, and r8.yml proves only that
    they finish: a member reached by name that no keep rule covers is removed
@@ -572,7 +575,8 @@ holds whatever was compiled last.
 - APK download for sideloading
 - Useful for users who can't access Play Store
 - Each GitHub Release includes: APK, AAB, the toolchain ZIPs, `toolchains.sha256`,
-  `checksums.sha256`, a build manifest, and generated release notes (`release.yml`)
+  `checksums.sha256`, a build manifest, `mapping.txt`, `app-release-symbols.zip`, and
+  generated release notes (`release.yml`)
 - **The toolchain ZIPs are a delivery channel, not a convenience artifact.**
   `ToolchainRegistry` points every non-Play install at `releases/latest/download/`, and
   `ToolchainManager.pinLatest` then prefers `releases/download/v<versionName>/` when that
