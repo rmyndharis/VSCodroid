@@ -73,6 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A settings file whose lines end in a bare carriage return is read the way the editor reads it: the restore that turns the Antigravity engine off and the readers of the heap ceiling no longer miss keys that follow a comment.
 - A save made while another write to the same device folder was still finishing is no longer held back and announced as kept inside the app; it is sent.
 - The privacy policy states that the Antigravity engine's version check (`--version`) still runs the downloaded program while the engine is turned off.
+- Behind a manual or global HTTP proxy with an empty bypass list, the Markdown preview and other webview panels showed the proxy's error page, because the editor's own server was fetched through the proxy, which also logged the connection token; that fetch now never uses a proxy.
 
 ## [1.9.0] - 2026-11-16
 
