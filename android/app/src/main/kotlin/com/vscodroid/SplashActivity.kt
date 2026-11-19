@@ -106,10 +106,6 @@ class SplashActivity : AppCompatActivity() {
     /** [launchMain] was asked while [stopped]; [onStart] runs it when the user is back. */
     private var launchPending = false
 
-    /** A [repair] of this screen threw; such a run is not remembered for the process. */
-    @Volatile
-    private var repairFailed = false
-
     /**
      * The setup hold a first run took ahead of its launch repairs, until a setup
      * run takes it over ([runSetupWithRetry]) or the launch gives it back.
@@ -301,16 +297,12 @@ class SplashActivity : AppCompatActivity() {
             runSetupWithRetry(setup, statusText, progressBar)
         }
 
-        // A launch that will run setup puts the splash up and repairs off the
-        // main thread, and so does the first other launch of a process. A later
-        // one has nothing left to repair: see [LaunchRepairRecord].
+        // Every launch puts the splash up and repairs off the main thread. None skips the repairs:
+        // what they mend can change while the process lives (a certificate authority installed in
+        // Android Settings, a shell file a person edits), and the service keeps the process alive.
         if (setup.isFirstRun()) {
             showFirstRunSplash(setup)
             startFirstRunRepairs(::repairFiles, ::continueAfterRepairs)
-            return
-        }
-        if (launchRepairRecord.ran) {
-            continueAfterRepairs()
             return
         }
         showLaunchSplash()
@@ -318,16 +310,12 @@ class SplashActivity : AppCompatActivity() {
     }
 
     /**
-     * The launch repairs of an ordinary launch that is the first of its process:
-     * [files] on an I/O thread under the splash, then [after] on this one, as on
-     * a first run. A run in which every repair went through is remembered for the
-     * process ([LaunchRepairRecord]), and the launches after it skip them.
+     * The launch repairs of an ordinary launch: [files] on an I/O thread under the
+     * splash, then [after] on this one, as on a first run.
      */
     private fun startLaunchRepairs(files: () -> Unit, after: () -> Unit) {
         lifecycleScope.launch {
-            repairFilesOffMain(Dispatchers.IO, { launchRepairRecord.run(files) { repairFailed } }, after) {
-                !isFinishing && !isDestroyed
-            }
+            repairFilesOffMain(Dispatchers.IO, files, after) { !isFinishing && !isDestroyed }
         }
     }
 
@@ -371,7 +359,6 @@ class SplashActivity : AppCompatActivity() {
         try {
             action()
         } catch (e: Exception) {
-            repairFailed = true
             Logger.e(tag, "Launch-time refresh of $what failed", e)
         }
     }
@@ -1445,8 +1432,7 @@ internal fun applySetupProgress(
 }
 
 /**
- * The launch repairs of a first run, and of the first other launch of a process:
- * [files] on [io], so that the main thread
+ * The launch repairs of every launch: [files] on [io], so that the main thread
  * stays free to draw the splash and answer a touch however long they take, then
  * [after] back on the caller's thread if [alive] still says so. [files] is plain
  * file work and does not stop for a cancellation; one that comes meanwhile is
@@ -1473,40 +1459,6 @@ private val launchRepairs = Any()
  * read and the other's later write drop a block.
  */
 internal fun oneLaunchRepairAtATime(repairs: () -> Unit) = synchronized(launchRepairs) { repairs() }
-
-/**
- * Whether an ordinary launch's file repairs have run to their end in this
- * process.
- *
- * What they repair moves with an install or with the process: the directory the
- * app's programs are in is new after every install, which ends the process, and
- * the files they rewrite are this build's. A later launch in the same process
- * finds nothing to repair, and the service keeps the process alive after the
- * task is swiped away, so that launch is the common one. Repairing in it anyway
- * cost most of its time to the first frame, on the main thread and beside a
- * running server: 0.3 to 0.9 s of 0.4 to 1.2 s on an API 36 emulator with the
- * 1.9.0 release build, and a phone is several times slower than that.
- *
- * A run in which a repair failed is not remembered, so the next launch tries
- * again. A first run's repairs are not remembered either: they run before setup
- * has written the files most of them extend, and the launch after it has to
- * look once more. The projects folder, the one thing here another app can
- * remove while the process lives, is made again by the editor's own start.
- */
-internal class LaunchRepairRecord {
-    @Volatile
-    var ran = false
-        private set
-
-    /** Runs [files] and remembers the run unless [failed] then says a repair did not go through. */
-    fun run(files: () -> Unit, failed: () -> Boolean) {
-        files()
-        if (!failed()) ran = true
-    }
-}
-
-/** This process's [LaunchRepairRecord]. */
-internal val launchRepairRecord = LaunchRepairRecord()
 
 /**
  * The holds this process's Splash instances have on NodeService for setup.

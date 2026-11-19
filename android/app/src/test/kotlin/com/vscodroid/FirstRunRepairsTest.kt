@@ -16,7 +16,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * What a launch hands its repairs to, by behaviour: [repairFilesOffMain] with its dispatcher injected,
- * [oneLaunchRepairAtATime] from two threads, [LaunchRepairRecord] and [SetupHolds]. The wiring that hands them over
+ * [oneLaunchRepairAtATime] from two threads and [SetupHolds]. The wiring that hands them over
  * is read in [SplashFirstRunRepairsTest].
  */
 class FirstRunRepairsTest {
@@ -110,42 +110,6 @@ class FirstRunRepairsTest {
             launches.shutdownNow()
         }
         assertEquals(1, most.get(), "two launches ran their file repairs at the same time")
-    }
-
-    @Test
-    fun `a run in which every repair went through is remembered`() {
-        val record = LaunchRepairRecord()
-        assertFalse(record.ran, "a process that has repaired nothing says it has")
-        var files = 0
-        record.run({ files++ }) { false }
-        assertEquals(1, files, "the repairs were not run")
-        assertTrue(record.ran, "the run was not remembered, so every later launch of the process repairs again")
-    }
-
-    @Test
-    fun `a run in which a repair failed is not remembered, and the next whole one is`() {
-        val record = LaunchRepairRecord()
-        record.run({ }) { true }
-        assertFalse(record.ran, "a run that repaired less than it was asked to keeps the next launch from trying again")
-        record.run({ }) { false }
-        assertTrue(record.ran, "the whole run after a failed one was not remembered")
-    }
-
-    @Test
-    fun `the failure is asked about after the repairs, not before them`() {
-        val record = LaunchRepairRecord()
-        var failed = false
-        record.run({ failed = true }) { failed }
-        assertFalse(record.ran, "a repair that failed during the run was not seen")
-    }
-
-    @Test
-    fun `a run remembered from the I O thread is seen by the next launch on its own thread`() {
-        val record = LaunchRepairRecord()
-        runBlocking(main.asCoroutineDispatcher()) {
-            repairFilesOffMain(io.asCoroutineDispatcher(), files = { record.run({ }) { false } }, after = { }) { true }
-        }
-        assertTrue(main.submit<Boolean> { record.ran }.get(5, TimeUnit.SECONDS), "the launching thread reads the old answer")
     }
 
     @Test

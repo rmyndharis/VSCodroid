@@ -360,7 +360,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-  A["Application.onCreate()<br/>WebView.setDataDirectorySuffix('vscodroid')<br/>Initialize logging"] --> B["SplashActivity (LAUNCHER, runs on every start)<br/>Launch repairs, once per process and off the main thread: symlinks, git core, npm wrappers<br/>SAF reclaim on every start<br/>Extraction only when versionName, versionCode or the package's update time changed<br/>Start MainActivity"]
+  A["Application.onCreate()<br/>WebView.setDataDirectorySuffix('vscodroid')<br/>Initialize logging"] --> B["SplashActivity (LAUNCHER, runs on every start)<br/>Launch repairs on every start, off the main thread: symlinks, git core, CA bundle, npm wrappers<br/>SAF reclaim on every start<br/>Extraction only when versionName, versionCode or the package's update time changed<br/>Start MainActivity"]
   B --> C["MainActivity.onCreate()<br/>setContentView (WebView + ExtraKeyRow)<br/>Configure WebView<br/>Start/bind NodeService<br/>Wait server ready -> loadVSCode(): register AndroidBridge,<br/>load http://127.0.0.1:PORT/?folder=... with the connection token"]
   C --> D["NodeService.onCreate()<br/>Start Foreground Service (specialUse)<br/>Build environment variables<br/>Launch Node.js with ProcessBuilder<br/>Poll GET /version, accept only 200<br/>Notify MainActivity: server ready"]
   D --> E["MainActivity (running)<br/>Give ExtraKeyRow its root view and the user's hide choice (the row decides when it shows, 5.3)<br/>Render VS Code in WebView<br/>Monitor Node.js health<br/>Handle rotation/back button/onTrimMemory"]

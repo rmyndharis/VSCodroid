@@ -18,10 +18,9 @@ import java.io.File
  *
  * So these cases cannot show that the policy fires on anything, that `install()`
  * still has a body, or that the call sits at the END of `onCreate` rather than the
- * start. That last one is the whole design: the launch path before it touches the
- * filesystem on the main thread on purpose and says so in a comment, and one of
- * its repairs alone walks a 146-line manifest doing an lstat per entry, so a
- * policy that covered it would bury every finding worth reading. Only a device run
+ * start. That last one is the whole design: the launch path before it still touches
+ * the filesystem on the main thread in places and says so in a comment, so a
+ * policy that covered it would bury the findings worth reading. Only a device run
  * answers those, and `androidTest/README.md` records why CI cannot do it here.
  *
  * What they do cover is the four ways this rots into something worse than nothing:

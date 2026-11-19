@@ -6,11 +6,10 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * The order of a launch in `SplashActivity.onCreate`: a launch that will run setup lays the splash out and runs the
- * file repairs off the main thread, and so does the first other launch of a process; a later launch of that process
- * lays nothing out and repairs nothing. Read out of the source, as [com.vscodroid.setup.LaunchRepairWiringTest] reads
- * the repairs themselves, because no JVM test here can build the Activity. What the wiring hands its work to is
- * tested by behaviour in [FirstRunRepairsTest].
+ * The order of a launch in `SplashActivity.onCreate`: every launch, a first run or not, lays the splash out and runs
+ * the file repairs off the main thread, and none skips them. Read out of the source, as
+ * [com.vscodroid.setup.LaunchRepairWiringTest] reads the repairs themselves, because no JVM test here can build the
+ * Activity. What the wiring hands its work to is tested by behaviour in [FirstRunRepairsTest].
  */
 class SplashFirstRunRepairsTest {
 
@@ -69,55 +68,36 @@ class SplashFirstRunRepairsTest {
         }
     }
 
-    /** What onCreate does after the first-run branch: the later-launch branch, and the statements after it. */
-    private fun ordinaryLaunch(launch: Launch): Pair<String, List<String>> {
+    /** What onCreate does after the first-run branch: the statements of every other launch. */
+    private fun ordinaryLaunch(launch: Launch): List<String> {
         val branch = firstRunBranch(launch.path)
         val after = launch.path.substring(launch.path.indexOf(branch) + branch.length)
-        assertTrue(after.trim().startsWith("if (launchRepairRecord.ran) {")) {
-            "after the first-run branch the launch does not ask first if this process has repaired already:\n$after"
-        }
-        val later = SourceScan.body(after, "if (launchRepairRecord.ran) {")
-        val rest = after.substring(after.indexOf(later) + later.length).lines().map { it.trim() }.filter { it.isNotEmpty() }
-        return later to rest
+        return after.lines().map { it.trim() }.filter { it.isNotEmpty() }
     }
 
     @Test
-    fun `a later launch of a process repairs no file and lays nothing out`() {
-        val (later, _) = ordinaryLaunch(launch())
-        assertEquals(listOf("{", "continueAfterRepairs()", "return", "}"), later.lines().map { it.trim() }) {
-            "a launch in a process that has repaired already does more than go on, on the main thread, before " +
-                "the first frame: that is the launch the service's surviving process makes the common one"
-        }
-    }
-
-    @Test
-    fun `the first ordinary launch of a process lays the splash out and repairs off the main thread`() {
+    fun `every ordinary launch lays the splash out and repairs off the main thread`() {
         val launch = launch()
-        val (_, rest) = ordinaryLaunch(launch)
-        assertEquals(listOf("showLaunchSplash()", "startLaunchRepairs(::repairFiles, ::continueAfterRepairs)"), rest.take(2)) {
-            "the first ordinary launch of a process does not lay the splash out and then start its repairs"
+        assertEquals(
+            listOf("showLaunchSplash()", "startLaunchRepairs(::repairFiles, ::continueAfterRepairs)"),
+            ordinaryLaunch(launch).take(2),
+        ) {
+            "an ordinary launch does not lay the splash out and then start its repairs, with nothing ahead of " +
+                "them that skips a repair: what they mend can change while the process lives (a certificate " +
+                "authority installed in Android Settings, a shell file a person edits)"
         }
         assertFalse("oneLaunchRepairAtATime(" in launch.path) { "a launch still runs its file repairs on the main thread" }
         assertTrue("showSplashLayout()" in code("private fun showLaunchSplash(")) { "the launch splash lays out nothing" }
         val start = code("private fun startLaunchRepairs(")
         assertTrue(
-            Regex("""lifecycleScope\.launch \{\s*repairFilesOffMain\(Dispatchers\.IO, \{ launchRepairRecord\.run\(files\) """ +
-                """\{ repairFailed } }, after\) \{\s*!isFinishing && !isDestroyed\s*}""").containsMatchIn(start),
+            Regex("""lifecycleScope\.launch \{\s*repairFilesOffMain\(Dispatchers\.IO, files, after\) """ +
+                """\{ !isFinishing && !isDestroyed }\s*}""").containsMatchIn(start),
         ) {
             "an ordinary launch's repairs are not run through repairFilesOffMain on Dispatchers.IO, in a scope a " +
-                "destroyed activity cancels, remembered for the process only when none failed:\n$start"
+                "destroyed activity cancels, with what follows refused to a finishing or destroyed one:\n$start"
         }
         for (call in listOf("showSplashLayout(", "showLaunchSplash(", "showFirstRunSplash(", "setContentView(")) {
             assertFalse(call in launch.files) { "the file repairs lay out a screen: $call" }
-        }
-    }
-
-    @Test
-    fun `a repair that throws marks its launch, so the run is not remembered`() {
-        val repair = code("private fun repair(")
-        val caught = repair.indexOf("catch (e: Exception)")
-        assertTrue(caught >= 0 && repair.indexOf("repairFailed = true") > caught) {
-            "a failed repair leaves no mark, so the process remembers a run that repaired less than it was asked to"
         }
     }
 
@@ -134,9 +114,8 @@ class SplashFirstRunRepairsTest {
             "the file repairs are not handed exactly once to each path"
         }
         val rest = Regex("""::continueAfterRepairs\b|(?<!fun )\bcontinueAfterRepairs\(\)""")
-        assertEquals(3, rest.findAll(launch.path).count()) {
-            "the rest does not follow exactly once on each of the three paths: a first run, the first other launch " +
-                "of a process, and a later one"
+        assertEquals(2, rest.findAll(launch.path).count()) {
+            "the rest does not follow exactly once on each of the two paths: a first run and every other launch"
         }
     }
 
