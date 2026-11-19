@@ -523,6 +523,13 @@ setTimeout(() => { console.error('the driver gave up waiting'); process.exit(1);
             setTimeout(() => res.socket.destroy(), 50);
             return;
         }
+        if (req.url === '/badreason') {
+            // A status text with a control byte: Node's client takes it and Node's server will not write it back. The
+            // socket stays open, so the engine can tell whether the relay let go of it.
+            res.socket.on('close', () => { seen.badReasonClosed = true; });
+            res.socket.write('HTTP/1.1 200 O\\x01K\\r\\nContent-Length: 5\\r\\n\\r\\nab');
+            return;
+        }
         res.setHeader('Content-Security-Policy', req.url === '/plain'
             ? "frame-ancestors 'self'; report-uri https://example.test/r"
             : "frame-ancestors 'self' http://127.0.0.1:* vscode-webview: vscode-file:; report-uri https://example.test/r");
@@ -564,7 +571,14 @@ setTimeout(() => { console.error('the driver gave up waiting'); process.exit(1);
         socket.on('error', () => {});
     });
     await new Promise((r) => setTimeout(r, 300));
-    out.uncaughtAfterRefusedUpgrade = uncaught;
+    out.uncaughtAfterRefusedUpgrade = uncaught.slice();
+    // An answer whose status text the relay's own server will not write: the client gets a status and the engine's
+    // connection is let go, where it used to throw inside the response callback and leave both waiting.
+    const uncaughtBefore = uncaught.length;
+    out.badReason = await getAs(front, '/badreason', '127.0.0.1:' + front);
+    await new Promise((r) => setTimeout(r, 300));
+    out.engineSawBadReasonClose = seen.badReasonClosed === true;
+    out.uncaughtAfterBadReason = uncaught.slice(uncaughtBefore);
     // An engine that resets in the middle of a body: the client must be let go, not left waiting.
     out.abortedBody = await getAs(front, '/abort', '127.0.0.1:' + front);
     // A client that walks away from a response the engine is still writing: the engine has to see it go.
@@ -868,13 +882,16 @@ assert.strictEqual(hubRun.noHostReached, 0, 'the engine saw a request that named
 assert.strictEqual(hubRun.localhostHost.status, 200, 'a request naming localhost and the relay\'s own port was refused');
 assert.ok(/^HTTP\/1\.1 403 /.test(hubRun.foreignUpgrade), 'a WebSocket upgrade naming another host was tunnelled: ' + hubRun.foreignUpgrade);
 assert.deepStrictEqual(hubRun.uncaughtAfterRefusedUpgrade, [], 'a client that reset the connection after a refused upgrade made the relay raise an error nobody listens for');
+assert.strictEqual(hubRun.badReason.status, 502, 'a client got no status for an engine answer whose text the relay cannot write: ' + JSON.stringify(hubRun.badReason));
+assert.deepStrictEqual(hubRun.uncaughtAfterBadReason, [], 'the relay threw on an engine answer whose status text it cannot write');
+assert.strictEqual(hubRun.engineSawBadReasonClose, true, 'the relay kept the engine\'s connection after it could not pass the answer on');
 assert.ok(hubRun.abortedBody.error && hubRun.abortedBody.error !== 'no answer', 'a client was left waiting for a body the engine abandoned: ' + JSON.stringify(hubRun.abortedBody));
 assert.ok(hubRun.killedWhenFrontIsTaken, 'the engine kept running with no relay when the extension\'s port was taken by someone else');
 assert.strictEqual(hubRun.engineSawClientLeave, true, 'a client that left a response did not reach the engine: the relay kept its side open');
 assert.strictEqual(hubRun.engineSawWaiterLeave, true, 'a client that left before the engine answered did not reach the engine');
 assert.strictEqual(hubRun.upgradeHost, `127.0.0.1:${hubRun.back}`, 'the engine saw an upgrade whose Host is not its own');
 assert.ok(hubRun.hangingEnded.error && hubRun.hangingEnded.error !== 'still open' && hubRun.hangingEnded.error !== 'no answer', 'a response open when the engine ended stayed open: ' + JSON.stringify(hubRun.hangingEnded));
-checked += 11;
+checked += 14;
 checked++;
 
 // Any app on the phone can connect to the relay, which runs in the editor server and shares its file

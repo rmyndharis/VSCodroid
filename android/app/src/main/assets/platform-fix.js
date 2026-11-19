@@ -446,7 +446,17 @@ if (process.platform === 'android') {
           if (HOP_BY_HOP.test(name)) continue;
           sent.push(name, /^content-security-policy$/i.test(name) ? widenFrameAncestors(value) : value);
         }
-        res.writeHead(answer.statusCode, answer.statusMessage, sent);
+        try {
+          res.writeHead(answer.statusCode, answer.statusMessage, sent);
+        } catch (e) {
+          // Node's client takes a status text with a control byte that its server then refuses to write. Left
+          // to throw, the client would wait for ever and the engine's connection would stay open. The refused
+          // call has already stored the text on the response, so the 502 names its own.
+          answer.destroy();
+          res.writeHead(502, 'Bad Gateway');
+          res.end();
+          return;
+        }
         // Not pipe: an engine that resets in the middle of a body would leave the client waiting for ever.
         pipeline(answer, res, function () { /* both ends are already closed */ });
       });
