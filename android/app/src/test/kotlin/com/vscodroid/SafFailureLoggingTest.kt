@@ -71,4 +71,22 @@ class SafFailureLoggingTest {
                 "into a log that ships: log the class instead, unless the exception can name nothing the user chose"
         }
     }
+
+    /**
+     * The coordinator that saves a download reads the document the person chose, and the exceptions of that
+     * provider name it exactly as the ones above do: a `SecurityException` or a `FileNotFoundException` for a
+     * grant that was revoked between the picker and the open. Nothing in it passes an exception, of any name, to a
+     * level that ships.
+     */
+    @Test
+    fun `the download coordinator passes no exception to a shipped log level`() {
+        val downloads = SourceScan.read("src/main/kotlin/com/vscodroid/webview/DownloadCoordinator.kt")
+        val passes = Regex("""Logger\.[ew]\(\s*tag,\s*"([^"]*)"\s*,\s*\w+\s*\)""")
+            .findAll(downloads).map { it.groupValues[1] }.toList()
+
+        assertEquals(emptyList<String>(), passes) {
+            "DownloadCoordinator passes a caught exception to the logger, which writes its message and stack, " +
+                "and with them the document the person chose, into a log that ships: log the class instead: $passes"
+        }
+    }
 }

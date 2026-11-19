@@ -41,6 +41,7 @@ import java.io.FileInputStream
 import java.io.IOException
 import java.io.SequenceInputStream
 import java.net.HttpURLConnection
+import java.net.Proxy
 import java.net.URI
 import java.net.URISyntaxException
 import java.net.URL
@@ -2261,7 +2262,11 @@ class VSCodroidWebViewClient(
         private fun proxyToLocalhost(url: String, method: String, logTag: String): WebResourceResponse? {
             var connection: HttpURLConnection? = null
             return try {
-                val conn = URL(url).openConnection() as HttpURLConnection
+                // No proxy: this address is the app's own server on the phone's loopback, which a proxy cannot
+                // reach, and the URL carries the connection token. A manual or global HTTP proxy with an empty
+                // bypass list would otherwise be asked for it, since the platform then empties the JVM's own
+                // bypass of loopback.
+                val conn = URL(url).openConnection(Proxy.NO_PROXY) as HttpURLConnection
                 connection = conn
                 conn.connectTimeout = 5000
                 conn.readTimeout = 10000
