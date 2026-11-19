@@ -72,6 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A file deleted on the device whose copy was being removed when the app was killed is no longer put back on the device under a made-up name at the next open.
 - A settings file whose lines end in a bare carriage return is read the way the editor reads it: the restore that turns the Antigravity engine off and the readers of the heap ceiling no longer miss keys that follow a comment.
 - A save made while another write to the same device folder was still finishing is no longer held back and announced as kept inside the app; it is sent.
+- The privacy policy states that the Antigravity engine's version check (`--version`) still runs the downloaded program while the engine is turned off.
 
 ## [1.9.0] - 2026-11-16
 

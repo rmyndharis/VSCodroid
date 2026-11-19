@@ -1,7 +1,7 @@
 # VSCodroid Privacy Policy
 
 **Effective Date: February 13, 2026**
-**Last Updated: November 18, 2026**
+**Last Updated: November 19, 2026**
 
 ## Summary
 
@@ -113,7 +113,7 @@ When you run commands like `npm install` or `pip install` in the terminal, those
 
 Some extensions you install carry a program of their own inside the extension package you install from Open VSX. The Claude Code extension, for example, brings its command line tool that way; VSCodroid only starts the program for you. The extension's own privacy policy applies to it.
 
-An extension can also download its program from its own publisher when it first starts, as the Google Antigravity extension does with its engine. VSCodroid starts that engine only after you turn it on in Settings, because while the engine runs, other apps on your device can reach it on a local port and use the account you signed in to it with. The extension's own privacy policy applies to what it downloads and to what it sends.
+An extension can also download its program from its own publisher when it first starts, as the Google Antigravity extension does with its engine. VSCodroid lets the extension start that engine only after you turn it on in Settings, because while the engine runs, other apps on your device can reach it on a local port and use the account you signed in to it with. Until then the only call VSCodroid lets through is the engine's version check, which runs the downloaded program with the single argument `--version` so the extension can confirm what it downloaded. The extension's own privacy policy applies to what it downloads and to what it sends.
 
 Programs you compile, install or write yourself run on your device, inside this app's own sandbox and with only this app's permissions. VSCodroid does not upload them, does not start them unless you do, and downloads no program of its own beyond the toolchains you pick (see Toolchain Downloads above).
 
