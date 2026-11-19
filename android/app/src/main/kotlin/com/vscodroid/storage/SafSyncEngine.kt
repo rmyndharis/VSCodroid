@@ -2377,13 +2377,23 @@ class SafSyncEngine(private val context: Context) {
                 tag,
                 "Enumeration proved nothing: leaving the mirror of ${mirrorDir.name} as it is"
             )
+            val record = File(mirrorDir.path + SYNCED_RECORD_SUFFIX)
             if (recorded.isNotEmpty()) {
-                val record = File(mirrorDir.path + SYNCED_RECORD_SUFFIX)
                 val previous = readSyncedRecord(record)
                     .takeIf { it.firstOrNull() == RECORD_HEADER }?.drop(1)
                     ?: unprovenRows(mirrorDir, documents.filterNot { it.isDirectory }.mapTo(HashSet()) { it.relativePath })
                 val settled = recorded.mapTo(HashSet()) { it.substringBefore('\t') }
                 writeSyncedRecord(record, previous.filterNot { it.substringBefore('\t') in settled } + recorded)
+            } else if (enumerationComplete && !record.exists() && mirrorDir.list()?.isEmpty() == true) {
+                // The first open of a new folder: nothing on the device and nothing in the mirror. A
+                // record is left with its header and no rows. Without one, the files made in the folder
+                // afterwards have nowhere to record their delivery, and a file whose create died with the
+                // process met an open with no record, which cannot tell it from a document the device
+                // deleted and kept it for good as a copy it cannot place. Nothing of the device's was ever
+                // in this mirror, so there is no deletion to tell it from. Only a mirror with nothing in
+                // it: one that holds files is explained by an earlier open, and an empty answer from a
+                // volume that is gone must not turn them all into files to send.
+                writeSyncedRecord(record, emptyList())
             }
             return 0
         }
