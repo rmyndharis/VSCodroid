@@ -199,6 +199,7 @@
          that got there first, and the only thing the user needs is to stop tapping. -->
     <string name="toolchain_already_installing">该工具链正在安装中。</string>
     <string name="toolchain_failed_internal">安装失败。详细信息见应用日志。</string>
+    <string name="toolchain_install_after_setup">请等初始化完成后再重新安装。</string>
     <string name="progress_cancel">取消</string>
     <string name="progress_retry">重试</string>
 

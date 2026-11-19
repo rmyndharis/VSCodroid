@@ -79,4 +79,14 @@ class ToolchainSetupHandOffTest {
                 "returns to Remove",
         )
     }
+
+    @Test
+    fun `the person is told the install was not carried over before the splash screen covers this one`() {
+        val body = SourceScan.body(source, "private fun handOffToSetup(")
+        val notice = body.indexOf("AppNotices.showNotice(this, R.string.toolchain_install_after_setup)")
+        val splash = body.indexOf("startActivity(")
+
+        assertTrue(notice >= 0, "an install asked for before setup has finished is dropped without a word")
+        assertTrue(notice < splash, "the notice is raised after the splash screen has covered this screen")
+    }
 }
