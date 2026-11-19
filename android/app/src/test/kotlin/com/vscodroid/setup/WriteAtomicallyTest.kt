@@ -230,6 +230,59 @@ class WriteAtomicallyTest {
     }
 
     @Test
+    fun `a file that only begins and ends like a temporary file is left by the sweep`() {
+        val alike = File(dir, ".vscodroid-notes.tmp~").apply { writeText("a person's file") }
+        val stray = File(dir, ".vscodroid-2a-0e9d7c61-3b52-4a0f-8f4e-6c1d9b7a5e32.tmp~").apply { writeText("half") }
+
+        assertEquals(4L, sweepStrayTemps(dir))
+
+        assertTrue(alike.exists(), "a file of a person's was taken for a temporary file")
+        assertFalse(stray.exists())
+    }
+
+    /**
+     * What a check of free room calls before it refuses: the directory it names and every one below,
+     * with the bytes given back, so that it can measure again.
+     */
+    @Test
+    fun `a sweep of a tree reaches every directory under it and answers the bytes it gave back`() {
+        val tree = File(dir, "tree")
+        val strays = listOf(
+            File(tree, ".vscodroid-1-0e9d7c61-3b52-4a0f-8f4e-6c1d9b7a5e31.tmp~") to 5,
+            File(tree, "a/.vscodroid-2-0e9d7c61-3b52-4a0f-8f4e-6c1d9b7a5e32.tmp~") to 7,
+            File(tree, "a/b/.vscodroid-3-0e9d7c61-3b52-4a0f-8f4e-6c1d9b7a5e33.tmp~") to 11,
+        )
+        val bystander = File(tree, "a/.vscodroid-notes").apply { parentFile.mkdirs(); writeText("not a temporary file") }
+        for ((stray, bytes) in strays) {
+            stray.parentFile.mkdirs()
+            stray.writeText("x".repeat(bytes))
+        }
+
+        assertEquals(23L, sweepStrayTempsUnder(tree))
+
+        assertTrue(strays.none { it.first.exists() }, "a temporary file below the root was left")
+        assertEquals("not a temporary file", bystander.readText())
+        assertEquals(0L, sweepStrayTempsUnder(tree), "a second look at a tree already swept found something")
+    }
+
+    @Test
+    fun `a sweep of a tree does not follow a link out of it`() {
+        val tree = File(dir, "tree").apply { mkdirs() }
+        val elsewhere = File(dir, "elsewhere").apply { mkdirs() }
+        val outside = File(elsewhere, ".vscodroid-4-0e9d7c61-3b52-4a0f-8f4e-6c1d9b7a5e34.tmp~").apply { writeText("not ours") }
+        Files.createSymbolicLink(File(tree, "out").toPath(), elsewhere.toPath())
+
+        assertEquals(0L, sweepStrayTempsUnder(tree))
+
+        assertTrue(outside.exists(), "the sweep followed a link out of the tree")
+    }
+
+    @Test
+    fun `a sweep of a root that is not there answers nothing`() {
+        assertEquals(0L, sweepStrayTempsUnder(File(dir, "missing")))
+    }
+
+    @Test
     fun `a link or a folder named like a temporary file is neither followed nor removed`() {
         val target = File(dir, "target.bin").apply { writeText("not a temporary file") }
         val link = File(dir, ".vscodroid-3b-1a2b3c4d-0000-4000-8000-000000000001.tmp~")
