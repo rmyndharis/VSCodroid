@@ -244,6 +244,64 @@ class WriteAtomicallyTest {
         assertEquals("inside", File(folder, "kept").readText())
     }
 
+    /**
+     * The files are reached as `/data/user/0/<package>/...` by most callers and as
+     * `/data/data/<package>/...` by the ones that canonicalise, and the toolchain removal sweeps by the
+     * second while the writers name their temporary file by the first. A sweep that did not see one name
+     * for one file took a write in progress for a stray, and the rename that ends the write then failed.
+     */
+    @Test
+    fun `a sweep that reaches the directory by another spelling leaves a write in progress alone`() {
+        val real = File(dir, "real").apply { mkdirs() }
+        val link = File(dir, "link")
+        Files.createSymbolicLink(link.toPath(), real.toPath())
+
+        val wrote = writeAtomically(File(link, "payload.so")) { out ->
+            sweepStrayTemps(real)
+            out.write("whole".toByteArray())
+        }
+
+        assertTrue(wrote, "the sweep took the temporary file of a write in progress, and its rename failed")
+        assertEquals("whole", File(real, "payload.so").readText())
+    }
+
+    @Test
+    fun `a destination that is a link is replaced by the file`() {
+        val real = File(dir, "real.txt").apply { writeText("the link's target") }
+        val link = File(dir, "link.txt")
+        Files.createSymbolicLink(link.toPath(), real.toPath())
+
+        assertTrue(writeAtomically(link) { it.write("new".toByteArray()) })
+
+        assertFalse(Files.isSymbolicLink(link.toPath()), "the extraction of the app's own files relies on the link being replaced")
+        assertEquals("new", link.readText())
+        assertEquals("the link's target", real.readText())
+    }
+
+    @Test
+    fun `through a link the file it names is written and the link stays`() {
+        val real = File(dir, "dotfiles/.bashrc").apply { parentFile.mkdirs(); writeText("old") }
+        val link = File(dir, ".bashrc")
+        Files.createSymbolicLink(link.toPath(), real.toPath())
+
+        assertTrue(writeAtomically(link, throughLink = true) { it.write("new".toByteArray()) })
+
+        assertTrue(Files.isSymbolicLink(link.toPath()), "the link a person made was replaced by a copy")
+        assertEquals("new", real.readText())
+        assertTrue(File(dir, "dotfiles").listFiles()!!.none { it.name.endsWith(".tmp~") }, "a temporary file was left")
+    }
+
+    @Test
+    fun `through a link that names nothing the link is replaced as before`() {
+        val link = File(dir, ".bashrc")
+        Files.createSymbolicLink(link.toPath(), File(dir, "missing").toPath())
+
+        assertTrue(writeAtomically(link, throughLink = true) { it.write("new".toByteArray()) })
+
+        assertFalse(Files.isSymbolicLink(link.toPath()))
+        assertEquals("new", link.readText())
+    }
+
     @Test
     fun `an unchecked writer failure removes only its own temporary file`() {
         val dest = File(dir, "payload.so").apply { writeText("working version") }

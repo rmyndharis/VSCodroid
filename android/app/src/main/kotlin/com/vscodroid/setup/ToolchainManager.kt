@@ -1803,6 +1803,7 @@ class ToolchainManager(private val context: Context) {
         val execBitsSet = applyManifestExecBits(manifest)
 
         // Create symlinks in usr/bin/
+        var linksFailed = false
         val symlinks = manifest.optJSONObject("symlinks")
         if (symlinks != null) {
             val binDir = File(context.filesDir, "usr/bin")
@@ -1822,6 +1823,7 @@ class ToolchainManager(private val context: Context) {
                     Os.symlink(targetAbsolute, linkFile.absolutePath)
                     Logger.d(tag, "Symlink: $linkName -> $target")
                 } catch (e: Exception) {
+                    linksFailed = true
                     Logger.w(tag, "Failed to create symlink $linkName: ${e.message}")
                 }
             }
@@ -1843,10 +1845,21 @@ class ToolchainManager(private val context: Context) {
                         Os.symlink(targetFile.absolutePath, linkFile.absolutePath)
                         Logger.d(tag, "Lib symlink: $linkName -> $targetName")
                     } catch (e: Exception) {
+                        linksFailed = true
                         Logger.w(tag, "Failed to create lib symlink $linkName: ${e.message}")
                     }
                 }
             }
+        }
+        if (linksFailed) {
+            // A tree without its links does not run, and recorded as installed nothing would look at it
+            // again: the card would read Installed with only Remove offered. The cause that fits is the
+            // one a copy that cannot finish has, a disk with no room for another entry, so it is
+            // reclaimed and reported the same way and the install is tried again.
+            Logger.e(tag, "Could not link $packName into usr/")
+            if (reclaimPartialCopy(name, manifest)) installMarker(packName).delete()
+            fail(packName, ToolchainFailure.STORAGE, transferId)
+            return false
         }
 
         // Persist state. Read, mutate and write are one unit: on its own, each

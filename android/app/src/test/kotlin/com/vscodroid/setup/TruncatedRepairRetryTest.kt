@@ -121,6 +121,52 @@ class TruncatedRepairRetryTest {
     }
 
     /**
+     * The header proves a cut-short copy of ours only when nothing follows it. A person who kept the
+     * header and rewrote the export line (`PROJECTS_DIR=...` without `export`) has a file of their own
+     * with the same shape, so its text is kept aside before the file is replaced.
+     */
+    @Test
+    fun `text after the header is kept aside before the file is replaced`() {
+        val own = "# VSCodroid bash configuration\nPROJECTS_DIR=\$HOME/code\nalias ll='ls -l'\n"
+        bashrc.writeText(own)
+
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        assertTrue(bashrc.readText().contains("export PROJECTS_DIR"), "the file was not repaired")
+        assertEquals(
+            own, File(filesDir, "home/.vscodroid/bashrc.before-repair").readText(),
+            "the person's text was replaced with no copy of it",
+        )
+    }
+
+    @Test
+    fun `a file whose text could not be kept aside is left as it is`() {
+        val own = "# VSCodroid bash configuration\nalias ll='ls -l'\n"
+        bashrc.writeText(own)
+        val blocker = block(File(filesDir, "home/.vscodroid/bashrc.before-repair"))
+
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        assertEquals(own, bashrc.readText(), "the file was replaced although its text could not be kept")
+
+        // Room again: the next launch keeps the text and repairs.
+        blocker.close()
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+        assertTrue(bashrc.readText().contains("export PROJECTS_DIR"))
+        assertEquals(own, File(filesDir, "home/.vscodroid/bashrc.before-repair").readText())
+    }
+
+    @Test
+    fun `a header with nothing after it is replaced with no copy kept`() {
+        bashrc.writeText("# VSCodroid bash configuration\n")
+
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        assertTrue(bashrc.readText().contains("export PROJECTS_DIR"))
+        assertFalse(File(filesDir, "home/.vscodroid/bashrc.before-repair").exists(), "a cut-short copy of ours was kept")
+    }
+
+    /**
      * The settings half, which cannot even buy space by clearing: deleting a
      * zero-byte file frees nothing, so the disk that emptied it is still full
      * when the rewrite runs.
