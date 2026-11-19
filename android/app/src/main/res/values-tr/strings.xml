@@ -199,6 +199,7 @@
          that got there first, and the only thing the user needs is to stop tapping. -->
     <string name="toolchain_already_installing">Bu araç zinciri zaten yükleniyor.</string>
     <string name="toolchain_failed_internal">Yükleme başarısız oldu. Ayrıntılar uygulama günlüğünde.</string>
+    <string name="toolchain_install_after_setup">Kurulumun bitmesini bekleyin, sonra yeniden yükleyin.</string>
     <string name="progress_cancel">İptal</string>
     <string name="progress_retry">Yeniden Dene</string>
 

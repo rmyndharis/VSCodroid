@@ -199,6 +199,11 @@
          that got there first, and the only thing the user needs is to stop tapping. -->
     <string name="toolchain_already_installing">That toolchain is already being installed.</string>
     <string name="toolchain_failed_internal">Install failed. The app log has the details.</string>
+    <!-- Shown when Install or Retry is tapped on the Toolchains screen while this build's setup has not
+         finished. The tap goes to the splash screen, which runs setup, and the install is not
+         carried over, so the person is told to wait for setup and install again. Short on purpose: a
+         text that does not fit a two-line toast becomes a dialog on a screen the splash covers. -->
+    <string name="toolchain_install_after_setup">Wait for setup to finish, then install again.</string>
     <string name="progress_cancel">Cancel</string>
     <string name="progress_retry">Retry</string>
 

@@ -199,6 +199,7 @@
          that got there first, and the only thing the user needs is to stop tapping. -->
     <string name="toolchain_already_installing">Tato sada nástrojů se už instaluje.</string>
     <string name="toolchain_failed_internal">Instalace se nezdařila. Podrobnosti jsou v protokolu aplikace.</string>
+    <string name="toolchain_install_after_setup">Počkejte na dokončení přípravy a pak instalujte znovu.</string>
     <string name="progress_cancel">Zrušit</string>
     <string name="progress_retry">Opakovat</string>
 

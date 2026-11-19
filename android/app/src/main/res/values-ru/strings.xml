@@ -199,6 +199,7 @@
          that got there first, and the only thing the user needs is to stop tapping. -->
     <string name="toolchain_already_installing">Этот набор инструментов уже устанавливается.</string>
     <string name="toolchain_failed_internal">Не удалось установить. Подробности есть в журнале приложения.</string>
+    <string name="toolchain_install_after_setup">Дождитесь окончания настройки и установите снова.</string>
     <string name="progress_cancel">Отмена</string>
     <string name="progress_retry">Повторить</string>
 

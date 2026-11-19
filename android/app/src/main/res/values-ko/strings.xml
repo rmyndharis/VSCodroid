@@ -199,6 +199,7 @@
          that got there first, and the only thing the user needs is to stop tapping. -->
     <string name="toolchain_already_installing">해당 툴체인은 이미 설치 중입니다.</string>
     <string name="toolchain_failed_internal">설치에 실패했습니다. 자세한 내용은 앱 로그에 있습니다.</string>
+    <string name="toolchain_install_after_setup">초기 설정이 끝날 때까지 기다린 후 다시 설치하세요.</string>
     <string name="progress_cancel">취소</string>
     <string name="progress_retry">다시 시도</string>
 

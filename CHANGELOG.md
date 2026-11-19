@@ -26,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The page that says the server stopped is no longer skipped when the editor starts to reload at that moment, which left a blank screen.
 - The notice that another app is using the editor's port comes back until it is answered, after a font size or language change or after closing the app from the recent apps, and no longer comes back wrongly after Stop Server.
 - The notice that another app is using the editor's port offers Stop Server itself and names it in its text, for a phone with notifications turned off.
-- An install tapped on the Toolchains screen before the setup that follows an update has finished opens the setup screen instead of unpacking over it.
+- An install tapped on the Toolchains screen before the setup that follows an update has finished opens the setup screen instead of unpacking over it, and a notice says to wait for setup and install again.
 - A keyboard put away after the screen is turned stays down when a text box other than the editor has the focus, such as Quick Open or the find box; the next touch used to bring it back.
 - A file another app deleted from a device folder is no longer put back there when the app's copy of it could not be read as the folder opened.
 - An edit that lands just as the app removes its copy of a file another app deleted from a device folder is kept as `<name>.local-<time>` and a notice says so.
