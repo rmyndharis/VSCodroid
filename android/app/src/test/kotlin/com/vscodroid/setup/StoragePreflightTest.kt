@@ -121,6 +121,19 @@ class StoragePreflightTest {
             if (File(cacheDir, "npm-cache").exists()) 1L else free
     }
 
+    /**
+     * A `filesDir` with no room while any of [strays] is on disk, and [free] once they are gone: what
+     * the temporary file of a killed write does to a nearly full device, and what removing it gives back.
+     * Answers twice for the reason [ReclaimingDir] does.
+     */
+    private class StrayHoldingDir(
+        real: File,
+        private val strays: List<File>,
+        private val free: Long,
+    ) : File(real.absolutePath) {
+        override fun getUsableSpace(): Long = if (strays.any { it.exists() }) 1L else free
+    }
+
     @BeforeEach
     fun setUp() {
         mockkObject(Logger)
@@ -183,14 +196,20 @@ class StoragePreflightTest {
         )
 
     /** As [setup], on a device whose free space answers differently once the cache is gone. */
-    private fun setupReclaiming(free: Long): FirstRunSetup {
+    private fun setupReclaiming(free: Long) = setupOn(ReclaimingDir(filesDir, cacheDir, free))
+
+    /** As [setup], on a device whose free space answers differently once [strays] are gone. */
+    private fun setupHolding(strays: List<File>, free: Long, previousVersionCode: Int = 11) =
+        setupOn(StrayHoldingDir(filesDir, strays, free), previousVersionCode)
+
+    private fun setupOn(root: File, previousVersionCode: Int = 11): FirstRunSetup {
         val prefs = mockk<SharedPreferences>(relaxed = true)
         every { prefs.edit() } returns mockk(relaxed = true)
         every { prefs.getString(any(), any()) } returns null
-        every { prefs.getInt(any(), any()) } returns 11
+        every { prefs.getInt(any(), any()) } returns previousVersionCode
 
         val context = mockk<Context>(relaxed = true)
-        every { context.filesDir } returns ReclaimingDir(filesDir, cacheDir, free)
+        every { context.filesDir } returns root
         every { context.cacheDir } returns cacheDir
         every { context.assets } returns assets
         every { context.getSharedPreferences(any(), any()) } returns prefs
@@ -202,6 +221,17 @@ class StoragePreflightTest {
             bundledUsrBytes,
             bundledExtensionBytes,
         )
+    }
+
+    /**
+     * The temporary file [writeAtomically] leaves in [dir] (under `filesDir`) when the process dies
+     * in the middle of a write. [index] only keeps two of them in one directory apart.
+     */
+    private fun stageStray(dir: String, bytes: Int, index: Int = 1): File {
+        val parent = File(filesDir, dir)
+        assertTrue(parent.isDirectory || parent.mkdirs(), "could not stage $dir")
+        return File(parent, ".vscodroid-${index.toString(16)}-0e9d7c61-3b52-4a0f-8f4e-6c1d9b7a5e3$index.tmp~")
+            .apply { writeText("x".repeat(bytes)) }
     }
 
     /** Writes [bytes] into one extension directory, the way an install leaves it. */
@@ -725,6 +755,119 @@ class StoragePreflightTest {
             File(cacheDir, "npm-cache").exists(),
             "the cache the gate needed was never cleared",
         )
+    }
+
+    /**
+     * The temporary file of a killed write is ours and has no use, and it is what the gate measured
+     * as used room.
+     *
+     * [writeAtomically] sweeps a directory at the first write into it, which comes after this gate, so
+     * a device that ran out of room in the middle of a 92 MiB file and was killed was refused by about
+     * that much more than the unpack needs, and told to free it while the file stayed.
+     */
+    @Test
+    fun `a shortfall the temporary file of a killed write would cover is reclaimed rather than refused`() {
+        stageServerTree(assetBytes)
+        val stray = stageStray("server/vscode-reh/out", 4096)
+
+        val result = runBlocking {
+            setupHolding(listOf(stray), free = largestAssetBytes + slack).runSetup()
+        }
+
+        assertNotEquals(
+            FirstRunSetup.SetupResult.LOW_STORAGE,
+            result,
+            "setup refused over room the temporary file of its own killed write was holding",
+        )
+        assertFalse(stray.exists(), "the temporary file the gate needed gone was never removed")
+    }
+
+    /**
+     * The control, and what makes the case above mean anything: the same device and figures, held by a
+     * file that is not a temporary file of ours. It is left alone and the refusal stands.
+     */
+    @Test
+    fun `a file that only looks like a temporary file is left and the refusal stands`() {
+        stageServerTree(assetBytes)
+        val parent = File(filesDir, "server/vscode-reh/out")
+        val noPrefix = File(parent, "scratch.tmp~").apply { writeText("a person's file") }
+        val noTilde = File(parent, ".vscodroid-1-0e9d7c61-3b52-4a0f-8f4e-6c1d9b7a5e31.tmp").apply { writeText("another") }
+        val sameEnds = File(parent, ".vscodroid-notes.tmp~").apply { writeText("begins and ends like one") }
+
+        val result = runBlocking {
+            setupHolding(listOf(noPrefix, noTilde, sameEnds), free = largestAssetBytes + slack).runSetup()
+        }
+
+        assertEquals(FirstRunSetup.SetupResult.LOW_STORAGE, result)
+        assertTrue(
+            noPrefix.exists() && noTilde.exists() && sameEnds.exists(),
+            "a file that is not a temporary file of ours was removed",
+        )
+    }
+
+    /**
+     * The extraction refuses to write behind a link, and the sweep that serves its check is held to the
+     * same: a link above a tree sends a sweep to files that are somewhere else.
+     */
+    @Test
+    fun `a tree behind a link above its root is not swept`() {
+        stageServerTree(assetBytes)
+        val behind = File(filesDir, "elsewhere/.vscodroid/extensions/kept-1.0.0").apply { mkdirs() }
+            .let { File(it, ".vscodroid-5-0e9d7c61-3b52-4a0f-8f4e-6c1d9b7a5e35.tmp~").apply { writeText("x") } }
+        Files.createSymbolicLink(File(filesDir, "home").toPath(), File(filesDir, "elsewhere").toPath())
+
+        val result = runBlocking { setupHolding(listOf(behind), free = largestAssetBytes + slack).runSetup() }
+
+        assertEquals(FirstRunSetup.SetupResult.LOW_STORAGE, result)
+        assertTrue(behind.exists(), "the sweep followed a link above the extensions directory")
+    }
+
+    /**
+     * A tree whose only content is the temporary file of a killed write has nothing to rewrite.
+     *
+     * The headroom for replacing the largest file is bounded by what is on disk, and the file counted
+     * there is the one the sweep removes. Sized so the answers differ: room for the tree and the
+     * slack and not for the headroom on top, which is what a device is given once the file is gone
+     * when the headroom is read again, and not when it is read from before.
+     */
+    @Test
+    fun `the headroom a temporary file inflated is measured again once it is gone`() {
+        val stray = stageStray("server/vscode-reh/out", largestAssetBytes.toInt())
+
+        val result = runBlocking {
+            setupHolding(listOf(stray), free = assetBytes + slack, previousVersionCode = 0).runSetup()
+        }
+
+        assertNotEquals(
+            FirstRunSetup.SetupResult.LOW_STORAGE,
+            result,
+            "a fresh install with room for the whole tree was charged the headroom to rewrite " +
+                "a file that the gate had just removed",
+        )
+    }
+
+    /**
+     * Every tree extraction writes a file into is swept, and a link out of one is not followed to
+     * somewhere that is not ours.
+     */
+    @Test
+    fun `the three trees extraction writes into are swept and a link out of them is not followed`() {
+        stageServerTree(assetBytes)
+        val inServer = stageStray("server/vscode-reh/out", 1024, index = 1)
+        val inUsr = stageStray("usr/lib", 1024, index = 2)
+        val inExtensions = stageStray("home/.vscodroid/extensions/someone.else-1.0.0", 1024, index = 3)
+        val elsewhere = stageStray("elsewhere", 1024, index = 4)
+        Files.createSymbolicLink(File(filesDir, "server/outbound").toPath(), File(filesDir, "elsewhere").toPath())
+
+        val result = runBlocking {
+            setupHolding(listOf(inServer, inUsr, inExtensions), free = largestAssetBytes + slack).runSetup()
+        }
+
+        assertNotEquals(FirstRunSetup.SetupResult.LOW_STORAGE, result)
+        assertFalse(inServer.exists(), "a stray under the server tree was left")
+        assertFalse(inUsr.exists(), "a stray under usr was left")
+        assertFalse(inExtensions.exists(), "a stray under the extensions directory was left")
+        assertTrue(elsewhere.exists(), "the sweep followed a link out of the tree and removed a file that is not ours")
     }
 
     /**

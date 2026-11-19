@@ -72,6 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The privacy policy states that the Antigravity engine's version check (`--version`) still runs the downloaded program while the engine is turned off.
 - Behind a manual or global HTTP proxy with an empty bypass list, the Markdown preview and other webview panels showed the proxy's error page, because the editor's own server was fetched through the proxy, which also logged the connection token; that fetch now never uses a proxy.
 - The log no longer carries the document a download was being saved to when the provider refused to open or write it.
+- Setup and the Python repair remove the temporary file a killed copy left before they refuse for lack of room, so a nearly full phone is no longer asked to free the size of that file.
 
 ## [1.9.0] - 2026-11-16
 

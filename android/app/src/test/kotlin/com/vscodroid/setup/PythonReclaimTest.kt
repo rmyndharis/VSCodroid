@@ -60,6 +60,11 @@ class PythonReclaimTest {
         override fun getUsableSpace(): Long = free
     }
 
+    /** As [CappedDir], with no room while [stray] is on disk and [free] once it is gone. */
+    private class StrayHoldingDir(path: String, private val stray: File, private val free: Long) : File(path) {
+        override fun getUsableSpace(): Long = if (stray.exists()) 1L else free
+    }
+
     @BeforeEach
     fun setUp() {
         mockkStatic(Files::class)
@@ -225,6 +230,58 @@ class PythonReclaimTest {
         org.junit.jupiter.api.Assertions.assertEquals("# encodings", leaf.readText())
         assertTrue(File(libDir, shipped).isFile)
         assertFalse(setup.pythonRuntimeNeedsWork())
+    }
+
+    /**
+     * The sweep by the first write into a directory comes after the check of room, so the temporary
+     * file of a copy that was killed counted against the 64 MiB this check asks for, and a device
+     * with the room once it was gone kept Python unavailable.
+     */
+    @Test
+    fun `a temporary file a killed copy left is removed before the room is measured`() {
+        every { assets.list(any()) } returns emptyArray()
+        every { assets.open(any()) } throws java.io.IOException("absent")
+        every { assets.list("usr/lib") } returns arrayOf(shipped, "python3.13")
+        every { assets.list("usr/lib/python3.13") } returns arrayOf("encodings")
+        every { assets.list("usr/lib/python3.13/encodings") } returns arrayOf("__init__.py")
+        every { assets.open("usr/lib/python3.13/encodings/__init__.py") } answers {
+            java.io.ByteArrayInputStream("# encodings".toByteArray())
+        }
+        every { assets.open("usr/lib/$shipped") } answers {
+            java.io.ByteArrayInputStream("runtime".toByteArray())
+        }
+        val stray = File(libDir, "python3.13/encodings/.vscodroid-1f-0e9d7c61-3b52-4a0f-8f4e-6c1d9b7a5e32.tmp~")
+            .apply { parentFile.mkdirs(); writeText("half of a file") }
+        val context = mockk<Context>(relaxed = true).also {
+            every { it.filesDir } returns StrayHoldingDir(filesDir.path, stray, free = 64L * 1_048_576L)
+            every { it.assets } returns assets
+        }
+        val setup = FirstRunSetup(context)
+
+        kotlinx.coroutines.runBlocking { setup.reconcilePythonRuntime() }
+
+        assertFalse(stray.exists(), "the temporary file of the killed copy was left")
+        assertTrue(File(libDir, shipped).isFile, "Python was not extracted although there was room once the file was gone")
+        verify(exactly = 0) { Logger.w(any(), match { it.startsWith("Not extracting Python") }, any()) }
+    }
+
+    /** The extraction does not write behind a link, and the sweep that serves its check does not go there either. */
+    @Test
+    fun `a tree behind a link above usr is not swept`() {
+        val strayName = ".vscodroid-1f-0e9d7c61-3b52-4a0f-8f4e-6c1d9b7a5e32.tmp~"
+        File(libDir, strayName).writeText("half of a runtime")
+        assertTrue(File(filesDir, "usr").renameTo(File(filesDir, "elsewhere")))
+        Files.createSymbolicLink(File(filesDir, "usr").toPath(), File(filesDir, "elsewhere").toPath())
+        val behind = File(filesDir, "elsewhere/lib/$strayName")
+        val context = mockk<Context>(relaxed = true).also {
+            every { it.filesDir } returns StrayHoldingDir(filesDir.path, behind, free = 64L * 1_048_576L)
+            every { it.assets } returns assets
+        }
+
+        reconcile(context)
+
+        assertTrue(behind.exists(), "the sweep followed a link above usr")
+        verify { Logger.w(any(), match { it.startsWith("Not extracting Python") }, any()) }
     }
 
     @Test

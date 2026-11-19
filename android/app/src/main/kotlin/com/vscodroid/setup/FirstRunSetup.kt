@@ -354,6 +354,17 @@ class FirstRunSetup(
         )
     }
 
+    /**
+     * Removes the temporary files a killed extraction left in the trees it writes into, and answers the
+     * bytes they held. A tree behind a link is left alone, as the extraction leaves it
+     * ([hasUnredirectedParent]).
+     */
+    private fun sweepStrayExtractionTemps(): Long =
+        listOf("server", "usr", "home/.vscodroid/extensions")
+            .map { File(context.filesDir, it) }
+            .filter { hasUnredirectedParent(it) }
+            .sumOf { sweepStrayTempsUnder(it) }
+
     private suspend fun runSetupLocked(): SetupResult = withContext(Dispatchers.IO) {
         val previousVersionCode = getPreviousVersionCode()
         val currentVersionCode = getCurrentVersionCode()
@@ -474,7 +485,7 @@ class FirstRunSetup(
             var available = context.filesDir.usableSpace
             // Raw server bytes bound rewrite headroom and identify an unfinished
             // tree. Only matching APK paths below count as reusable bytes.
-            val extractedTreeBytes = installedExtractionBytes(File(context.filesDir, "server"))
+            var extractedTreeBytes = installedExtractionBytes(File(context.filesDir, "server"))
             val space = extractionSpace()
             val installed = space.serverBytes +
                 sharedTreeCredit(space.usrBytes, bundledUsrBytes, 0) +
@@ -483,10 +494,11 @@ class FirstRunSetup(
             val selectedLargestAsset = if (space.skippedExtensionBytes > 0) {
                 minOf(largestAssetBytes, space.largestSelectedAssetBytes)
             } else largestAssetBytes
-            val required = requiredExtractionBytes(
+            fun requiredBytes() = requiredExtractionBytes(
                 selectedAssetBytes, selectedLargestAsset, installed,
                 maxOf(extractedTreeBytes, space.largestExistingFile), space.missingOverhead,
             )
+            var required = requiredBytes()
             // Short of room, and the caches are the one thing this app can give
             // back on its own. Reclaimed here rather than offered, because the
             // only route to the same action is a Command Palette command inside
@@ -497,13 +509,27 @@ class FirstRunSetup(
             // What is removed is a cache by construction (npm's, our tmp, crash
             // logs, the editor's logs), so the cost of being wrong is a
             // re-download, against an install that otherwise cannot start.
+            //
+            // The other thing it can give back is the temporary files a killed write left
+            // in the trees extraction writes into, up to the size of the file that write
+            // was making (92 MiB for the Copilot runtime). The sweep that removes them
+            // runs at the first write into their directory, which comes after this check,
+            // so a device short by about that much was told to free it while the file
+            // stayed. A file that is gone no longer has to be rewritten, which the
+            // headroom and the test for a tree an earlier build left both read, so the
+            // tree is measured again.
             if (available < required) {
                 val freed = StorageManager.clearCaches(context)
+                val strays = sweepStrayExtractionTemps()
+                if (strays > 0) {
+                    extractedTreeBytes = installedExtractionBytes(File(context.filesDir, "server"))
+                    required = requiredBytes()
+                }
                 available = context.filesDir.usableSpace
                 Logger.i(
                     tag,
-                    "Short of room for setup; reclaimed ${freed / 1_048_576}MB of caches, " +
-                        "${available / 1_048_576}MB now free",
+                    "Short of room for setup; reclaimed ${freed / 1_048_576}MB of caches and " +
+                        "${strays / 1_048_576}MB of temporary files, ${available / 1_048_576}MB now free",
                 )
             }
             if (available < required) {
@@ -1151,7 +1177,13 @@ class FirstRunSetup(
             // the copies need. This addresses running out of disk, which is the
             // reason a copy realistically fails here, not every way one can.
             val required = 64L * 1_048_576L
-            val available = context.filesDir.usableSpace
+            var available = context.filesDir.usableSpace
+            if (available < required) {
+                // A copy that was killed left its temporary file in this tree, and the write
+                // that would remove it comes after this check.
+                if (hasUnredirectedParent(libDir)) sweepStrayTempsUnder(libDir)
+                available = context.filesDir.usableSpace
+            }
             if (available < required) {
                 Logger.w(
                     tag,
@@ -6195,6 +6227,10 @@ private val LIVE_TEMPS: MutableSet<String> = java.util.concurrent.ConcurrentHash
 private val SWEPT_RAW: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 private val SWEPT_FOR_STRAYS: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
+/** What [writeAtomically] names its temporary file: the destination's name hashed in hex, a UUID, `.tmp~`. */
+private val STRAY_TEMP_NAME =
+    Regex("\\.vscodroid-[0-9a-f]{1,8}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.tmp~")
+
 /**
  * Deletes from [dir] the temporary files that a process which died inside [writeAtomically]
  * left behind.
@@ -6203,24 +6239,49 @@ private val SWEPT_FOR_STRAYS: MutableSet<String> = java.util.concurrent.Concurre
  * fixed name they replaced was, and the largest are the size of the file being written: 92 MiB
  * for the Copilot runtime, about 196 MiB for the libraries of the C and C++ toolchain. Dying
  * inside a write is the only way to leave one, because the writer removes its own on every other
- * exit, so a directory is swept once per process, by the first write into it or by the removal
- * of a toolchain that put files there.
+ * exit, so a directory is swept once per process, by the first write into it, by the removal
+ * of a toolchain that put files there, or by a check of free room that is about to refuse
+ * ([sweepStrayTempsUnder]).
+ *
+ * Only the exact shape of the writer's name is taken: a file of a person's that merely begins and
+ * ends the same way is left alone.
+ *
+ * @return the bytes it gave back, for a caller that is measuring room.
  */
-internal fun sweepStrayTemps(dir: File) {
-    if (!SWEPT_RAW.add(dir.absolutePath)) return
-    if (!SWEPT_FOR_STRAYS.add(spelling(dir))) return
-    val names = dir.list { _, name -> name.startsWith(".vscodroid-") && name.endsWith(".tmp~") } ?: return
-    if (names.isEmpty()) return
+internal fun sweepStrayTemps(dir: File): Long {
+    if (!SWEPT_RAW.add(dir.absolutePath)) return 0L
+    if (!SWEPT_FOR_STRAYS.add(spelling(dir))) return 0L
+    val names = dir.list { _, name -> STRAY_TEMP_NAME.matches(name) } ?: return 0L
+    if (names.isEmpty()) return 0L
     // Read after the listing, and named by the canonical path like the strays: a write puts its
     // temporary file in [LIVE_TEMPS] before it creates it, so one that was listed is already there.
     val live = LIVE_TEMPS.mapTo(HashSet()) { spelling(File(it)) }
+    var freed = 0L
     for (name in names) {
         val stray = File(dir, name)
         if (spelling(stray) !in live && Files.isRegularFile(stray.toPath(), LinkOption.NOFOLLOW_LINKS)) {
-            stray.delete()
+            val size = stray.length()
+            if (stray.delete()) freed += size
         }
     }
+    return freed
 }
+
+/**
+ * [sweepStrayTemps] for [root] and every directory below it, links not entered.
+ *
+ * The sweep by the first write into a directory comes after the check of free room that an
+ * extraction makes, so a device short of room by about what a killed write left was told to free
+ * that much more, and the file stayed until it did. A check that is about to refuse calls this
+ * first and measures again.
+ *
+ * @return the bytes it gave back.
+ */
+internal fun sweepStrayTempsUnder(root: File): Long =
+    root.walkTopDown()
+        .onEnter { !Files.isSymbolicLink(it.toPath()) }
+        .filter { it.isDirectory }
+        .sumOf { sweepStrayTemps(it) }
 
 /**
  * Logical bytes already in an extraction tree, excluding symbolic links.
