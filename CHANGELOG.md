@@ -61,16 +61,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A .bashrc that starts with VSCodroid's header but has text of its own after it is kept as ~/.vscodroid/bashrc.before-repair before the repair replaces it.
 - A toolchain install whose links could not be made fails and asks for free space, instead of being recorded as installed with a tree that does not run.
 - After Stop Server, a webview of the earlier editor page is no longer sent the new connection token at the old port.
-- A workspace folder that holds the sign-in files of Claude Code, Codex, the Antigravity engine or the cargo, Maven, Gradle, Azure, Google Cloud and git tools is no longer readable by webviews.
-- The Antigravity engine switch keeps holding the engine back when an extension changes the HOME of the extension host.
-- The Antigravity engine's version check ends an engine an earlier editor session left running when the setting is off.
-- A client that resets the connection while the Antigravity panel's relay refuses it no longer raises an unhandled error in the extension host.
+- A workspace folder that holds the sign-in files of Claude Code, Codex or the cargo, Maven, Gradle, Azure, Google Cloud and git tools is no longer readable by webviews.
 - The log no longer carries the device folder or the download target named by a failed folder sync or a download that could not be removed.
 - Coming back from the Open Folder picker after more than five minutes no longer reloads the editor ahead of the folder you chose.
 - The About dialog is no longer opened on a screen that has already closed, which could end the app.
 - The notice about an old system WebView is marked as seen when it is dismissed, so a screen closed under it no longer hides it for good.
 - A file deleted on the device whose copy was being removed when the app was killed is no longer put back on the device under a made-up name at the next open.
-- A settings file whose lines end in a bare carriage return is read the way the editor reads it: the restore that turns the Antigravity engine off and the readers of the heap ceiling no longer miss keys that follow a comment.
+- A settings file whose lines end in a bare carriage return is read the way the editor reads it: the readers of the heap ceiling and of the managed settings no longer miss keys that follow a comment.
 - A save made while another write to the same device folder was still finishing is no longer held back and announced as kept inside the app; it is sent.
 - The privacy policy states that the Antigravity engine's version check (`--version`) still runs the downloaded program while the engine is turned off.
 
