@@ -716,6 +716,37 @@ __vscodroid_pip_note() {
     }
 
     @Test
+    fun `an npmrc that is a link keeps being a link when the lines the app owns are written`() {
+        val theirs = File(filesDir, "dotfiles/.npmrc").apply {
+            parentFile.mkdirs()
+            writeText("registry=https://registry.example/\n")
+        }
+        val npmrc = File(filesDir, "home/.npmrc")
+        npmrc.delete()
+        Files.createSymbolicLink(npmrc.toPath(), theirs.toPath())
+        File(filesDir, "usr/lib/node_modules/npm/bin/npm-cli.js").apply { parentFile.mkdirs(); writeText("") }
+
+        FirstRunSetup(context).createNpmWrappers()
+
+        assertTrue(Files.isSymbolicLink(npmrc.toPath()), "the link was replaced by a copy")
+        assertTrue(theirs.readText().startsWith("script-shell="), "the line the app owns went somewhere npm does not read")
+        assertTrue(theirs.readText().contains("registry=https://registry.example/"), "their line did not survive")
+    }
+
+    @Test
+    fun `every writer of a file the person owns writes through a link`() {
+        val source = com.vscodroid.SourceScan.read("src/main/kotlin/com/vscodroid/setup/FirstRunSetup.kt")
+        for (name in listOf("npmrc", "settingsFile")) {
+            val writers = Regex("""writeAtomically\($name\b""").findAll(source).count()
+            val through = Regex("""writeAtomically\($name, throughLink = true\)""").findAll(source).count()
+
+            assertTrue(writers > 0 && writers == through) {
+                "$writers writers of $name, $through of them write through a link"
+            }
+        }
+    }
+
+    @Test
     fun `a bashrc cut off after our header is cleared and written again`() {
         // The other shape an interrupted write leaves: our first line, and then
         // nothing that should have followed it.
