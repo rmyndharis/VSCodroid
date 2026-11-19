@@ -2232,7 +2232,10 @@ class FirstRunSetup(
     fun repairTruncatedSetupFiles() {
         val bashrc = File(context.filesDir, "home/.bashrc")
         if (bashrc.isFile) {
-            val text = runCatching { bashrc.readText() }.getOrNull()
+            // Read as bytes and decoded only to decide: what is kept aside below is the file itself,
+            // and a decoder turns every byte that is not UTF-8 into U+FFFD.
+            val bytes = runCatching { bashrc.readBytes() }.getOrNull()
+            val text = bytes?.let { String(it, Charsets.UTF_8) }
             val emptied = text != null && text.isBlank()
             val headerWithoutBody = text != null &&
                 text.startsWith(BASHRC_HEADER) &&
@@ -2261,7 +2264,7 @@ class FirstRunSetup(
                 val aside = File(context.filesDir, "home/.vscodroid/bashrc.before-repair")
                 val kept = !beyondHeader || run {
                     aside.parentFile?.mkdirs()
-                    writeAtomically(aside, { Logger.w(tag, it) }) { it.write(text.orEmpty().toByteArray()) }
+                    writeAtomically(aside, { Logger.w(tag, it) }) { it.write(bytes ?: ByteArray(0)) }
                 }
                 // The rewrite is not expected to throw (a failed write is
                 // reported as false), but a throw must not skip the settings
