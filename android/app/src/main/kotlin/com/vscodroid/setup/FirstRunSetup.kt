@@ -6863,7 +6863,10 @@ internal fun commentsBlanked(content: String): String {
                 continue
             }
         } else if (content.startsWith("//", i)) {
-            end = content.indexOf('\n', i).let { if (it < 0) content.length else it }
+            // To the first CR or LF, as VS Code's scanner and platform-fix.js end it: a file whose
+            // lines end in a bare CR has its next line read as a comment otherwise, and a setting on
+            // that line is neither seen here nor turned off.
+            end = content.indexOfAny(charArrayOf('\r', '\n'), i).let { if (it < 0) content.length else it }
         } else if (content.startsWith("/*", i)) {
             end = content.indexOf("*/", i + 2).let { if (it < 0) -1 else it + 2 }
         }
@@ -7150,7 +7153,8 @@ private fun rootBraceIndex(content: String): Int {
             c == '{' -> return i
             c.isWhitespace() -> i++
             content.startsWith("//", i) -> {
-                val newline = content.indexOf('\n', i)
+                // To the first CR or LF, as [commentsBlanked] ends it.
+                val newline = content.indexOfAny(charArrayOf('\r', '\n'), i)
                 if (newline < 0) return -1
                 i = newline + 1
             }
