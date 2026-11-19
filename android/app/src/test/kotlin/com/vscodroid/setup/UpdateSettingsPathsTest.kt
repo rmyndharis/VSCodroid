@@ -112,6 +112,26 @@ class UpdateSettingsPathsTest {
     }
 
     /**
+     * A settings file the person keeps elsewhere and links here is refreshed where it lives. A rename
+     * over the link would leave the file the workbench reads as a copy, cut off from the original.
+     */
+    @Test
+    fun `a settings file that is a link keeps being a link when its paths are refreshed`() {
+        val theirs = File(filesDir, "dotfiles/settings.json").apply {
+            parentFile.mkdirs()
+            writeText(settingsFile.readText())
+        }
+        settingsFile.delete()
+        Files.createSymbolicLink(settingsFile.toPath(), theirs.toPath())
+
+        FirstRunSetup(context).updateSettingsNativeLibPaths()
+
+        assertTrue(Files.isSymbolicLink(settingsFile.toPath()), "the link was replaced by a copy")
+        assertTrue(theirs.readText().contains("$nativeLibDir/libgit.so"), "the refresh went somewhere the workbench does not read")
+        assertTrue(theirs.readText().contains("\"workbench.colorTheme\": \"Monokai\""), "their setting did not survive")
+    }
+
+    /**
      * The whole point of refreshing: the stale install directory must be gone.
      *
      * This also underwrites the failure test below. If the fixture were already

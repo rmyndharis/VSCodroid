@@ -2126,7 +2126,10 @@ class FirstRunSetup(
             // above is reached only when the content differs, and an empty file
             // does differ, but only on a launch that has room, which is the
             // launch that would not have broken it.
-            if (writeAtomically(npmrc) { it.write(expectedContent.toByteArray(Charsets.ISO_8859_1)) }) {
+            //
+            // Through a link: `.npmrc` is the person's, and one kept in a repository and
+            // linked here would otherwise be replaced by a copy on the first launch.
+            if (writeAtomically(npmrc, throughLink = true) { it.write(expectedContent.toByteArray(Charsets.ISO_8859_1)) }) {
                 Logger.d(tag, "Updated .npmrc")
             } else {
                 Logger.w(tag, "Could not update .npmrc; it keeps whatever it held before")
@@ -2232,7 +2235,10 @@ class FirstRunSetup(
     fun repairTruncatedSetupFiles() {
         val bashrc = File(context.filesDir, "home/.bashrc")
         if (bashrc.isFile) {
-            val text = runCatching { bashrc.readText() }.getOrNull()
+            // Read as bytes and decoded only to decide: what is kept aside below is the file itself,
+            // and a decoder turns every byte that is not UTF-8 into U+FFFD.
+            val bytes = runCatching { bashrc.readBytes() }.getOrNull()
+            val text = bytes?.let { String(it, Charsets.UTF_8) }
             val emptied = text != null && text.isBlank()
             val headerWithoutBody = text != null &&
                 text.startsWith(BASHRC_HEADER) &&
@@ -2261,7 +2267,7 @@ class FirstRunSetup(
                 val aside = File(context.filesDir, "home/.vscodroid/bashrc.before-repair")
                 val kept = !beyondHeader || run {
                     aside.parentFile?.mkdirs()
-                    writeAtomically(aside, { Logger.w(tag, it) }) { it.write(text.orEmpty().toByteArray()) }
+                    writeAtomically(aside, { Logger.w(tag, it) }) { it.write(bytes ?: ByteArray(0)) }
                 }
                 // The rewrite is not expected to throw (a failed write is
                 // reported as false), but a throw must not skip the settings
@@ -3140,8 +3146,10 @@ claude() {
         // editor preferences, and this runs at every launch. writeText truncates
         // first, so a failure between truncate and write leaves settings.json
         // empty or half-written, and the workbench reads that as "no settings"
-        // rather than as an error. What we came to change is one path.
-        if (!writeAtomically(settingsFile) { it.write(updated.toByteArray()) }) {
+        // rather than as an error. What we came to change is one path. Through
+        // a link, for the same reason: a file kept elsewhere and linked here
+        // would otherwise be replaced by a copy.
+        if (!writeAtomically(settingsFile, throughLink = true) { it.write(updated.toByteArray()) }) {
             Logger.w(tag, "Could not refresh managed paths; settings.json is unchanged")
             return
         }
@@ -3461,7 +3469,7 @@ claude() {
         val settingsFile = File(Environment.getMachineSettingsPath(context))
         if (!settingsFile.exists()) return
         val updated = withEngineConsentWithdrawn(settingsFile.readText()) ?: return
-        if (!writeAtomically(settingsFile) { it.write(updated.toByteArray()) }) {
+        if (!writeAtomically(settingsFile, throughLink = true) { it.write(updated.toByteArray()) }) {
             throw IOException("could not write $settingsFile")
         }
         Logger.i(tag, "Turned the Antigravity engine off in settings restored from another phone")
@@ -3666,7 +3674,7 @@ claude() {
         } else {
             defaults
         }
-        return writeAtomically(settingsFile) { it.write(content.toByteArray()) }
+        return writeAtomically(settingsFile, throughLink = true) { it.write(content.toByteArray()) }
     }
 
     private fun bundledExtensionsToExtract(extensionsDir: File, bundled: List<String>): List<String> {

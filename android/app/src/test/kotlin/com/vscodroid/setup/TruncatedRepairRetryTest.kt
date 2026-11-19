@@ -14,6 +14,7 @@ import io.mockk.unmockkObject
 import io.mockk.unmockkAll
 import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -136,6 +137,22 @@ class TruncatedRepairRetryTest {
         assertEquals(
             own, File(filesDir, "home/.vscodroid/bashrc.before-repair").readText(),
             "the person's text was replaced with no copy of it",
+        )
+    }
+
+    /** The copy is of the file's bytes, not of what a UTF-8 decoder made of them. */
+    @Test
+    fun `the copy kept aside holds the bytes of the file`() {
+        val own = "# VSCodroid bash configuration\n# caf".toByteArray() +
+            byteArrayOf(0xE9.toByte()) + "\nalias ll='ls -l'\n".toByteArray()
+        bashrc.writeBytes(own)
+
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        assertTrue(bashrc.readText().contains("export PROJECTS_DIR"), "the file was not repaired")
+        assertArrayEquals(
+            own, File(filesDir, "home/.vscodroid/bashrc.before-repair").readBytes(),
+            "a byte that is not UTF-8 was changed in the only copy of the file",
         )
     }
 
