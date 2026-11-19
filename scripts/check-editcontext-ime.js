@@ -52,7 +52,7 @@
  * event hooks, with upstream's refilter replaced by a counter.
  *
  * NEGATIVE CONTROL, measured on the 1.139.1 tree with Node 22.23.2. Against upstream's
- * files, with no patch applied, 77 of the 84 cases fail. Each of these single edits to a
+ * files, with no patch applied, 84 of the 91 cases fail. Each of these single edits to a
  * copy of a patched file fails at least one case:
  *
  *   0046  the body of the blur listener removed; the composing clause dropped from the
@@ -72,7 +72,8 @@
  *         two letters); a letter counted in units; any one code point counted as a letter;
  *         Han, kana and Hangul counted as letters; the bound raised from six to seven; a
  *         forced restart not counted; the count not started again at a new version of the
- *         model; the clamp past the bound removed, or only the cut of its start; the typed
+ *         model; the listener for a touch removed, the one for a turn of the screen removed,
+ *         `_newRestartEpisode` emptied, the count started again at every cursor event; the clamp past the bound removed, or only the cut of its start; the typed
  *         flag never set, and not cleared at compositionstart; the restart after a
  *         refusal not forced; the buffer not written back at a refusal.
  *   0051  `_caretUnmoved` answering false; its single-caret test removed; the count of
@@ -229,7 +230,7 @@ function makeDocument() {
         activeElement: null,
         log: [],
         made: [],
-        defaultView: Object.assign(new Target(), { EditContext }),
+        defaultView: Object.assign(new Target(), { EditContext, screen: { orientation: new Target() } }),
         createElement(name) {
             const element = new Element(document, name);
             document.made.push(element);
@@ -557,6 +558,15 @@ class Page {
     async tap(...carets) {
         this.setCursors(carets.map(caret => this.selection(caret)), this.tree.CursorChangeReason.Explicit);
         await this.settle();
+    }
+
+    // A touch, a click or a pen on the page, and a turn of the screen: what a person does and a keyboard cannot.
+    touch() {
+        this.document.defaultView.fire('pointerdown');
+    }
+
+    turn() {
+        this.document.defaultView.screen.orientation.fire('change');
     }
 
     // The view sends the cursors again where they are, as it does when its lines wrap anew.
@@ -1224,6 +1234,66 @@ check('0050 bound: an update the editor discards does not give the budget back',
     p.readOnly = false;
     await p.repeat(4, ...beyond);
     return [p.state(), { text: 'above\nline twoxtwox\nbelow', restarts: 6 }];
+});
+
+check('0050 bound: a touch on the page gives the budget back, so refusals of separate touches do not add up', async () => {
+    const p = page('above\nline twox\nbelow', [15]);
+    await p.repeat(6, ...beyond);
+    p.touch();
+    await p.repeat(6, ...beyond);
+    return [p.state(), { text: 'above\nline twox\nbelow', carets: [15], version: 1, restarts: 12 }];
+});
+
+check('0050 bound: a turn of the screen gives the budget back', async () => {
+    const p = page('above\nline twox\nbelow', [15]);
+    await p.repeat(6, ...beyond);
+    p.turn();
+    await p.repeat(6, ...beyond);
+    return [p.state(), { text: 'above\nline twox\nbelow', carets: [15], version: 1, restarts: 12 }];
+});
+
+// The keyboard makes cursor events of its own, with its selection, so one cannot be what ends an episode: a keyboard that loops would give the count back to itself.
+check('0050 bound: a cursor event alone does not give the budget back, whatever its reason', async () => {
+    const p = page('above\nline twox\nbelow', [15]);
+    await p.repeat(6, ...beyond);
+    await p.tap(14);
+    await p.tap(15);
+    await p.sameCursorAgain();
+    await p.update(...beyond);
+    return [p.state(), { text: 'above\nline twoxtwox\nbelow', carets: [15], restarts: 6 }];
+});
+
+// --- conditions of the rules that the cases above leave to the ones below ---
+
+check('0046: after compositionend no rule judges an update that has no composition open', async () => {
+    const p = page('line two', [8]);
+    await p.compose();
+    await p.endComposition();
+    await p.update('two', 0, 4, 8);
+    return [p.state(), { text: 'two two', restarts: 0 }];
+});
+
+check('0050 fourth rule: a letter over a reopened word with the caret asked before it is applied', async () => {
+    const p = page('line two', [8]);
+    await p.compose();
+    await p.update('x', 5, 8, 5);
+    return [p.state(), { text: 'line x', carets: [5], restarts: 0 }];
+});
+
+check('0051: a caret removed with the primary unmoved moves the buffer to the caret line', async () => {
+    const p = page('ab\ncd', [2, 5]);
+    await p.update('\n', 2, 2);
+    await p.tap(3);
+    return [p.state(), { text: 'ab\n\ncd\n', carets: [3], buffer: '', bufferCaret: 0 }];
+});
+
+check('0049: a composition typed at every cursor exempts the same-length rewrite at the caret', async () => {
+    const p = page('ab\ncb', [1, 4]);
+    await p.compose();
+    await p.update('ax', 0, 1);
+    const mid = p.state();
+    await p.update('xb', 0, 2, 2);
+    return [{ mid: mid.text, ...p.state() }, { mid: 'axb\ncxb', text: 'xbb\ncxb', restarts: 0 }];
 });
 
 // --- 0052: a touch handed to a row from outside the list ---
