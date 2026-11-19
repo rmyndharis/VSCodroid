@@ -91,6 +91,14 @@ class EditorGatewayTest {
                     count
                 }
                 every { backend.shutdownOutput() } answers { channel.shutdownOutput(); Unit }
+                // Both directions end and a read that waits comes back, as on the real socket, and the
+                // descriptor stays open.
+                every { backend.shutdown() } answers {
+                    runCatching { channel.shutdownInput() }
+                    runCatching { channel.shutdownOutput() }
+                    input.wakeup()
+                    Unit
+                }
                 every { backend.close() } answers { channel.close(); input.wakeup(); Unit }
                 connected?.invoke(backend)
             }
@@ -834,6 +842,51 @@ class EditorGatewayTest {
         }
         assertFalse(reachedNewBackend.await(2, TimeUnit.SECONDS),
             "a client from the released listener was routed to the next listener's backend")
+    }
+
+    /**
+     * The pumps use the backend's descriptor with no lock, so the thread that ends a connection must not
+     * close it while one of them may be inside a read or a write: the kernel hands the number to the next
+     * file that is opened, and the pump then reads or writes that file. The connection is shut down, which
+     * wakes the pump, and the descriptor is closed once both pumps have left.
+     */
+    @Test
+    fun theBackendIsNotClosedWhileAPumpIsReadingIt() {
+        val port = gateway.bind(0)
+        val readEntered = CountDownLatch(1)
+        val released = CountDownLatch(1)
+        val closed = CountDownLatch(1)
+        val reading = AtomicInteger()
+        val readingAtClose = AtomicInteger(-1)
+        every { connectEditorBackend(any()) } answers {
+            mockk<EditorBackend>(relaxed = true).also { backend ->
+                every { backend.read(any()) } answers {
+                    reading.incrementAndGet()
+                    readEntered.countDown()
+                    try {
+                        released.await(10, TimeUnit.SECONDS)
+                        0
+                    } finally {
+                        reading.decrementAndGet()
+                    }
+                }
+                every { backend.shutdown() } answers { released.countDown(); Unit }
+                every { backend.close() } answers {
+                    readingAtClose.set(reading.get())
+                    released.countDown()
+                    closed.countDown()
+                    Unit
+                }
+            }
+        }
+        gateway.selectBackend(File(directory, "stub.sock"), "owner")
+        resources.add(Socket(InetAddress.getByName("127.0.0.1"), port))
+        assertTrue(readEntered.await(3, TimeUnit.SECONDS), "the relay never read the backend")
+
+        gateway.withdrawBackend("owner")
+
+        assertTrue(closed.await(3, TimeUnit.SECONDS), "the backend was never closed")
+        assertEquals(0, readingAtClose.get(), "the backend was closed while a pump was reading it")
     }
 
 }

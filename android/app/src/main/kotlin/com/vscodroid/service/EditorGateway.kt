@@ -407,13 +407,18 @@ internal class EditorGateway(
             runCatching { client.socket().shutdownInput() }
             runCatching { client.socket().shutdownOutput() }
             runCatching { client.close() }
-            runCatching { local?.close() }
+            // The pumps read and write the backend's descriptor with no lock, so closing it here, on
+            // whatever thread ends the connection, could hand its number to another file while a pump
+            // is about to use it. It is only shut down, which wakes them; [finished] closes it.
+            runCatching { local?.shutdown() }
             synchronized(selectors) { selectors.forEach { it.wakeup() } }
         }
 
         fun finished() {
             if (pumps.decrementAndGet() == 0) {
                 close()
+                // Both pumps have left, so nothing can use the descriptor any more.
+                runCatching { local?.close() }
                 synchronized(lock) { connections.remove(this) }
                 left.countDown()
             }
@@ -500,9 +505,15 @@ internal class EditorBackend(private val socket: LocalSocket) : Closeable {
     fun read(bytes: ByteArray): Int = Os.read(descriptor, bytes, 0, bytes.size)
     fun write(bytes: ByteArray, offset: Int, count: Int): Int = Os.write(descriptor, bytes, offset, count)
     fun shutdownOutput() = socket.shutdownOutput()
-    override fun close() {
+
+    /** Ends both directions, which wakes a read or a write waiting on the socket, and keeps the descriptor. */
+    fun shutdown() {
         runCatching { socket.shutdownInput() }
         runCatching { socket.shutdownOutput() }
+    }
+
+    override fun close() {
+        shutdown()
         socket.close()
     }
 }
