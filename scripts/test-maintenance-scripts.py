@@ -755,6 +755,30 @@ class MaintenanceScriptsTest(unittest.TestCase):
             builder.find_ndk("29.0.0", {"ANDROID_NDK_HOME": str(sdk / "ndk" / "29.0.0")}, self.root / "nohome")
         self.assertIn("29.0.1", str(refused.exception))
 
+    def test_bridge_spec_gate_reads_an_expression_body_and_refuses_a_commented_method(self):
+        source = SOURCE / "scripts/check-bridge-api-spec.py"
+        gate = types.ModuleType("fixture_bridge_spec")
+        gate.__file__ = str(source)
+        exec(compile(source.read_text(encoding="utf-8"), str(source), "exec"), gate.__dict__)
+        bridge = self.root / "AndroidBridge.kt"
+        gate.BRIDGE = bridge
+        write(bridge, "class B {\n    @JavascriptInterface\n    fun ping(token: String): Boolean = impl(token)\n\n"
+                      "    @JavascriptInterface\n    fun inferred(token: String) = impl(token)\n\n"
+                      "    @JavascriptInterface\n    fun other(token: String): String {\n        return \"\"\n    }\n}\n")
+        found, expected = gate.signatures(bridge)
+        self.assertEqual(3, expected)
+        self.assertEqual(("token: String", "Boolean"), found["ping"])
+        self.assertEqual(("token: String", "String"), found["other"])
+        # No declared type: it cannot equal any document's, so the gate reports a difference, never a match.
+        self.assertEqual(("token: String", "<inferred>"), found["inferred"])
+        write(bridge, "class B {\n    /*\n    @JavascriptInterface\n    fun gone(token: String): Boolean {\n    }\n    */\n}\n")
+        with self.assertRaises(SystemExit) as refused:
+            gate.signatures(bridge)
+        self.assertIn("inside a block comment", str(refused.exception))
+        # Prose that names the annotation in a block comment is no method.
+        write(bridge, "/**\n * one `@JavascriptInterface` method per call\n */\nclass B\n")
+        self.assertEqual(({}, 0), gate.signatures(bridge))
+
     def test_wheelhouse_names_reach_the_documents_people_read(self):
         source = SOURCE / "scripts/check-wheelhouse-abi.py"
         gate = types.ModuleType("fixture_wheelhouse_abi")
