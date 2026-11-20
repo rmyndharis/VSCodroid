@@ -148,54 +148,64 @@ Restarts are bounded by a count of the forced restarts that are made,
 kept for one version of the model. It is one count for every rule and
 every update: six restarts forced by different updates, under different
 rules, spend it as six forced by the same update do. After six of them
-without a change of text, a touch or a turn of the screen, an update is
-no longer refused: it is applied as the editor without this patch
-applies it, so that a keyboard that answers every restart with the same
-update, or a pick the rules cannot tell from a stale write, is not
-refused for ever and the person is not left with input that does nothing
-until something else is typed. The bound does not ask whether the
-keyboard went on with the same update: after six forced restarts with
-none of those between them nothing more is refused, whatever those six
-refused. The count starts again after an update that changes the text
-has been applied by the editor, that is when the text of the update
+without a change of text, each no more than half a minute after the one
+before, the update that follows within that time is no longer refused:
+it is applied as the editor without this patch applies it, so that a
+keyboard that answers every restart with the same update, or a pick the
+rules cannot tell from a stale write, is not refused for ever and the
+person is not left with input that does nothing until something else is
+typed. The bound does not ask whether the keyboard went on with the same
+update: after six such restarts nothing more is refused, whatever those
+six refused. The count starts again after an update that changes the
+text has been applied by the editor, that is when the text of the update
 differs from the cached text of its range and the model's version is not
 the one it had before the edit, and after any other edit of the model
 (Enter by beforeinput, a paste, a cut, an undo), because the count
 belongs to the version of the model it was made on. It starts again too
-at a touch, a click or a pen on the page (a pointerdown, seen in the
-capture phase of the window) and at a turn of the screen
-(screen.orientation changes). Each of those is something the person does
-and a keyboard cannot, so a keyboard that answers every restart with the
-same update cannot give the count back to itself, and the refusals of
-separate episodes, a turn here and a tap there with nothing typed
-between them, do not add up to six. On an API 33 emulator with Gboard
-12.4 and WebView 134, 36 round trips of the screen to landscape and back
-with the word two open at the end of line two gave one stale write that
-was refused (two over 0..4, the caret kept at 8), and 48 taps inside
-words gave none; a count that only a change of text started again would
-have kept that one for good. A stale write made by hand (a
-TextUpdateEvent on the edit context) after each of ten taps, and after
-each of six turns of the screen, was refused every time and the text
-stayed as it was; made with no tap and no turn between them it was
-refused six times and applied the seventh. A restart counts where its
-blur and focus happen: refusals handed over in one task make one restart
-and count once, and a refusal while the editor host does not have the
-focus makes none and counts for nothing. An update that the editor
-discards (a read-only editor, a cursor that loses its edit) does not
-start the count again, nor does an update that names a range with its
-own text, a selection that moves (the keyboard makes those too), an
+when an update is judged more than half a minute after the last counted
+restart, by the page's own clock (performance.now), which does not step
+when the phone's time is set. That wait is what keeps the refusals of
+separate moments, a turn of the screen now and another a minute later
+with nothing typed between them, from adding up to six, and neither
+party the bound is for is slowed by it: a keyboard that answers a
+restart with the same update does so within a second (283 to 324 ms
+apart on a device), and a person who tries a refused pick again does so
+within seconds. The count does not start again at a touch on the page or
+at a turn of the screen. It did for a while, and a person whose pick was
+refused, and who tapped the word between tries, then never reached the
+seventh. On an API 33 emulator with Gboard 12.4 and WebView 134, 36
+round trips of the screen to landscape and back with the word two open
+at the end of line two gave one stale write that was refused (two over
+0..4, the caret kept at 8), and 48 taps inside words gave none; a count
+that only a change of text started again would have kept that one for
+good. On the same emulator a stale write made by hand (a TextUpdateEvent
+on the edit context) was refused six times and applied the seventh with
+a tap in the editor before each, as it was with none; after five of them
+and 34 s with no forced restart the count was dropped at the next (five
+restarts, 34,084 ms since the last), six were refused and the seventh
+applied. On an earlier build of this patch, which read the wall clock, 8
+s in place of that wait left the count standing: the sixth was refused
+and the seventh applied. A restart counts where its blur and focus
+happen: refusals handed over in one task make one restart and count
+once, and a refusal while the editor host does not have the focus makes
+none and counts for nothing. Inside that half minute nothing else starts
+the count again: not an update that the editor discards (a read-only
+editor, a cursor that loses its edit), not one that names a range with
+its own text, a selection that moves (the keyboard makes those too), an
 empty update, a new composition or a change of focus; the restarts the
 editor makes after a rewrite of the buffer are not counted. A keyboard
 that is refused twice, once for the range of the word and once for the
 range of its last letter, as it was in three of 40 runs on a device (283
 to 324 ms apart), is well inside it. What it costs: the update that
-follows six forced restarts on one version of the model, with no touch
-and no turn of the screen between them, is applied, whatever its shape,
-and the letter or the word it carries may do what the stale write does;
-the count starts again when text changes, at a touch and at a turn of
-the screen. The member, the version it belongs to, the guard at the
-refusal, the count in the restart and the resets are marked in the
-source as the parts of the bound and go together.
+follows six forced restarts on one version of the model, each no more
+than half a minute after the one before, and comes within half a minute
+of the sixth, is applied, whatever its shape, and the letter or the word
+it carries may do what the stale write does; and a pick the rules took
+for a stale write, tried again more than half a minute apart each time,
+is refused each time. The member, the version it belongs to, the time of
+the last counted restart, the guard at the refusal, the count in the
+restart and the resets are marked in the source as the parts of the
+bound and go together.
 
 What it costs. A correction of an earlier word that keeps the caret in
 place and produces a text that the buffer holds in a stretch that
@@ -667,10 +677,10 @@ and Japanese lines typed, converted and turned came out as typed in 224
 updates with no refusal.
 
 diff --git a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
-index babfbb0..ea0a174 100644
+index babfbb09..a7e0ec2a 100644
 --- a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
 +++ b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
-@@ -87,9 +87,18 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -87,9 +87,22 @@ export class NativeEditContext extends AbstractEditContext {
  	private _deletingByKey = false;
  	// An open EditContext composition, set at compositionstart and cleared at compositionend or blur.
  	private _compositionOpen = false;
@@ -682,31 +692,19 @@ index babfbb0..ea0a174 100644
 -	private _beforeRewrite: { text: string; selection: OffsetRange; composing: boolean } | undefined;
 +	private _beforeRewrite: { text: string; selection: OffsetRange; composing: boolean; force?: boolean } | undefined;
 +	// Restart bound, part 1 of 4 (this member, the guard at a refusal, the count in _restartInputIfUnheard and the resets go together): how many forced restarts
-+	// have been made since the model's text last changed or since the last touch or turn of the screen, counted together for every rule.
++	// have been made since the model's text last changed, with less than half a minute from each to the next, counted together for every rule.
 +	private _refusalRestarts = 0;
 +	// Restart bound, part 1b: the version of the model that the count belongs to. Any edit of the model (typed, Enter, paste, cut, undo) is a change of text and starts the
 +	// count again, whether or not the update came through _emitTypeEvent.
 +	private _refusalRestartsVersion = -1;
++	// Restart bound, part 1c: when the last counted restart was made. A count that has waited half a minute for its next restart is of another moment and is not
++	// carried into what follows. A keyboard that answers every restart with the same update does so within a second, and a person who tries the same thing again does
++	// so within seconds, so both still add up; a stale write at one turn of the screen and another minutes later do not.
++	private _refusalRestartsAt = 0;
  
  	// Overflow guard container
  	private readonly _parent: HTMLElement;
-@@ -228,6 +237,15 @@ export class NativeEditContext extends AbstractEditContext {
- 			this._viewController.paste(pasteEvent.text, pasteOnNewLine, multicursorText, mode);
- 		}));
- 
-+		// Restart bound, part 4b: the count starts again at a touch, a click or a pen on the page, and at a turn of the screen. Each is something the person does and a keyboard
-+		// cannot, so a keyboard that answers every restart with the same update cannot give the count back to itself, and refusals of separate episodes do not add up to six.
-+		const hostWindow = getWindow(this.domNode.domNode);
-+		this._register(addDisposableListener(hostWindow, 'pointerdown', () => this._newRestartEpisode(), true));
-+		const orientation = hostWindow.screen?.orientation;
-+		if (orientation) {
-+			this._register(addDisposableListener(orientation, 'change', () => this._newRestartEpisode()));
-+		}
-+
- 		// Edit context events
- 		this._register(editContextAddDisposableListener(this._editContext, 'textformatupdate', (e) => this._handleTextFormatUpdate(e)));
- 		this._register(editContextAddDisposableListener(this._editContext, 'characterboundsupdate', (e) => this._updateCharacterBounds(e)));
-@@ -258,6 +276,7 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -258,6 +271,7 @@ export class NativeEditContext extends AbstractEditContext {
  		}));
  		this._register(editContextAddDisposableListener(this._editContext, 'compositionstart', (e) => {
  			this._compositionOpen = true;
@@ -714,7 +712,7 @@ index babfbb0..ea0a174 100644
  			this._updateEditContext();
  			// Utlimately fires onDidCompositionStart() on the editor to notify for example suggest model of composition state
  			// Updates the composition state of the cursor controller which determines behavior of typing with interceptors
-@@ -518,19 +537,29 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -518,19 +532,30 @@ export class NativeEditContext extends AbstractEditContext {
  	// without a composition, restart nothing. Two rewrites restart input once, and a composition
  	// already ended by the page's key or tap handler restarts nothing more. The blur stays outside
  	// the edit, with the focus tracker paused so that the editor is not told it lost focus.
@@ -744,11 +742,12 @@ index babfbb0..ea0a174 100644
 +			// host has lost the focus, counts for nothing, and refusals handed over in one task make one.
 +			if (before.force) {
 +				this._refusalRestarts++;
++				this._refusalRestartsAt = performance.now();
 +			}
  			this._focusTracker.pause();
  			domNode.blur();
  			domNode.focus();
-@@ -544,6 +573,51 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -544,6 +569,56 @@ export class NativeEditContext extends AbstractEditContext {
  		}
  		const selectionEndOffset = this._previousEditContextSelection.endExclusive;
  		const selectionStartOffset = this._previousEditContextSelection.start;
@@ -757,9 +756,14 @@ index babfbb0..ea0a174 100644
 +			this._refusalRestartsVersion = modelVersion;
 +			this._refusalRestarts = 0;
 +		}
++		// Restart bound, part 4b: half a minute with no forced restart ends the count. See _refusalRestartsAt.
++		if (this._refusalRestarts > 0 && performance.now() - this._refusalRestartsAt > 30000) {
++			this._refusalRestarts = 0;
++		}
 +		// Restart bound, part 3 of 4: after six forced restarts made on one version of the model an update is no longer refused. The count is one for every rule and every
 +		// update: six restarts forced by different updates, under different rules, spend it as six forced by the same update do. Refusals that go on leave the person with input
-+		// that does nothing until something else is typed, so the update is passed, as the editor without this patch passes it, and the count starts again when the model's version moves.
++		// that does nothing until something else is typed, so the update is passed, as the editor without this patch passes it, and the count starts again when the model's version moves
++		// or half a minute passes with no forced restart.
 +		if (this._refusalRestarts < 6 && (this._isBeyondBuffer(e) || this._isRememberedWordRewrite(e, selectionStartOffset, selectionEndOffset) || this._isTailDropOnReopen(e, selectionStartOffset, selectionEndOffset) ||
 +			this._isOneUnitOverWord(e, selectionStartOffset, selectionEndOffset) ||
 +			this._isStaleWriteAfterCaret(e, selectionStartOffset, selectionEndOffset) || this._isGrowthAfterCaret(e, selectionStartOffset, selectionEndOffset) ||
@@ -800,7 +804,7 @@ index babfbb0..ea0a174 100644
  		this._previousEditContextSelection = new OffsetRange(e.selectionStart, e.selectionEnd);
  
  		// With several cursors, an update that reaches outside the primary selection is about the
-@@ -570,6 +644,7 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -570,6 +645,7 @@ export class NativeEditContext extends AbstractEditContext {
  				this._expectedCaretOffset = e.selectionStart;
  				this._onType(viewController, input);
  				this._expectedCaretOffset = undefined;
@@ -808,7 +812,7 @@ index babfbb0..ea0a174 100644
  				return;
  			}
  			this._dismissOtherCursors();
-@@ -633,6 +708,174 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -633,6 +709,174 @@ export class NativeEditContext extends AbstractEditContext {
  		this._expectedCaretOffset = e.selectionStart === e.selectionEnd ? e.selectionStart : undefined;
  		this._onType(viewController, typeInput);
  		this._expectedCaretOffset = undefined;
@@ -983,15 +987,10 @@ index babfbb0..ea0a174 100644
  	}
  
  	// Whether the update changes no text. It replaces nothing with nothing, or its text is the cached
-@@ -755,6 +998,20 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -755,6 +999,15 @@ export class NativeEditContext extends AbstractEditContext {
  		this._applyingInputMethodEdit = false;
  	}
  
-+	// Restart bound, part 4b: a new episode of the person's use of the page. What the bound counted before it is not counted against what follows.
-+	private _newRestartEpisode(): void {
-+		this._refusalRestarts = 0;
-+	}
-+
 +	// After the edit, once the model has applied an update that changes the text (its version is not the one it had before the edit): the composition has typed, and
 +	// the count of the restart bound, part 4 of 4, starts again. See _emitTypeEvent.
 +	private _afterAppliedEdit(changesText: boolean, versionBefore: number): void {

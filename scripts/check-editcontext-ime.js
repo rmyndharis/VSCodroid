@@ -52,7 +52,7 @@
  * event hooks, with upstream's refilter replaced by a counter.
  *
  * NEGATIVE CONTROL, measured on the 1.139.1 tree with Node 22.23.2. Against upstream's
- * files, with no patch applied, 84 of the 91 cases fail. Each of these single edits to a
+ * files, with no patch applied, 86 of the 93 cases fail. Each of these single edits to a
  * copy of a patched file fails at least one case:
  *
  *   0046  the body of the blur listener removed; the composing clause dropped from the
@@ -72,8 +72,9 @@
  *         two letters); a letter counted in units; any one code point counted as a letter;
  *         Han, kana and Hangul counted as letters; the bound raised from six to seven; a
  *         forced restart not counted; the count not started again at a new version of the
- *         model; the listener for a touch removed, the one for a turn of the screen removed,
- *         `_newRestartEpisode` emptied, the count started again at every cursor event; the clamp past the bound removed, or only the cut of its start; the typed
+ *         model; the wait of half a minute removed, or kept for a spent count only; the
+ *         time of a restart not taken, or taken at every update that is judged;
+ *         the count started again at every cursor event; the clamp past the bound removed, or only the cut of its start; the typed
  *         flag never set, and not cleared at compositionstart; the restart after a
  *         refusal not forced; the buffer not written back at a refusal.
  *   0051  `_caretUnmoved` answering false; its single-caret test removed; the count of
@@ -90,6 +91,13 @@
  */
 
 'use strict';
+
+// The clock the patched files read, `performance.now()`. It stands still, so that a case
+// decides to the millisecond how long the keyboard was silent, and `pause` alone moves it on.
+// A whole number, because the real clock's fraction makes a sum of thirty seconds come out a
+// hair over or under and a case at the boundary then passes on some runs only.
+const clock = { now: 1000000 };
+performance.now = () => clock.now;
 
 const fs = require('fs');
 const path = require('path');
@@ -230,7 +238,7 @@ function makeDocument() {
         activeElement: null,
         log: [],
         made: [],
-        defaultView: Object.assign(new Target(), { EditContext, screen: { orientation: new Target() } }),
+        defaultView: Object.assign(new Target(), { EditContext }),
         createElement(name) {
             const element = new Element(document, name);
             document.made.push(element);
@@ -560,13 +568,9 @@ class Page {
         await this.settle();
     }
 
-    // A touch, a click or a pen on the page, and a turn of the screen: what a person does and a keyboard cannot.
-    touch() {
-        this.document.defaultView.fire('pointerdown');
-    }
-
-    turn() {
-        this.document.defaultView.screen.orientation.fire('change');
+    // Time that passes with nothing from the keyboard.
+    pause(ms) {
+        clock.now += ms;
     }
 
     // The view sends the cursors again where they are, as it does when its lines wrap anew.
@@ -1236,23 +1240,48 @@ check('0050 bound: an update the editor discards does not give the budget back',
     return [p.state(), { text: 'above\nline twoxtwox\nbelow', restarts: 6 }];
 });
 
-check('0050 bound: a touch on the page gives the budget back, so refusals of separate touches do not add up', async () => {
+check('0050 bound: more than half a minute with no forced restart gives the budget back, so refusals of separate moments do not add up', async () => {
     const p = page('above\nline twox\nbelow', [15]);
     await p.repeat(6, ...beyond);
-    p.touch();
+    p.pause(30001);
     await p.repeat(6, ...beyond);
     return [p.state(), { text: 'above\nline twox\nbelow', carets: [15], version: 1, restarts: 12 }];
 });
 
-check('0050 bound: a turn of the screen gives the budget back', async () => {
+// The wait ends any count, not only one that is spent: five refusals of one moment and one of another are not six.
+check('0050 bound: the wait ends a count that was not spent', async () => {
     const p = page('above\nline twox\nbelow', [15]);
+    await p.repeat(5, ...beyond);
+    p.pause(30001);
     await p.repeat(6, ...beyond);
-    p.turn();
-    await p.repeat(6, ...beyond);
-    return [p.state(), { text: 'above\nline twox\nbelow', carets: [15], version: 1, restarts: 12 }];
+    return [p.state(), { text: 'above\nline twox\nbelow', carets: [15], version: 1, restarts: 11 }];
 });
 
-// The keyboard makes cursor events of its own, with its selection, so one cannot be what ends an episode: a keyboard that loops would give the count back to itself.
+// The time is taken at a counted restart and nowhere else, so an update that is judged and not refused does not carry a count across the wait.
+check('0050 bound: an update that is not refused does not keep a count from ending', async () => {
+    const p = page('above\nline twox\nbelow', [15]);
+    await p.repeat(5, ...beyond);
+    p.pause(20000);
+    p.readOnly = true;
+    await p.update('y', 9, 9);
+    p.readOnly = false;
+    p.pause(20000);
+    await p.repeat(6, ...beyond);
+    return [p.state(), { text: 'above\nline twox\nbelow', carets: [15], version: 1, restarts: 11 }];
+});
+
+// A person who tries the same thing again does so within seconds, and those tries have to add up: the seventh is what lets a pick the rules took for a stale write through.
+check('0050 bound: restarts half a minute apart and less add up to the bound', async () => {
+    const p = page('above\nline twox\nbelow', [15]);
+    for (let i = 0; i < 6; i++) {
+        await p.update(...beyond);
+        p.pause(30000);
+    }
+    await p.update(...beyond);
+    return [p.state(), { text: 'above\nline twoxtwox\nbelow', carets: [15], restarts: 6 }];
+});
+
+// The keyboard makes cursor events of its own, with its selection, so one cannot be what ends a count: a keyboard that loops would give the count back to itself.
 check('0050 bound: a cursor event alone does not give the budget back, whatever its reason', async () => {
     const p = page('above\nline twox\nbelow', [15]);
     await p.repeat(6, ...beyond);

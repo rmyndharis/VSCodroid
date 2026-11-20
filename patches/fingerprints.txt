@@ -423,8 +423,8 @@
 0050 one unit written over a reopened word|out/vs/code/browser/workbench/workbench.js|this._isOneUnitOverWord(
 # The restart count is kept for one version of the model and starts again when the model changes.
 0050 restart count belongs to a version of the model|out/vs/code/browser/workbench/workbench.js|this._refusalRestartsVersion
-# The call that starts the restart count again at a touch on the page and at a turn of the screen, which a keyboard cannot make: one at each of the two listeners.
-0050 restart count starts again at a touch or a turn|out/vs/code/browser/workbench/workbench.js x2|this._newRestartEpisode(
+# The wait that ends the restart count: the time of the last counted restart, compared when the next update is judged.
+0050 restart count ends after a wait|out/vs/code/browser/workbench/workbench.js|performance.now() - this._refusalRestartsAt
 # The letter test: one letter or digit of an alphabet, counted in code points.
 0050 one letter of an alphabet|out/vs/code/browser/workbench/workbench.js|this._isOneLetter(
 # The test for a remembered word written over text that lies wholly after the caret while the caret is asked to stay.

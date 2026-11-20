@@ -1229,10 +1229,14 @@ composition open or not: the keyboard keeps the offsets of a buffer it was given
 editor read the units past its own buffer as units to replace after the caret, and the typed
 edit replaced them across line breaks, so that the lines below the caret were deleted. The
 forced restarts are counted for one version of the model, in one count for every rule and every
-update, and after six with no change of text, touch or turn of the screen the next update a rule would refuse is applied as
+update, and after six with no change of text, each less than half a minute after the one
+before, the next update a rule would refuse is applied as
 the editor without the patch applies it, whatever the six before it refused, so that input
 never stops answering; a range that reaches beyond the buffer is cut at the buffer's end
-first, so that nothing after the buffer is replaced. Nothing of a refusal is kept beyond that
+first, so that nothing after the buffer is replaced. Half a minute with no forced restart, by the
+page's monotonic clock, ends the count, so the refusals of separate moments do not add up to six; a touch or a turn of the
+screen does not end it, because a person whose pick was refused taps the word between tries
+and has to reach the seventh. Nothing of a refusal is kept beyond that
 count: the restart ends the composition, and the update that follows is judged on its own.
 What is refused is a set of shapes; the set and its cases are in the patch's description,
 with what the rules cost: a correction of an earlier word that keeps the caret where it was
