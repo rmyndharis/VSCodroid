@@ -613,7 +613,7 @@ The weakest point in our reading is the `ripgrep` substitution, because a binary
 
 ## Mirrored Python Wheels
 
-`pip` on the device is pointed at a page listing prebuilt Android wheels that VSCodroid re-hosts on the `wheels-<python-version>-<n>` prereleases of this repository. `wheelhouse.json` pins each one and records where it came from. They are not bundled in the APK; pip downloads one only when a user installs that package.
+`pip` on the device is pointed at a page listing prebuilt Android wheels that VSCodroid re-hosts on the `wheels-<python-version>-<n>` prereleases of this repository. `wheelhouse.json` pins each one and records where it came from. One of them, cffi, is compiled by this project, because nobody publishes an Android build of it. They are not bundled in the APK; pip downloads one only when a user installs that package.
 
 | Wheel | Built by | Licence | Notices |
 |---|---|---|---|
@@ -621,6 +621,8 @@ The weakest point in our reading is the `ripgrep` substitution, because a binary
 | pandas 3.0.5 | Termux User Repository | BSD-3-Clause, with vendored UltraJSON, klib, pyperclip and others | pandas' own inside the wheel; the vendored components' in `pandas-3.0.5-THIRD-PARTY-NOTICES.txt` beside it on the release, taken from pandas' source distribution |
 | pydantic-core 2.41.5 | Termux User Repository | MIT, with statically linked Rust crates | Inside the wheel, as upstream ships it: its licence and a CycloneDX SBOM |
 | psutil 7.2.2 | Termux (`python-psutil`), repacked into a wheel | BSD-3-Clause | Inside the wheel |
+| cryptography 50.0.2 | Termux (`python-cryptography`), repacked into a wheel | Apache-2.0 OR BSD-3-Clause, with statically linked Rust crates; it links the OpenSSL the app bundles | Inside the wheel: the three licence files PyPI's wheel of this version carries, and a CycloneDX SBOM of the crates |
+| cffi 2.1.1 | VSCodroid (`scripts/build-cffi-wheel.py`), compiled from cffi's source distribution on PyPI; it links the libffi the app bundles | MIT-0 | Inside the wheel |
 
 ## Termux Project Attribution
 
@@ -843,4 +845,4 @@ For questions about licenses, trademarks, or legal notices:
 
 ---
 
-_This document was last updated on November 18, 2026._
+_This document was last updated on November 20, 2026._

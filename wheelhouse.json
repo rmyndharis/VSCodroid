@@ -3,19 +3,33 @@
     "The wheels VSCodroid mirrors, so that pip install of a package with a compiled",
     "part can succeed on a device that has no compiler and cannot run one.",
     "",
-    "Every entry is a prebuilt Android wheel built by the Termux User Repository,",
-    "not by us. `url` records where it came from so the provenance chain is",
+    "Most entries are prebuilt Android wheels built by the Termux User Repository,",
+    "not by us. `url` records where a wheel came from so the provenance chain is",
     "auditable; `sha256` is what pip enforces once the wheel is mirrored into our",
-    "own release.",
+    "own release. psutil, cryptography and cffi are the three that come another",
+    "way, each described below.",
     "",
-    "psutil is the exception, because nobody publishes an Android wheel of it. Its",
-    "`url` is Termux's own python-psutil package, built for the same interpreter.",
-    "build-wheelhouse.py checks that .deb against Termux's signed index before",
-    "pinning `source-sha256`, and repacks its files into a wheel without changing",
-    "them. ipykernel requires psutil, so without it the Jupyter extension cannot",
-    "install a kernel. Termux's pool keeps only a package's current revision, so",
-    "when Termux rebuilds python-psutil the entry has to be re-pinned; the wheel",
-    "already on the release stays where it is.",
+    "Nobody publishes an Android wheel of psutil or of cryptography. Their `url`",
+    "is Termux's own package, python-psutil and python-cryptography, built for the",
+    "same interpreter. build-wheelhouse.py checks that .deb against Termux's",
+    "signed index before pinning `source-sha256`, and repacks its files into a",
+    "wheel without changing them. ipykernel requires psutil, so without it the",
+    "Jupyter extension cannot install a kernel. cryptography's compiled module",
+    "links the OpenSSL the APK carries, and the package carries the same three",
+    "licence files as PyPI's own wheel of that version. Termux's pool keeps only",
+    "a package's current revision, so when Termux rebuilds one of the two the",
+    "entry has to be re-pinned; the wheel already on the release stays where it",
+    "is.",
+    "",
+    "cffi is the one wheel compiled here, by scripts/build-cffi-wheel.py.",
+    "cryptography imports it when it loads, PyPI and the Termux User Repository",
+    "have no Android wheel of it, and Termux's packages get it by compiling it on",
+    "the phone, which a device with no compiler cannot do. `built-from` names",
+    "what went in: PyPI's source distribution, the two Termux packages that give",
+    "the headers and the libraries it links, and the NDK revision. It was built",
+    "once and uploaded to the wheelhouse release, and `url` is that asset, so",
+    "rebuilding the wheelhouse fetches it like any other wheel and needs no",
+    "compiler. Its Python files are cffi's own, unchanged.",
     "",
     "Changing a version is a reviewed diff to this file, deliberately:",
     "there is no scheduled job that moves them, because for these names PyPI has no",
@@ -48,7 +62,7 @@
     "the older APK read it."
   ],
   "python-version": "3.14",
-  "release-tag": "wheels-3.14-1",
+  "release-tag": "wheels-3.14-2",
   "packages": [
     {
       "name": "numpy",
@@ -83,6 +97,35 @@
       "url": "https://mirror.mwt.me/termux/main/pool/main/p/python-psutil/python-psutil_7.2.2-2_aarch64.deb",
       "source-sha256": "61147cf1b656b58e61f0293d25ecde85ca1a20b25f8d57338d424b649cddbef0",
       "sha256": "489f05c321aa0eaa81165b22116c92f22eae4391661f147ea2996765cf9dbbde"
+    },
+    {
+      "name": "cryptography",
+      "version": "50.0.2",
+      "url": "https://mirror.mwt.me/termux/main/pool/main/p/python-cryptography/python-cryptography_50.0.2_aarch64.deb",
+      "source-sha256": "14c13359867626d15e457c8b8359c063b950ae96c7449b9c3d8551f4a35fe88f",
+      "sha256": "37df684fbe549c6764b71be55f6b241d6bfec54f5af0bbafbecd157f9af02de8"
+    },
+    {
+      "name": "cffi",
+      "version": "2.1.1",
+      "url": "https://github.com/rmyndharis/VSCodroid/releases/download/wheels-3.14-2/cffi-2.1.1-cp314-cp314-android_24_arm64_v8a.whl",
+      "built-from": {
+        "script": "scripts/build-cffi-wheel.py",
+        "sdist": "https://files.pythonhosted.org/packages/9e/ef/008a1939e372c06329a3fce4279c02f328488f3526744906eeec3da7ad5f/cffi-2.1.1.tar.gz",
+        "sdist-sha256": "dd31f52ea1086513bb9df30f8fcee9b8918323ae067a3d5b78bc826a000712be",
+        "ndk": "27.2.12479018",
+        "headers": [
+          {
+            "url": "https://mirror.mwt.me/termux/main/pool/main/p/python/python_3.14.10_aarch64.deb",
+            "sha256": "1a5a300c8d844f2c18a3bb61cafbffb2e93fba9a7106ebe967f06c9628d1e434"
+          },
+          {
+            "url": "https://mirror.mwt.me/termux/main/pool/main/libf/libffi/libffi_3.8.1_aarch64.deb",
+            "sha256": "9e13f3b5c40625c384101992bb669a278e07d9e2baa37d286d7ed164288fab1a"
+          }
+        ]
+      },
+      "sha256": "182d7af1fd14c0ba4428ed0dffeef4b03410b8642a2a4a145d01a5b43904a1b7"
     }
   ]
 }

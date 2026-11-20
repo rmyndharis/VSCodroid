@@ -41,15 +41,21 @@ that is not one of three HTML types, logging a warning and carrying on: the
 install then succeeds from PyPI, without the mirror, and nothing looks wrong.
 So the wheels are release assets and this page is published to GitHub Pages.
 
-One kind of entry is not a wheel upstream. psutil publishes no Android wheel,
-and TUR builds none for this Python, but Termux's own `python-psutil` package is
-built for exactly this interpreter. An entry whose `url` is a Termux .deb is
+One kind of entry is not a wheel upstream. psutil and cryptography publish no
+Android wheel, and TUR builds none for this Python, but Termux's own packages of
+them are built for exactly this interpreter. An entry whose `url` is a Termux .deb is
 repacked into a wheel here: the files are Termux's, byte for byte, and only the
 install-time records are dropped and WHEEL and RECORD rewritten. The repack is
 deterministic, so its `sha256` is pinned like any other. The .deb itself is
 checked against Termux's signed index, as every other Termux package in this
 repository is, and the pool keeps only a package's current revision: once
 Termux rebuilds it, the entry has to be re-pinned to the new file.
+
+One wheel is compiled by this repository: cffi, which cryptography cannot be
+imported without and nobody publishes for Android. build-cffi-wheel.py builds it
+once from the inputs its entry's `built-from` pins, and it is uploaded to the
+wheelhouse release; the entry's `url` is that asset. Here it is fetched and
+checked like any mirrored wheel, so nothing in this script compiles.
 
 An entry can also carry `notices`, for a wheel that compiles in third-party code
 whose licence notices it does not carry. The wheel is never repacked to add
@@ -414,7 +420,7 @@ def page(entries, release_tag):
         "<title>VSCodroid wheelhouse</title></head>\n<body>\n"
         "<h1>VSCodroid wheelhouse</h1>\n"
         "<p>Prebuilt Android wheels mirrored for the Python VSCodroid bundles.\n"
-        "Not compiled here; the manifest records where each one came from.</p>\n"
+        "Not compiled here, cffi excepted; the manifest records where each one came from.</p>\n"
         + "\n".join(rows)
         + "\n</body></html>\n"
     )
