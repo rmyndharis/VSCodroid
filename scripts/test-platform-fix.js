@@ -434,9 +434,9 @@ fs.writeFileSync(
         "const http = require('http');\nconst createServer = http.createServer;\n" +
         "http.createServer = function () { const s = createServer.apply(this, arguments); globalThis.__relay = s; return s; };\n",
 );
-// The relay moves the engine to a random port from 20000 to 59999 without asking whether anything holds it,
-// and the drivers below bind that port as the stand-in engine. On a busy machine the bind can find it taken,
-// which says nothing about the relay, so such a run is made again with another port, up to four times in all.
+// The relay moves the engine to a port the kernel handed out a moment before, and the drivers below bind that
+// port as the stand-in engine. Another program can take it in between, which says nothing about the relay, so
+// such a run is made again with another port, up to four times in all.
 // Any other failure, and a fourth taken port, is raised as it is.
 const retryOnTakenPort = (run) => {
     for (let attempt = 1; ; attempt++) {
@@ -922,6 +922,37 @@ assert.deepStrictEqual(hubRun.uncaughtAfterRefusedUpgrade, [], 'a client that re
 assert.strictEqual(hubRun.badReason.status, 502, 'a client got no status for an engine answer whose text the relay cannot write: ' + JSON.stringify(hubRun.badReason));
 assert.deepStrictEqual(hubRun.uncaughtAfterBadReason, [], 'the relay threw on an engine answer whose status text it cannot write');
 assert.strictEqual(hubRun.engineSawBadReasonClose, true, 'the relay kept the engine\'s connection after it could not pass the answer on');
+
+// The port the engine is given is one nothing held a moment before. The earlier draw asked Math.random for
+// a port in 20000..59999 and nothing else, so a listener on exactly the port it drew was handed to the engine.
+const PORT_DRIVER = path.join(tmp, 'port-driver.js');
+fs.writeFileSync(PORT_DRIVER, `
+const net = require('net');
+const hold = () => new Promise((resolve) => {
+    const attempt = () => {
+        const p = 20000 + Math.floor(Math.random() * 40000);
+        const s = net.createServer();
+        s.once('error', attempt);
+        s.listen(p, '127.0.0.1', () => resolve({ s, p }));
+    };
+    attempt();
+});
+const free = () => new Promise((resolve) => { const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); }); });
+(async () => {
+    const { p } = await hold();
+    const front = await free();
+    const draw = Math.random;
+    Math.random = () => (p - 20000 + 0.5) / 40000;
+    require('child_process').spawn(process.argv[2], ['--hub', '--hub-port=' + front, '--app_data_dir=antigravity']);
+    Math.random = draw;
+    const back = Number(globalThis.__spawned[1].find((a) => a.startsWith('--hub-port=')).split('=')[1]);
+    console.log(JSON.stringify({ held: p, back }));
+    process.exit(0);
+})();
+`);
+const portRun = runHubDriver(PORT_DRIVER);
+assert.notStrictEqual(portRun.back, portRun.held, 'the engine was given a port that something already held');
+checked++;
 assert.ok(hubRun.abortedBody.error && hubRun.abortedBody.error !== 'no answer', 'a client was left waiting for a body the engine abandoned: ' + JSON.stringify(hubRun.abortedBody));
 assert.ok(hubRun.resetChunked.error && hubRun.resetChunked.error !== 'no answer', 'a body the engine cut off in the middle of its chunks reached the client as a whole answer: ' + JSON.stringify(hubRun.resetChunked));
 assert.strictEqual(hubRun.switched.status, 502, 'a client got no status for an engine that switched protocols unasked: ' + JSON.stringify(hubRun.switched));
