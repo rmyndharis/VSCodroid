@@ -196,6 +196,8 @@ Prebuilt Android wheels that VSCodroid re-hosts on its own releases, pinned in `
 | pandas | BSD 3-Clause, with vendored components | Termux User Repository |
 | pydantic-core | MIT, with statically linked Rust crates | Termux User Repository |
 | psutil | BSD 3-Clause | Termux, repacked into a wheel |
+| cryptography | Apache 2.0 or BSD 3-Clause, with statically linked Rust crates | Termux, repacked into a wheel |
+| cffi | MIT-0 | VSCodroid, compiled from PyPI's source distribution |
 
 ## Extension Marketplace
 
