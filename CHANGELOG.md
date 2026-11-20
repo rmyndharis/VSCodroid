@@ -61,7 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A .bashrc or machine settings.json that is a link, as when it is kept in a dotfiles repository, stays a link when VSCodroid adds or updates its own lines in it; the repository's file gets them.
 - A .npmrc that is a link keeps only your own lines: the two npm settings this phone needs go into npm's global file, where your file still overrides them, and a copy of them that VSCodroid wrote into the file before it was linked is taken out.
 - A toolchain removal that runs while a file is being written no longer deletes that file's temporary file, which made the write fail.
-- A .bashrc that starts with VSCodroid's header but has text of its own after it is kept as ~/.vscodroid/bashrc.before-repair before the repair replaces it.
+- A .bashrc that starts with VSCodroid's header but has text of its own after it is kept as ~/.vscodroid/bashrc.before-repair before the repair replaces it, and a text an earlier repair kept there is not written over.
 - A toolchain install whose links could not be made fails and asks for free space, instead of being recorded as installed with a tree that does not run.
 - After Stop Server, a webview of the earlier editor page is no longer sent the new connection token at the old port.
 - A workspace folder that holds the sign-in files of Claude Code, Codex or the cargo, Maven, Gradle, Azure, Google Cloud and git tools is no longer readable by webviews.

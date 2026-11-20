@@ -2335,7 +2335,16 @@ class FirstRunSetup(
                 val aside = File(context.filesDir, "home/.vscodroid/bashrc.before-repair")
                 val kept = !beyondHeader || run {
                     aside.parentFile?.mkdirs()
-                    writeAtomically(aside, { Logger.w(tag, it) }) { it.write(bytes ?: ByteArray(0)) }
+                    // The same text again is a rewrite that failed after the text was kept. Anything
+                    // else at the name is an earlier repair's, the only copy of what that one replaced,
+                    // so it moves to a free name of its own before this one takes the place.
+                    val same = runCatching { aside.isFile && aside.readBytes().contentEquals(bytes) }.getOrDefault(false)
+                    same || (
+                        (!aside.exists() || aside.renameTo(
+                            generateSequence(aside.lastModified()) { it + 1 }
+                                .map { File("${aside.path}.$it") }.first { !it.exists() },
+                        )) && writeAtomically(aside, { Logger.w(tag, it) }) { it.write(bytes ?: ByteArray(0)) }
+                        )
                 }
                 // The rewrite is not expected to throw (a failed write is
                 // reported as false), but a throw must not skip the settings
