@@ -2260,7 +2260,7 @@ class SafSyncEngine(private val context: Context) {
     ): Int {
         // Filtered inside the walk rather than after it, so that an entry the device
         // already answers for spends none of the cap: phase 2 settled every one of those,
-        // and on a healthy folder that is every entry, so the record is never read.
+        // and on a healthy folder that is every entry, so the record's lines are never built.
         val plan = uploadPlan(mirrorDir, MAX_UPLOAD_ENTRIES) {
             it.isFile && it.toRelativeString(mirrorDir) !in onDevice
         }
