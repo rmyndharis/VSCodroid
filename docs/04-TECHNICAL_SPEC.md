@@ -1229,10 +1229,14 @@ composition open or not: the keyboard keeps the offsets of a buffer it was given
 editor read the units past its own buffer as units to replace after the caret, and the typed
 edit replaced them across line breaks, so that the lines below the caret were deleted. The
 forced restarts are counted for one version of the model, in one count for every rule and every
-update, and after six with no change of text, touch or turn of the screen the next update a rule would refuse is applied as
+update, and after six with no change of text, each less than half a minute after the one
+before, the next update a rule would refuse is applied as
 the editor without the patch applies it, whatever the six before it refused, so that input
 never stops answering; a range that reaches beyond the buffer is cut at the buffer's end
-first, so that nothing after the buffer is replaced. Nothing of a refusal is kept beyond that
+first, so that nothing after the buffer is replaced. Half a minute with no forced restart, by the
+page's monotonic clock, ends the count, so the refusals of separate moments do not add up to six; a touch or a turn of the
+screen does not end it, because a person whose pick was refused taps the word between tries
+and has to reach the seventh. Nothing of a refusal is kept beyond that
 count: the restart ends the composition, and the update that follows is judged on its own.
 What is refused is a set of shapes; the set and its cases are in the patch's description,
 with what the rules cost: a correction of an earlier word that keeps the caret where it was
@@ -1341,17 +1345,41 @@ a file that holds `twox` on another line, `y` and `z` composed into `line twox` 
 focused, and the key row's Tab turned `line twoxyz` into `line twox`, on the disk too, in 3 of
 3 runs; a hardware Enter did the same in 2 of 2. On Android a content change while composing
 now refilters an open list as a typed key does: the list narrows to the composed word, and a
-list that opened by itself closes when nothing fits. Only an open list is refiltered, so a
-composition update never opens one, and a list is armed at the composition's end as before
-(0025). A list opened by hand that stops fitting stays frozen with its items, as on every
+list that opened by itself closes when nothing fits. Only an open list is refiltered here:
+opening one while a word is composed is 0054's, and a list is also armed at the composition's
+end as before (0025). A list opened by hand that stops fitting stays frozen with its items, as on every
 platform, and Tab still accepts its focused item over the composed word. Other platforms keep
 their behaviour. With the patch built, the same steps kept `line twoxyz` in 5 of 5 runs, the
 key row's Tab in three and a hardware Enter in two, and plain typing on a fresh line opened no
-list in 3 of 3. On an API 36 emulator with Gboard 18.5 and WebView 134, a Korean syllable and
+list in 3 of 3, which was so until 0054. On an API 36 emulator with Gboard 18.5 and WebView 134, a Korean syllable and
 a Japanese word composed under a list opened by hand came out whole in three runs each, and no
 list opened during a composition with none open before. A member list that narrows under
 composed letters has not been measured: Gboard 12.4 commits a letter typed right after a
 period without composing it.
+
+Patch 0054 opens the list while a word is composed. The suggest model follows the caret only
+while no composition is open, and a quick suggestion is armed from there, by a caret that
+typing moves to the right. With a keyboard that composes whole words nothing was armed until
+the composition ended, at the space, where no word is left to complete, or when the keyboard
+was put away, the editor tapped or the app left: on an API 33 emulator with Gboard 12.4 and
+WebView 134, `alp` typed in a JavaScript file that declares `alphabet` and `alphanumeric`
+showed no list, and Back showed both names. On Android a caret that typing moves during a
+composition is now handed to the same code as with none, when the word before the caret ends
+in a letter that is no modifier letter, a digit, an underscore or a dollar sign and holds no
+Han, kana, Hangul or bopomofo character and no full-width form. Any other move of the caret
+during a composition is noted and arms nothing. Those are the scripts a keyboard converts before
+it commits, Gboard's Japanese keyboard holds an unfinished syllable's consonant as a
+full-width letter, and Android shows some dead-key accents as modifier letters. With the patch built, on that emulator, the list opened at the next
+letter, narrowed and widened with the word, a tap on a row and the key row's Tab each wrote
+the name once, Space closed it, a word taken from the keyboard's strip closed it, and a
+period inside the composition accepted nothing; a plain text file showed the words of the
+file; Gboard's Japanese keyboard showed no list for `k`, `ka` or `kere`. Enter in the middle
+of an English word still arrives as a line break in the composition's text and makes a new
+line. Two costs: the list now covers lines under or over the caret while a word is typed,
+as on a desktop, and a pinyin keyboard's Latin letters cannot be told from an English word,
+so `ke` typed for a character showed `keeps` from the file until a candidate was taken. A
+Korean keyboard and a keyboard with dead keys were not run on a device; the patch's cases in
+`check-editcontext-ime.js` cover them.
 
 Gboard 12.4 also sends Enter as a key press when the caret is inside an underlined word or at
 its start, as after a tap on the word or Home, and at once recomposes the word after the
@@ -1647,6 +1675,7 @@ flowchart TD
   P --> P51["0051 EditContext: keep the buffer where it is while the caret does not move"]
   P --> P52["0052 suggest: a retargeted touch outside the list closes it"]
   P --> P53["0053 suggest: an open list follows the letters of a composition"]
+  P --> P54["0054 suggest: a word typed while a keyboard composes opens the list"]
 ```
 
 Five of these are load-bearing in ways their titles understate:
