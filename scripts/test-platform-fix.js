@@ -523,6 +523,24 @@ setTimeout(() => { console.error('the driver gave up waiting'); process.exit(1);
             setTimeout(() => res.socket.destroy(), 50);
             return;
         }
+        if (req.url === '/dropbody') {
+            // Gone before the body is read.
+            req.socket.destroy();
+            return;
+        }
+        if (req.url === '/switch') {
+            // 101 to a request that asked for no upgrade. Node's client drops the connection and reports neither a
+            // response nor an error.
+            res.socket.write('HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: other\\r\\nConnection: Upgrade\\r\\n\\r\\n');
+            return;
+        }
+        if (req.url === '/reset') {
+            // A body sent in chunks, cut by a reset: nothing in what was sent says how long it should have been.
+            res.writeHead(200, { 'Content-Type': 'text/plain' });
+            res.write('hello');
+            setTimeout(() => res.socket.resetAndDestroy(), 50);
+            return;
+        }
         if (req.url === '/badreason') {
             // A status text with a control byte: Node's client takes it and Node's server will not write it back. The
             // socket stays open, so the engine can tell whether the relay let go of it.
@@ -581,6 +599,25 @@ setTimeout(() => { console.error('the driver gave up waiting'); process.exit(1);
     out.uncaughtAfterBadReason = uncaught.slice(uncaughtBefore);
     // An engine that resets in the middle of a body: the client must be let go, not left waiting.
     out.abortedBody = await getAs(front, '/abort', '127.0.0.1:' + front);
+    // The same in the middle of a body sent in chunks: the client must not be handed the part as the whole.
+    out.resetChunked = await getAs(front, '/reset', '127.0.0.1:' + front);
+    // An engine that switches protocols on a request that asked for none: the client gets a status.
+    out.switched = await getAs(front, '/switch', '127.0.0.1:' + front);
+    // A refusal while a large request body is on its way. The relay never reads the rest of that body, so
+    // a connection it kept would be one that answers nothing more: it has to close it.
+    out.refusedBody = await new Promise((resolve) => {
+        let data = '';
+        let settled = false;
+        const done = (closed) => { if (!settled) { settled = true; resolve({ status: data.split('\\r\\n')[0], closed }); } };
+        const socket = net.connect(front, '127.0.0.1', () => {
+            socket.write('POST /dropbody HTTP/1.1\\r\\nHost: 127.0.0.1:' + front + '\\r\\nContent-Length: 4194304\\r\\n\\r\\n');
+            socket.write(Buffer.alloc(65536));
+        });
+        socket.on('data', (d) => { data += d; });
+        socket.on('close', () => done(true));
+        socket.on('error', () => {});
+        setTimeout(() => { done(false); socket.destroy(); }, 1500);
+    });
     // A client that walks away from a response the engine is still writing: the engine has to see it go.
     await new Promise((resolve) => {
         const walker = http.get({ host: '127.0.0.1', port: front, path: '/slow', agent: false }, (res) => { res.once('data', () => { walker.destroy(); resolve(); }); });
@@ -886,12 +923,15 @@ assert.strictEqual(hubRun.badReason.status, 502, 'a client got no status for an 
 assert.deepStrictEqual(hubRun.uncaughtAfterBadReason, [], 'the relay threw on an engine answer whose status text it cannot write');
 assert.strictEqual(hubRun.engineSawBadReasonClose, true, 'the relay kept the engine\'s connection after it could not pass the answer on');
 assert.ok(hubRun.abortedBody.error && hubRun.abortedBody.error !== 'no answer', 'a client was left waiting for a body the engine abandoned: ' + JSON.stringify(hubRun.abortedBody));
+assert.ok(hubRun.resetChunked.error && hubRun.resetChunked.error !== 'no answer', 'a body the engine cut off in the middle of its chunks reached the client as a whole answer: ' + JSON.stringify(hubRun.resetChunked));
+assert.strictEqual(hubRun.switched.status, 502, 'a client got no status for an engine that switched protocols unasked: ' + JSON.stringify(hubRun.switched));
+assert.ok(/^HTTP\/1\.1 502 /.test(hubRun.refusedBody.status) && hubRun.refusedBody.closed, 'the relay kept a connection it had refused, with the rest of a request body nobody reads still expected on it: ' + JSON.stringify(hubRun.refusedBody));
 assert.ok(hubRun.killedWhenFrontIsTaken, 'the engine kept running with no relay when the extension\'s port was taken by someone else');
 assert.strictEqual(hubRun.engineSawClientLeave, true, 'a client that left a response did not reach the engine: the relay kept its side open');
 assert.strictEqual(hubRun.engineSawWaiterLeave, true, 'a client that left before the engine answered did not reach the engine');
 assert.strictEqual(hubRun.upgradeHost, `127.0.0.1:${hubRun.back}`, 'the engine saw an upgrade whose Host is not its own');
 assert.ok(hubRun.hangingEnded.error && hubRun.hangingEnded.error !== 'still open' && hubRun.hangingEnded.error !== 'no answer', 'a response open when the engine ended stayed open: ' + JSON.stringify(hubRun.hangingEnded));
-checked += 14;
+checked += 17;
 checked++;
 
 // Any app on the phone can connect to the relay, which runs in the editor server and shares its file

@@ -427,6 +427,12 @@ if (process.platform === 'android') {
     var net = require('net');
     var pipeline = require('stream').pipeline;
     var sockets = new Set();
+    // The relay's own answer for an engine that gave none. The connection goes with it: a request body
+    // the engine never read may still be on its way, and a connection kept alive would wait behind it.
+    function refuse(res) {
+      res.writeHead(502, 'Bad Gateway', { Connection: 'close' });
+      res.end();
+    }
     var server = http.createServer({ headersTimeout: HEADERS_MS, requestTimeout: REQUEST_MS }, function (req, res) {
       if (!ownHost(req.headers.host, front)) {
         res.writeHead(403);
@@ -451,18 +457,28 @@ if (process.platform === 'android') {
         } catch (e) {
           // Node's client takes a status text with a control byte that its server then refuses to write. Left
           // to throw, the client would wait for ever and the engine's connection would stay open. The refused
-          // call has already stored the text on the response, so the 502 names its own.
-          answer.destroy();
-          res.writeHead(502, 'Bad Gateway');
-          res.end();
+          // call has already stored the text on the response, so the 502 names its own, and the engine's
+          // connection goes when this response closes, below.
+          refuse(res);
           return;
         }
         // Not pipe: an engine that resets in the middle of a body would leave the client waiting for ever.
         pipeline(answer, res, function () { /* both ends are already closed */ });
       });
       up.on('error', function () {
-        if (!res.headersSent) res.writeHead(502);
-        res.end();
+        if (!res.headersSent) {
+          refuse(res);
+          return;
+        }
+        // Part of the answer is on its way already. Ended here, a body sent in chunks would read as
+        // whole to the client; cut off, it reads as what it is.
+        res.destroy();
+      });
+      // An answer that never becomes a response leaves nothing to relay and no error either: the engine
+      // answering 101 to a request that asked for no upgrade is one, Node's client drops that connection and
+      // says nothing. The client would wait for ever.
+      up.on('close', function () {
+        if (!res.headersSent && !res.destroyed) refuse(res);
       });
       res.on('close', function () { up.destroy(); });
       req.pipe(up);
