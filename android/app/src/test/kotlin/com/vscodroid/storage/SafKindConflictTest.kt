@@ -2,8 +2,10 @@ package com.vscodroid.storage
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeFalse
 import org.junit.jupiter.api.Test
 import java.io.File
+import java.nio.file.Files
 
 /**
  * A name the device holds as one kind of document and the mirror holds as the other.
@@ -214,5 +216,36 @@ class SafKindConflictTest : SafInitialSyncTestBase() {
             emptySet<String>(), SafSyncEngine(context).uploadsInFlight(),
             "a record still names a path under the folder that moved away",
         )
+    }
+
+    /**
+     * A copy that cannot be read shows neither that it is the copy the device replaced nor an edit of the
+     * person's. It is left where it is: set aside as work it would be sent back to a device whose owner
+     * replaced the file with a folder, which the vouched case above exists to prevent.
+     */
+    @Test
+    fun `a recorded copy that cannot be read is left where it is and is not put back on the device`() {
+        deviceTree(mapOf("root" to listOf(Child("keep.txt", contents = "kept"), Child("foo", contents = "first draft"))))
+        sync()
+        created.clear()
+        val copy = mirrorFile("foo")
+        copy.setReadable(false)
+        try {
+            assumeFalse(Files.isReadable(copy.toPath()), "This account bypasses file read permissions")
+            deviceTree(
+                mapOf(
+                    "root" to listOf(Child("keep.txt", contents = "kept"), Child("foo", isDirectory = true)),
+                    "doc:foo" to emptyList(),
+                ),
+            )
+
+            sync()
+
+            assertTrue(copy.isFile, "the copy was moved although it could not be read")
+            assertEquals(emptyList<String>(), setAsideCopies("foo").map { it.name })
+            assertEquals(emptyList<String>(), created.map { it.second }, "the copy was put back on the device")
+        } finally {
+            copy.setReadable(true)
+        }
     }
 }

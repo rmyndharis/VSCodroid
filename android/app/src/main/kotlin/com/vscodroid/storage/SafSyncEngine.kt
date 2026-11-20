@@ -1236,7 +1236,7 @@ class SafSyncEngine(private val context: Context) {
         // removing is no work of the user's, and under the name builds up to 1.9.0 gave it, phase
         // 2b would create it on the device. Guarded by the same two facts as phase 2b and phase 3.
         val discardedCaptures = if (enumerationComplete && documents.isNotEmpty()) {
-            previousRecord?.let { discardCutOffRemovalCopies(mirrorDir, it, documents.mapTo(HashSet()) { d -> d.relativePath }) } ?: 0
+            previousRecord?.let { discardCutOffRemovalCopies(mirrorDir, it, documents) } ?: 0
         } else {
             0
         }
@@ -1364,8 +1364,11 @@ class SafSyncEngine(private val context: Context) {
      * next open sent it to the device as work only this app had.
      *
      * Such an entry sits in the directory of the row it was taken for, so the search is one listing of
-     * each directory that holds a row whose document the device no longer lists and the mirror no
-     * longer holds. An entry goes only when it is a regular file with the length of such a row and the
+     * each directory that holds a row whose document the device no longer lists as a file and whose
+     * copy the mirror no longer holds as that row names it: a folder, a link, a file made there since
+     * or nothing stands at its path. (A file the device replaced with a folder is taken from its name by
+     * the same removal, and the folder is what the open finds there.) An entry goes only when it is a
+     * regular file with the length of such a row and the
      * SHA-256 of that row's digest: the bytes of a document the device deleted. Anything else stays,
      * an entry with such a name included, because it may be work, and so does one the device lists:
      * an older build sent its copy there, where it is a document like any other. Runs before
@@ -1377,19 +1380,30 @@ class SafSyncEngine(private val context: Context) {
     private fun discardCutOffRemovalCopies(
         mirrorDir: File,
         previous: Map<String, ByteArray?>,
-        onDevice: Set<String>,
+        documents: List<DocumentInfo>,
     ): Int {
+        val onDevice = documents.mapTo(HashSet()) { it.relativePath }
+        val filesOnDevice = documents.filterNot { it.isDirectory }.mapTo(HashSet()) { it.relativePath }
         val goneRows = HashMap<File, MutableList<Pair<Long, ByteArray>>>()
         for ((identity, digest) in previous) {
             if (digest == null) continue
             val fields = identity.split('\t')
             val length = fields.getOrNull(2)?.toLongOrNull() ?: continue
             val path = unescapeRecordPath(fields[0])
-            if (path.isEmpty() || path in onDevice) continue
+            if (path.isEmpty() || path in filesOnDevice) continue
             val file = File(mirrorDir, path)
             // A row this build cannot make a path of is left to phase 3, which reads rows the same way.
+            // Held only by the copy the row names: a file at its path with that time and length. A
+            // folder, a link or a file made since is not that copy, and the entry beside it is no less
+            // a removal's leftover for it.
             val held = try {
-                Files.exists(file.toPath(), LinkOption.NOFOLLOW_LINKS)
+                val standing = Files.readAttributes(
+                    file.toPath(), BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS,
+                )
+                standing.isRegularFile &&
+                    identityLine(path, standing.lastModifiedTime().toMillis(), standing.size()) == identity
+            } catch (_: NoSuchFileException) {
+                false
             } catch (_: Exception) {
                 continue
             }
@@ -1677,20 +1691,36 @@ class SafSyncEngine(private val context: Context) {
                 if (doc.isDirectory) {
                     val recorded = previouslyRecorded()
                     val identity = identityLine(doc.relativePath, entry.lastModifiedTime().toMillis(), entry.size())
-                    if (recorded != null && matchesRecordedCopy(
-                            destination, doc.relativePath, recordLine(identity, recorded[identity]),
+                    if (recorded != null) {
+                        // Through the removal a deletion on the device uses, which takes the entry from
+                        // its name before it proves its bytes: proved first and unlinked after, a save
+                        // landing between the two went with the unlink and was kept nowhere.
+                        val removed = removeRecordedCopy(
+                            mirrorRoot, doc.relativePath, recordLine(identity, recorded[identity]),
                         )
-                    ) {
-                        requireCurrentParent(destination, localPath, mirrorRoot)
-                        destination.parent.deleteFile(destination.leaf)
-                        requireCurrentParent(destination, localPath, mirrorRoot)
-                        consumeStaleUploadRecord(localPath.absolutePath)
-                        Logger.i(
-                            tag,
-                            "Removed the mirror copy of ${doc.relativePath}: the device replaced " +
-                                "the file with a folder",
-                        )
-                        return
+                        if (removed == true) {
+                            consumeStaleUploadRecord(localPath.absolutePath)
+                            Logger.i(
+                                tag,
+                                "Removed the mirror copy of ${doc.relativePath}: the device replaced " +
+                                    "the file with a folder",
+                            )
+                            return
+                        }
+                        // A copy that could not be read shows neither the recorded copy nor an edit, and
+                        // set aside as work it would go back to a device whose owner replaced the file.
+                        // It stays where it is, as it did when this read was its own and failed.
+                        if (removed == null) {
+                            Logger.w(tag, "Could not make room for ${doc.relativePath}: its mirror copy could not be read")
+                            return
+                        }
+                        // Not the recorded copy, which then stands where it was and is set aside below,
+                        // or it changed while it was taken and the removal kept it beside its name as a
+                        // `.local-` copy and said so. Nothing is in the way then.
+                        if (inboundAttributes(destination) == null) {
+                            consumeStaleUploadRecord(localPath.absolutePath)
+                            return
+                        }
                     }
                 }
                 var time = entry.lastModifiedTime().toMillis()
