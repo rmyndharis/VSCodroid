@@ -48,8 +48,8 @@ class NoticeWiringTest {
         val splash = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/SplashActivity.kt"))
 
         assertEquals(25, Regex("""\bAppNotices\.showNotice\s*\(""").findAll(main).count())
-        assertEquals(3, Regex("""\bAppNotices\.showNotice\s*\(""").findAll(toolchain).count())
-        assertEquals(1, Regex("""\bAppNotices\.showNotice\s*\(""").findAll(splash).count())
+        assertEquals(2, Regex("""\bAppNotices\.showNotice\s*\(""").findAll(toolchain).count())
+        assertEquals(2, Regex("""\bAppNotices\.showNotice\s*\(""").findAll(splash).count())
 
         for ((name, source) in listOf(
             "MainActivity.kt" to main,
