@@ -53,7 +53,7 @@
  * a quick suggestion by another.
  *
  * NEGATIVE CONTROL, measured on the 1.139.1 tree with Node 22.23.2. Against upstream's
- * files, with no patch applied, 92 of the 104 cases fail. Each of these single edits to a
+ * files, with no patch applied, 116 of the 130 cases fail. Each of these single edits to a
  * copy of a patched file fails at least one case:
  *
  *   0046  the body of the blur listener removed; the composing clause dropped from the
@@ -70,7 +70,8 @@
  *         `_isUntypedWriteKeepingCaret`, `_isUntypedInsertKeepingCaret` and
  *         `_isTypedWriteKeepingCaret`; `_isInStepRewrite` answering false; each of the
  *         three exemptions removed (one unit over one unit, a doubled word, a Backspace on
- *         two letters); a letter counted in units; any one code point counted as a letter;
+ *         two letters); a letter counted in units, the one unit over one unit or the two letters of the
+ *         Backspace counted in UTF-16 units; any one code point counted as a letter;
  *         Han, kana and Hangul counted as letters; the bound raised from six to seven; a
  *         forced restart not counted; the count not started again at a new version of the
  *         model; the wait of half a minute removed, or kept for a spent count only; the
@@ -960,7 +961,7 @@ check('0050 fourth rule: one kanji for two kana is a conversion and is applied',
     return [p.state(), applied('金', 1)];
 });
 
-check('0050 fifth rule: a remembered word written over text after the caret is refused', async () => {
+check('0050 fifth rule, which the seventh also refuses: a remembered word written over text after the caret is refused', async () => {
     const p = page('alpha beta Charlie delta', [2]);
     await p.compose();
     await p.update('be', 6, 8, 2);
@@ -968,7 +969,7 @@ check('0050 fifth rule: a remembered word written over text after the caret is r
     return [p.state(), refused('alpha beta Charlie delta', 2)];
 });
 
-check('0050 sixth rule: the word written back grown, the caret kept before the growth, is refused', async () => {
+check('0050 sixth rule, which the seventh also refuses: the word written back grown, the caret kept before the growth, is refused', async () => {
     const p = page('line twox\nline two', [18]);
     await p.compose();
     await p.update('two', 5, 8, 8);
@@ -1516,6 +1517,198 @@ check('0054: a letter with a diacritic, a Cyrillic letter, a digit after a lette
         model.caret(word, ++column);
     }
     return [model.armed(), 5];
+});
+
+// A letter outside the basic plane is one unit to a person and two UTF-16 units to the string, and the two
+// places that tell one unit from two counted the string. A Backspace on a reopened word of two such letters
+// was refused and restarted input, six times, before the seventh was applied.
+check('0050 a Backspace on a reopened two-letter word outside the basic plane is applied, as its basic-plane twin is', async () => {
+    const p = page('\u{1E900}\u{1E901}', [4]);
+    await p.compose();
+    await p.update('\u{1E900}', 0, 4);
+    return [p.state(), applied('\u{1E900}', 2)];
+});
+check('0050 the same where only the second letter is outside the basic plane', async () => {
+    const p = page('a\u{1D431}', [3]);
+    await p.compose();
+    await p.update('a', 0, 3);
+    return [p.state(), applied('a', 1)];
+});
+check('0050 the same after other text, for two Osage letters at the end of the line', async () => {
+    const p = page('word \u{104B0}\u{104B1}', [9]);
+    await p.compose();
+    await p.update('\u{104B0}', 5, 9);
+    return [p.state(), applied('word \u{104B0}', 7)];
+});
+check('0050 the first Backspace on such a word is applied, not the seventh', async () => {
+    const p = page('\u{1E900}\u{1E901}', [4]);
+    const seen = [];
+    for (let i = 0; i < 7; i++) {
+        await p.compose();
+        await p.update('\u{1E900}', 0, 4);
+        seen.push(p.state().text === '\u{1E900}' ? 'applied' : 'refused');
+        if (p.state().text === '\u{1E900}') break;
+    }
+    return [seen, ['applied']];
+});
+check('0050 one letter outside the basic plane written over one, beside the same letter, is applied', async () => {
+    const p = page('\u{1E900}\u{1E901}', [2]);
+    await p.compose();
+    await p.update('\u{1E901}', 0, 2, 2);
+    return [p.state(), applied('\u{1E901}\u{1E901}', 2)];
+});
+
+// Conditions of the rules that no case above depended on. Each case below fails when its condition is
+// loosened or removed, which is how they were found: an edit to one condition at a time, run against the
+// cases that were here before.
+check('0050 a word typed in front of the same word grows and moves the caret, and is applied', async () => {
+    const p = page('the', [0]);
+    await p.compose();
+    await p.update('t', 0, 0);
+    await p.update('th', 0, 1);
+    await p.update('the', 0, 2);
+    return [p.state(), applied('thethe', 3)];
+});
+check('0050 an untyped write of a text of the same length over the range that ends at the caret is refused', async () => {
+    const p = page('abcd', [2]);
+    await p.compose();
+    await p.update('cd', 0, 2, 2);
+    return [p.state(), refused('abcd', 2)];
+});
+check('0050 a longer suggestion taken on a reopened word is applied', async () => {
+    const p = page('line two', [8]);
+    await p.compose();
+    await p.update('two', 5, 8, 8);
+    await p.update('twos', 5, 8);
+    return [p.state(), applied('line twos', 9)];
+});
+check('0050 one letter over a reopened word that starts with that letter is refused', async () => {
+    const p = page('line xyz', [8]);
+    await p.compose();
+    await p.update('x', 5, 8);
+    return [p.state(), refused('line xyz', 8)];
+});
+check('0050 in a composition that typed, one letter over an earlier longer range is refused', async () => {
+    const p = page('line two', [8]);
+    await p.compose();
+    await p.update('x', 8, 8);
+    await p.update('x', 0, 4, 9);
+    return [p.state(), { text: 'line twox', carets: [9], version: 2, restarts: 1 }];
+});
+check('0050 the one-letter-over-a-word shape with no composition open is applied', async () => {
+    const p = page('line two', [8]);
+    await p.compose();
+    await p.endComposition();
+    await p.update('x', 5, 8);
+    return [p.state(), applied('line x', 6)];
+});
+check('0050 one digit over a reopened word is refused', async () => {
+    const p = page('line two', [8]);
+    await p.compose();
+    await p.update('7', 5, 8);
+    return [p.state(), refused('line two', 8)];
+});
+check('0050 after a typed composition has ended, the write the ninth rule refuses is applied', async () => {
+    const p = page('abc line two', [12]);
+    await p.compose();
+    await p.update('x', 12, 12);
+    await p.endComposition();
+    await p.update('abc', 12, 13, 13);
+    return [p.state(), applied('abc line twoabc', 13)];
+});
+check('0050 with no composition open, an insertion that keeps the caret is applied', async () => {
+    const p = page('line two', [8]);
+    await p.compose();
+    await p.endComposition();
+    await p.update('two', 8, 8, 8);
+    return [p.state(), applied('line twotwo', 8)];
+});
+check('0050 a tail drop whose word is a multiple of the text without being its repetition is refused', async () => {
+    const p = page('hell', [2]);
+    await p.compose();
+    await p.update('he', 0, 4, 2);
+    return [p.state(), refused('hell', 2)];
+});
+check('0050 a write over a range around the caret whose text is not the part before the caret is applied', async () => {
+    const p = page('alpha beta Charlie', [9]);
+    await p.compose();
+    await p.update('bxt', 6, 10, 9);
+    return [p.state(), applied('alpha bxt Charlie', 9)];
+});
+check('0050 in a composition that has typed, the tail-drop shape is not judged by the second rule', async () => {
+    const p = page('alpha beta Charlie', [9]);
+    await p.compose();
+    await p.update('x', 9, 9);
+    await p.update('betx', 6, 11, 10);
+    return [p.state(), applied('alpha betx Charlie', 10)];
+});
+check('0050 one letter over the word that starts at the caret is applied', async () => {
+    const p = page('line two', [5]);
+    await p.compose();
+    await p.update('x', 5, 8);
+    return [p.state(), applied('line x', 6)];
+});
+check('0050 the write the ninth rule refuses is refused over a range that starts at the beginning of the buffer', async () => {
+    const p = page('two', [3]);
+    await p.compose();
+    await p.update('x', 3, 3);
+    await p.update('ab', 0, 4, 4);
+    return [p.state(), { text: 'twox', carets: [4], version: 2, restarts: 1 }];
+});
+check('0050 one kana, katakana or Hangul syllable over a reopened word of three is applied', async () => {
+    const out = [];
+    for (const [w, l] of [['あいう', 'か'], ['アイウ', 'カ'], ['가나다', '각']]) {
+        const p = page(w, [3]);
+        await p.compose();
+        await p.update(l, 0, 3);
+        out.push(p.state().text);
+    }
+    return [out, ['か', 'カ', '각']];
+});
+check('0050 off Android no rule refuses a write', async () => {
+    const runs = [];
+    const d = (text, carets) => new Page(desktop, text, carets);
+    let p = d('line twzox', [8]); await p.compose(); await p.update('twz', 5, 10, 8); runs.push(p.state().restarts);
+    p = d('line two', [8]); await p.compose(); await p.update('x', 5, 8); runs.push(p.state().restarts);
+    p = d('alpha beta Charlie delta', [2]); await p.compose(); await p.update('alpha', 6, 8, 2); runs.push(p.state().restarts);
+    p = d('line twox\nline two', [18]); await p.compose(); await p.update('two', 5, 8, 8); await p.update('twox', 5, 8, 8); runs.push(p.state().restarts);
+    p = d('line two', [8]); await p.compose(); await p.update('two', 8, 8, 8); runs.push(p.state().restarts);
+    p = d('abc line two', [12]); await p.compose(); await p.update('x', 12, 12); await p.update('abc', 12, 13, 13); runs.push(p.state().restarts);
+    p = d('above\nline twox\nbelow', [15]); await p.update('twox', 74, 75, 9); runs.push(p.state().restarts);
+    return [runs, [0, 0, 0, 0, 0, 0, 0]];
+});
+check('0050 off Android an update beyond the buffer is clamped to it, not refused', async () => {
+    const p = new Page(desktop, 'above\nline twox\nbelow', [15]);
+    await p.update('twox', 74, 75, 9);
+    return [p.state().text, 'above\nline twoxtwox'];
+});
+check('0050 the tail drop of the first word of the buffer is refused', async () => {
+    const p = page('twzox line', [3]);
+    await p.compose();
+    await p.update('twz', 0, 5, 3);
+    return [p.state(), refused('twzox line', 3)];
+});
+check('0050 one letter over the reopened first word of the buffer is refused', async () => {
+    const p = page('two', [3]);
+    await p.compose();
+    await p.update('x', 0, 3);
+    return [p.state(), refused('two', 3)];
+});
+check('0054 an uppercase and a titlecase final letter arm one each', async () => {
+    const model = suggestModel(android, false);
+    model.hooks.compositionStart();
+    model.caret('A', 2);
+    model.caret('A\u01C5', 3);
+    return [model.armed(), 2];
+});
+check('0054 a composition ended by a Backspace move arms a suggestion at its end', async () => {
+    const model = suggestModel(android, false);
+    model.hooks.compositionStart();
+    model.caret('alp', 4);
+    model.caret('al', 3, 'deleteLeft');
+    const before = model.armed();
+    model.hooks.compositionEnd();
+    return [[before, model.armed()], [1, 2]];
 });
 
 // A case that never settles leaves the event loop nothing to wait for, and Node then exits 0
