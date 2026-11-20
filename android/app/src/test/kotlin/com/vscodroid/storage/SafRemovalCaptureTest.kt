@@ -51,4 +51,13 @@ class SafRemovalCaptureTest {
         assertTrue("selected.sibling(removalCaptureName())" in removal) { "the removal names its copy another way" }
         assertFalse("removed\$LOCAL_COPY_SUFFIX" in removal) { "the removal names its copy like a copy that is uploaded" }
     }
+
+    @Test
+    fun `a file the device replaced with a folder is removed through the capture too`() {
+        val source = SourceScan.read("src/main/kotlin/com/vscodroid/storage/SafSyncEngine.kt")
+        val clear = SourceScan.body(source, "private fun clearKindConflict(")
+
+        assertTrue("removeRecordedCopy(" in clear) { "the kind conflict removes the copy by another way than the capture" }
+        assertFalse("deleteFile(destination.leaf)" in clear) { "the kind conflict deletes an entry it has not taken from its name" }
+    }
 }

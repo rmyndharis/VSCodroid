@@ -303,4 +303,44 @@ class SafCutOffRemovalCopyTest : SafInitialSyncTestBase() {
 
         assertTrue(capture.exists(), "bytes no digest proves were removed")
     }
+
+    /**
+     * A file the device replaced with a folder is taken from its name by the same removal, and a kill
+     * after that leaves the same entry. A folder stands at the row's path by then, and the device lists
+     * it, so neither held the entry back: only a file at that path is the copy a row names.
+     */
+    @Test
+    fun `the copy a killed removal left of a file the device replaced with a folder is removed`() {
+        firstOpen(Child("foo", contents = "first draft"))
+        val capture = cutOff("foo", newName())
+        deviceTree(mapOf(
+            "root" to listOf(Child("keep.txt", contents = "k"), Child("foo", isDirectory = true)),
+            "doc:foo" to emptyList(),
+        ))
+
+        sync()
+
+        assertFalse(capture.exists(), "the copy of the file the device replaced with a folder stayed for good")
+        assertTrue(mirrorFile("foo").isDirectory)
+        assertEquals(emptyList<String>(), names(), "the copy was created on the device")
+    }
+
+    /**
+     * Something made the path again between the kill and the open. What stands there is not the copy the
+     * row names, so it does not hold the entry back, and the new file is the person's and stays.
+     */
+    @Test
+    fun `the copy a killed removal left is removed though the path was made again with other bytes`() {
+        firstOpen(Child("notes.txt", contents = "first draft"))
+        val capture = cutOff("notes.txt", newName())
+        mirrorFile("notes.txt").writeText("new work of the person")
+        deviceKeepsOnly()
+
+        sync()
+
+        assertFalse(capture.exists(), "the copy of a deleted document stayed because its path was made again")
+        assertTrue(mirror.walk().any { it.isFile && it.readText() == "new work of the person" }) {
+            "the file made after the kill was lost"
+        }
+    }
 }
