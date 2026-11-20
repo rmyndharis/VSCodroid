@@ -2311,7 +2311,13 @@ class FirstRunSetup(
             val headerWithoutBody = text != null &&
                 text.startsWith(BASHRC_HEADER) &&
                 !text.contains("export PROJECTS_DIR")
-            if (emptied || headerWithoutBody) {
+            // A header with nothing after it is a cut-short copy of ours. Text after the header is a
+            // person's own or a longer cut, and the header proves nothing about it.
+            val beyondHeader = headerWithoutBody && text.orEmpty().removePrefix(BASHRC_HEADER).isNotBlank()
+            // And a link is the file they keep elsewhere, often in a repository other machines read:
+            // the rewrite would put this device's paths into what the link names. Left as it is.
+            val theirs = beyondHeader && Files.isSymbolicLink(bashrc.toPath())
+            if ((emptied || headerWithoutBody) && !theirs) {
                 // Written OVER, never deleted first. Deleting is what satisfied
                 // createBashrc's `!exists()` guard, and it is also what let this
                 // repair finish the job the full disk started: the rewrite can
@@ -2327,11 +2333,8 @@ class FirstRunSetup(
                 // where an appender behind this one can take that retry away
                 // before the next launch gets here, see the KDoc.
                 //
-                // A header with nothing after it is a cut-short copy of ours. Text after
-                // the header is a person's own or a longer cut, and the header proves
-                // nothing about it, so it is kept aside before the rewrite, and the
-                // rewrite waits for the next launch if it cannot be kept.
-                val beyondHeader = headerWithoutBody && text.orEmpty().removePrefix(BASHRC_HEADER).isNotBlank()
+                // Text after the header is kept aside before the rewrite, and the rewrite waits
+                // for the next launch if it cannot be kept.
                 val aside = File(context.filesDir, "home/.vscodroid/bashrc.before-repair")
                 val kept = !beyondHeader || run {
                     aside.parentFile?.mkdirs()
@@ -2361,6 +2364,8 @@ class FirstRunSetup(
                             "than gone, so there is still something for the next launch to repair.",
                     )
                 }
+            } else if (theirs) {
+                Logger.i(tag, "Left a linked .bashrc that holds text of its own after the header as it is")
             }
         } else if (!bashrc.exists() && bashrc.parentFile?.isDirectory == true) {
             // The parent test is not defensive tidying; without it this arm fired
