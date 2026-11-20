@@ -274,7 +274,7 @@ if [ -d "$PATCHES" ] && [ -n "$(ls -A "$PATCHES"/*.patch 2>/dev/null)" ]; then
     done
     # A premise of 0022 that applying it cannot see: see the checker's header.
     python3 "$SCRIPT_DIR/check-editcontext-sync.py" "$SRC"
-    # What 0046 to 0053 decide for a composing keyboard, run on the file they
+    # What 0046 to 0054 decide for a composing keyboard, run on the files they
     # have just patched: that the hunks landed says nothing about what the
     # rules they add up to decide.
     node "$SCRIPT_DIR/check-editcontext-ime.js" "$SRC"

@@ -1,5 +1,5 @@
 /**
- * Self-check for the editor's handling of a composing keyboard, patches 0046 to 0053.
+ * Self-check for the editor's handling of a composing keyboard, patches 0046 to 0054.
  *
  *   node scripts/check-editcontext-ime.js <patched vscode source root>
  *
@@ -47,12 +47,13 @@
  * "a keyboard that goes on with the range" replay one that did not read the text again,
  * which neither Gboard recorded did.
  *
- * 0052 and 0053 are reached without their widgets. `_onListTap` runs on an object that
- * has the three members it reads, and `SuggestModel` is built on an editor made of its
- * event hooks, with upstream's refilter replaced by a counter.
+ * 0052, 0053 and 0054 are reached without their widgets. `_onListTap` runs on an object
+ * that has the three members it reads, and `SuggestModel` is built on an editor made of
+ * its event hooks, with upstream's refilter replaced by a counter and the call that arms
+ * a quick suggestion by another.
  *
  * NEGATIVE CONTROL, measured on the 1.139.1 tree with Node 22.23.2. Against upstream's
- * files, with no patch applied, 86 of the 93 cases fail. Each of these single edits to a
+ * files, with no patch applied, 92 of the 104 cases fail. Each of these single edits to a
  * copy of a patched file fails at least one case:
  *
  *   0046  the body of the blur listener removed; the composing clause dropped from the
@@ -82,6 +83,12 @@
  *   0052  the bounds test of `_onListTap` removed.
  *   0053  the Android branch of the content listener removed, and taken on every
  *         platform; `_refilterWhileComposing` going on with no list open.
+ *   0054  the call in the cursor listener removed, and made on every platform, and made
+ *         for a caret that typing did not move, for one a cursor key moved, and for a
+ *         selection; the place of a move that is not followed not noted;
+ *         `_composesTypedLetters` answering true; its test for a converted script
+ *         removed, or for a full-width form alone; its test for a last letter removed,
+ *         widened to modifier letters, or without the dollar sign.
  *
  * Three edits change no case, and no case could see them. The calls of
  * `_isStaleWriteAfterCaret` and `_isGrowthAfterCaret` removed from the chain:
@@ -1347,17 +1354,36 @@ check('0052: a touch at the bottom edge is outside', async () => [listTap(50, 18
 function suggestModel(tree, listOpen) {
     const hooks = {};
     const hook = name => (listener) => { hooks[name] = listener; return standIn; };
+    // The caret's column on line 1 and the word that ends at it, which the cursor cases move.
+    const at = { column: 1, word: '' };
+    const selection = () => new tree.Selection(1, at.column, 1, at.column);
+    const textModel = new Proxy({
+        getWordUntilPosition: () => ({ word: at.word }),
+    }, { get: (target, key) => key in target ? target[key] : standIn });
     const editor = new Proxy({
-        getSelection: () => null,
+        getSelection: selection,
+        getPosition: () => selection().getPosition(),
+        hasModel: () => true,
+        getModel: () => textModel,
         onDidCompositionStart: hook('compositionStart'),
         onDidCompositionEnd: hook('compositionEnd'),
         onDidChangeModelContent: hook('content'),
+        onDidChangeCursorSelection: hook('cursor'),
     }, { get: (target, key) => key in target ? target[key] : standIn });
     const model = new tree.SuggestModel(editor, standIn, standIn, standIn, standIn, standIn, standIn, standIn, standIn);
     let refilters = 0;
+    let armed = 0;
     model._refilterCompletionItems = () => { refilters++; };
+    model._doTriggerQuickSuggest = () => { armed++; };
     model._triggerState = listOpen ? { auto: true } : undefined;
-    return { hooks, refilters: () => refilters };
+    // A caret move as the editor reports it: the word that now ends at the caret, the column, and who moved it.
+    // With `anchor` it is a selection from that column to the caret.
+    const caret = (word, column, source = 'keyboard', reason = tree.CursorChangeReason.NotSet, anchor = column) => {
+        at.word = word;
+        at.column = column;
+        hooks.cursor({ selection: new tree.Selection(1, anchor, 1, column), reason, source });
+    };
+    return { hooks, caret, refilters: () => refilters, armed: () => armed, open: () => model._triggerState !== undefined };
 }
 
 check('0053: a content change while a keyboard composes refilters an open list', async () => {
@@ -1386,6 +1412,110 @@ check('0053: with no composition an open list is refiltered as upstream does it'
     const model = suggestModel(android, true);
     model.hooks.content();
     return [model.refilters(), 1];
+});
+
+// --- 0054: a word typed while a keyboard composes arms a quick suggestion ---
+
+check('0054: a letter typed into a composing word arms a quick suggestion, and so does the next one', async () => {
+    const model = suggestModel(android, false);
+    model.hooks.compositionStart();
+    model.caret('a', 2);
+    model.caret('al', 3);
+    return [model.armed(), 2];
+});
+
+check('0054: off Android a composing word arms nothing before it ends', async () => {
+    const model = suggestModel(desktop, false);
+    model.hooks.compositionStart();
+    model.caret('a', 2);
+    return [model.armed(), 0];
+});
+
+check('0054: a deletion inside a composing word arms nothing', async () => {
+    const model = suggestModel(android, false);
+    model.hooks.compositionStart();
+    model.caret('alp', 4);
+    model.caret('al', 3);
+    return [model.armed(), 1];
+});
+
+// Outside a composition a caret that anything but typing moves ends an open list, and a cursor key refilters it. Inside one it is left as it is, as before this patch: the keyboard moves carets and sets selections of its own.
+check('0054: a caret that typing did not move arms nothing, and leaves an open list open and as it was', async () => {
+    const model = suggestModel(android, true);
+    model.hooks.compositionStart();
+    model.caret('alp', 4, 'api');
+    model.caret('alp', 5, 'keyboard', android.CursorChangeReason.Explicit);
+    model.caret('alp', 4, 'keyboard', android.CursorChangeReason.NotSet, 1);
+    return [{ armed: model.armed(), open: model.open(), refilters: model.refilters() }, { armed: 0, open: true, refilters: 0 }];
+});
+
+// The place of a move that is not followed is still noted. Left at the place of the last followed move, the Backspace here read as a move to the right.
+check('0054: a Backspace over an apostrophe arms nothing', async () => {
+    const model = suggestModel(android, false);
+    model.hooks.compositionStart();
+    model.caret('don', 4);
+    model.caret('', 5);
+    model.caret('don', 4);
+    return [model.armed(), 1];
+});
+
+check('0054: a letter typed after the keyboard moved the caret back arms a suggestion', async () => {
+    const model = suggestModel(android, false);
+    model.hooks.compositionStart();
+    model.caret('alph', 5);
+    model.caret('a', 2, 'keyboard', android.CursorChangeReason.Explicit);
+    model.caret('ax', 3);
+    return [model.armed(), 2];
+});
+
+check('0054: with a list open a typed letter arms no second one', async () => {
+    const model = suggestModel(android, true);
+    model.hooks.compositionStart();
+    model.caret('a', 2);
+    return [model.armed(), 0];
+});
+
+// The full-width k is what Gboard's Japanese keyboard holds while it waits for the vowel of ka (recorded on API 33, Gboard 12.4).
+check('0054: kana, a Hangul syllable, a Han character, bopomofo and a full-width letter arm nothing, alone or after Latin letters', async () => {
+    const model = suggestModel(android, false);
+    model.hooks.compositionStart();
+    let column = 1;
+    for (const word of ['\u304b', '\u30ab', '\ud55c', '\u6f22', '\u3105', '\uff4b', 'ab\u304b', '\u6f22a', '\u3051\uff52']) {
+        model.caret(word, ++column);
+    }
+    return [model.armed(), 0];
+});
+
+// U+02C6, U+02C7 and U+02CB are what Android's key character map shows for a dead circumflex, caron and grave, and Unicode files them as letters.
+check('0054: a lone accent of a dead key arms nothing, a symbol or a modifier letter', async () => {
+    const model = suggestModel(android, false);
+    model.hooks.compositionStart();
+    let column = 1;
+    for (const word of ['\u00b4', 'a\u00a8', '\u02c6', '\u02c7', '\u02cb', '\u02ca', '\u30fc']) {
+        model.caret(word, ++column);
+    }
+    return [model.armed(), 0];
+});
+
+// Known limit: the mark is no letter, so the syllable or the accented letter waits for the letter after it.
+check('0054: a word that ends in a combining mark arms nothing until its next letter', async () => {
+    const model = suggestModel(android, false);
+    model.hooks.compositionStart();
+    model.caret('e\u0301', 3);
+    model.caret('\u0e01\u0e48', 5);
+    const before = model.armed();
+    model.caret('\u0e01\u0e48\u0e01', 6);
+    return [[before, model.armed()], [0, 1]];
+});
+
+check('0054: a letter with a diacritic, a Cyrillic letter, a digit after a letter, an underscore and a dollar sign arm one each', async () => {
+    const model = suggestModel(android, false);
+    model.hooks.compositionStart();
+    let column = 1;
+    for (const word of ['\u00e9', '\u0436', 'a1', '_', '$']) {
+        model.caret(word, ++column);
+    }
+    return [model.armed(), 5];
 });
 
 // A case that never settles leaves the event loop nothing to wait for, and Node then exits 0

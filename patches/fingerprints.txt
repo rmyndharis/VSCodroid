@@ -453,3 +453,5 @@
 0052 suggest list tap bounds|out/vs/code/browser/workbench/workbench.js|this._onListTap(
 # The call that refilters an open suggestion list on a content change while a composition is open, on Android.
 0053 suggest refilter while composing|out/vs/code/browser/workbench/workbench.js|this._refilterWhileComposing()
+# The call in the cursor listener that follows a caret typing moved while a keyboard composes a word.
+0054 suggest while a keyboard composes|out/vs/code/browser/workbench/workbench.js|this._typedWhileComposing && this._composesTypedLetters()

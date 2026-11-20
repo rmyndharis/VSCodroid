@@ -1,0 +1,172 @@
+Arm a quick suggestion while an Android keyboard composes a word.
+
+The suggest model follows the caret only while no composition is open.
+Its cursor listener returns early while the editor composes, because on
+a desktop what a composition holds is a dead key's accent or an input
+method's reading, text that is about to become something else, and a
+quick suggestion is armed from that listener, by a caret that typing
+moves to the right. An Android keyboard composes whole words: from the
+first letter of a word to the space after it, every key is an update of
+one open composition. Nothing was armed while a word was typed, and a
+list came only when the composition ended: at the space, where no word
+is left to complete, or when the person put the keyboard away, tapped
+the editor or left the app, each of which ends the composition with the
+word still before the caret. On an API 33 emulator with Gboard 12.4 and
+WebView 134, alp typed in a JavaScript file that declares alphabet and
+alphanumeric showed no list, and Back, which puts the keyboard away,
+showed both names. With Gboard's suggestion strip turned off the
+keyboard composes nothing, and the list came as on a desktop on the same
+emulator without this patch. Patch 0053 refilters a list that is open
+while a keyboard composes; nothing opened one.
+
+On Android the cursor listener now hands a caret move made during a
+composition to the code it runs with none (_onCursorChange) when typing
+made the move (an empty selection, reason NotSet, source keyboard or
+deleteLeft, which is the test the listener already made for 0025) and
+the word before the caret is text as it was typed: it ends in a letter
+that is not a modifier letter, a digit, an underscore or a dollar sign,
+and holds no character of Han, Hiragana, Katakana, Hangul or Bopomofo
+and no full-width form. Everything after that is the code a desktop
+runs: the quick suggest delay, editor.quickSuggestions and the kind of
+token at the caret, the test for a word at the caret, and with a list
+open a typed letter arms nothing, the list being refiltered by 0053. A
+caret that anything else moves during a composition arms and cancels
+nothing, as before, so a list stays open through the selections a
+keyboard sets by itself; its place is noted, so that the next typed move
+is compared with where the caret was. Left at the place of the last
+followed move, a Backspace over an apostrophe read as a move to the
+right and armed a suggestion, and a letter typed after the keyboard had
+moved the caret back armed none. Other platforms return early as before.
+
+The scripts left out are the ones a keyboard converts before it commits:
+kana and kanji, the jamo of a Hangul syllable, bopomofo. The word before
+the caret is then a reading that a conversion is about to replace.
+Gboard's Japanese keyboard holds the consonant of a syllable it has not
+finished as a full-width letter (k typed for ka is U+FF4B until the a
+arrives, recorded on the same emulator), which is why full-width forms
+are left out as well. A lone accent of a dead key does not pass the
+first test: most are symbols, and the ones Android shows as modifier
+letters (a circumflex, a caron and a grave are U+02C6, U+02C7 and
+U+02CB) are why modifier letters do not count, which leaves out a
+bopomofo tone and the kana length mark as well. A word that ends in a
+combining mark, as a Thai syllable with a tone or a letter followed by a
+combining accent does, arms nothing until its next letter. A Latin word
+typed straight after a character of those scripts, with no space, arms
+nothing where the language's word pattern takes the two as one word.
+
+With the patch built into the server, on that emulator: with alp before
+the caret, h showed alphabet and alphanumeric, an brought the list down
+to alphanumeric and Backspace brought both back; a tap on a row and the
+key row's Tab each wrote the whole name once; Space closed the list; a
+word taken from the keyboard's strip with the list open was written with
+its space and closed the list; a period arrived inside the composition's
+text and accepted nothing, and the list a trigger character opens
+followed it. In a plain text file rel showed relay and relays from the
+words of the file. The list is asked of the language's providers and
+comes when they answer: in seven runs of Enter and then al it was up
+half a second after the l in five, 1.7 s after it in one, and not yet up
+after 1.2 s in one, where a Space typed next ended it. On Gboard's
+Japanese keyboard k, ka, kere and an Enter that commits showed no list
+at any step. With don typed, an apostrophe added and then deleted, a
+build of this patch that did not note the apostrophe's move showed the
+list again, some seconds late; this one showed none in 8 s, and the
+letter typed after brought it.
+
+What it does not change: Enter. Gboard sends Enter in the middle of an
+English word as a line break inside the composition's text, so it makes
+a new line and closes the list, as it did when no list was there; a
+suggestion is accepted by a tap on its row or by the key row's Tab, and
+by Enter only where the keyboard sends it as a key. What it costs: the
+list now opens under or over the line while a word is typed, in every
+file whose language arms quick suggestions, plain text included, as it
+does on a desktop; editor.quickSuggestions turns it off. A pinyin
+keyboard composes Latin letters that a pick replaces with characters,
+which the test cannot tell from an English word: on the same emulator ke
+typed on Gboard's pinyin keyboard in a text file that holds keeps showed
+keeps while the candidates were offered, and the list closed when a
+candidate was taken. An Enter that commits the letters as they are
+leaves the list open and the next Enter accepts the suggestion; a build
+without this patch does the same, with the list opening at the commit
+(both measured). Where a language arms no suggestion in comments and
+strings, which is the default, Chinese typed there shows none. A
+keyboard that sends punctuation as a typed key and not inside the
+composition accepts the focused suggestion at a commit character, as a
+desktop does; Gboard 12.4 does not send it that way.
+
+scripts/check-editcontext-ime.js holds its cases, over the patched
+suggestModel.ts with the editor replaced by an adapter. Suggestions are
+expected for a letter and the next one, for a letter with a diacritic, a
+Cyrillic letter, a digit after a letter, an underscore and a dollar
+sign, and for a letter typed after the keyboard moved the caret back;
+each of those fails without the patch. Nothing is expected off Android,
+for a deletion, for a Backspace over an apostrophe, for a caret that
+typing did not move or a selection the keyboard makes (an open list
+stays open and is not refiltered), for kana, a Hangul syllable, a Han
+character, bopomofo and a full-width letter, alone or beside Latin
+letters, for a lone accent or another modifier letter, and for a word
+that ends in a combining mark; each of those fails when the test it
+stands for is removed. One case, a typed letter with a list open, holds
+on every tree and pins what the patch must not change. Not run on a
+device: a Korean keyboard, a keyboard that composes with dead keys, and
+Gboard versions other than 12.4.
+
+diff --git a/src/vs/editor/contrib/suggest/browser/suggestModel.ts b/src/vs/editor/contrib/suggest/browser/suggestModel.ts
+index 625b0d55..a0da2e6d 100644
+--- a/src/vs/editor/contrib/suggest/browser/suggestModel.ts
++++ b/src/vs/editor/contrib/suggest/browser/suggestModel.ts
+@@ -207,6 +207,20 @@ export class SuggestModel implements IDisposable {
+ 			}
+ 			this._typedWhileComposing = e.selection.isEmpty() && e.reason === CursorChangeReason.NotSet
+ 				&& (e.source === 'keyboard' || e.source === 'deleteLeft');
++			// An Android keyboard composes whole words, so a word typed from its first letter to its
++			// last is one composition, and the quick suggestion that typing arms elsewhere came only
++			// when the word was done. A caret that typing moves while such a word is composed is
++			// followed as it is with no composition. Any other move is only noted, so that the next
++			// one followed is compared with where the caret was: left where the last followed move
++			// had put it, a Backspace over an apostrophe read as a move to the right and armed a
++			// suggestion, and a letter typed after the keyboard moved the caret back armed none.
++			if (isAndroid) {
++				if (this._typedWhileComposing && this._composesTypedLetters()) {
++					this._onCursorChange(e);
++				} else {
++					this._currentSelection = e.selection;
++				}
++			}
+ 		}));
+ 		this._toDispose.add(this._editor.onDidChangeModelContent(() => {
+ 			// only filter completions when the editor isn't composing a character
+@@ -435,8 +449,8 @@ export class SuggestModel implements IDisposable {
+ 	// of one open composition, and the filter above skips them all, so an open list kept the items
+ 	// of the word as it stood when the list was computed, and Tab or a hardware Enter replaced
+ 	// everything typed since with the focused item. An open list follows the composed word here as
+-	// it follows typing elsewhere. Only an open session is refiltered: with none, nothing opens
+-	// before the composition ends, where a list is armed as before.
++	// it follows typing elsewhere. Only an open session is refiltered: a list is opened by the
++	// caret that typing moves, in the cursor listener, and never by a content change.
+ 	private _refilterWhileComposing(): void {
+ 		if (this._triggerState === undefined) {
+ 			return;
+@@ -444,6 +458,23 @@ export class SuggestModel implements IDisposable {
+ 		this._refilterCompletionItems();
+ 	}
+ 
++	// Whether the word a keyboard is composing before the caret is text as it was typed: it ends in a
++	// letter, a digit or an identifier sign, and holds no character of a script that a keyboard
++	// converts before it commits (kana and kanji, the jamo of a Hangul syllable, bopomofo) and no
++	// full-width form, which is how a Japanese keyboard shows the consonant of a syllable it has
++	// not finished. Such text is about to become something else, and a dead key's lone accent is
++	// not a letter yet. A modifier letter does not count as a letter here: Android shows a dead
++	// circumflex, caron and grave as one (U+02C6, U+02C7, U+02CB), and a bopomofo tone and the
++	// kana length mark are modifier letters as well.
++	private _composesTypedLetters(): boolean {
++		if (!this._editor.hasModel()) {
++			return false;
++		}
++		const word = this._editor.getModel().getWordUntilPosition(this._editor.getPosition()).word;
++		return /[\p{Ll}\p{Lu}\p{Lt}\p{Lo}\p{Nd}_$]$/u.test(word)
++			&& !/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Bopomofo}\uFF00-\uFFEF]/u.test(word);
++	}
++
+ 	private _doTriggerQuickSuggest(): void {
+ 
+ 		if (QuickSuggestionsOptions.isAllOff(this._editor.getOption(EditorOption.quickSuggestions))) {
