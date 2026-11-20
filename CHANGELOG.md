@@ -58,7 +58,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The server build completes the Copilot extension's `@github/copilot` package from its source, so a build no longer comes out with files missing: one published build had lost two, and the sixteen files of `sdk/queries` were in some builds and not in others.
 - A server tree whose `@github/copilot` package is not the expected set of files is refused when it is built and when it is fetched.
 - The Codex toolchain card quotes 375 MB, up from 360 MB, so the pack of a newer Codex build still fits its recorded size.
-- A .bashrc, .npmrc or machine settings.json that is a link, as when it is kept in a dotfiles repository, stays a link when VSCodroid adds or updates its own lines in it; the repository's file gets them.
+- A .bashrc or machine settings.json that is a link, as when it is kept in a dotfiles repository, stays a link when VSCodroid adds or updates its own lines in it; the repository's file gets them.
+- A .npmrc that is a link keeps only your own lines: the two npm settings this phone needs go into npm's global file, where your file still overrides them, and a copy of them that VSCodroid wrote into the file before it was linked is taken out.
 - A toolchain removal that runs while a file is being written no longer deletes that file's temporary file, which made the write fail.
 - A .bashrc that starts with VSCodroid's header but has text of its own after it is kept as ~/.vscodroid/bashrc.before-repair before the repair replaces it.
 - A toolchain install whose links could not be made fails and asks for free space, instead of being recorded as installed with a tree that does not run.

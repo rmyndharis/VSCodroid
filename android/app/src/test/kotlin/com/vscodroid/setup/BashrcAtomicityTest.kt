@@ -715,8 +715,13 @@ __vscodroid_pip_note() {
         }
     }
 
+    /**
+     * A `.npmrc` that is a link is the person's file kept elsewhere, and the two lines are this device's
+     * alone: written through the link they landed in a file other machines may read, where a bash under
+     * this install's library directory does not exist and the platform is not android.
+     */
     @Test
-    fun `an npmrc that is a link keeps being a link when the lines the app owns are written`() {
+    fun `an npmrc that is a link is left as it is and the lines the app owns go to npm's global file`() {
         val theirs = File(filesDir, "dotfiles/.npmrc").apply {
             parentFile.mkdirs()
             writeText("registry=https://registry.example/\n")
@@ -729,20 +734,109 @@ __vscodroid_pip_note() {
         FirstRunSetup(context).createNpmWrappers()
 
         assertTrue(Files.isSymbolicLink(npmrc.toPath()), "the link was replaced by a copy")
-        assertTrue(theirs.readText().startsWith("script-shell="), "the line the app owns went somewhere npm does not read")
-        assertTrue(theirs.readText().contains("registry=https://registry.example/"), "their line did not survive")
+        assertEquals("registry=https://registry.example/\n", theirs.readText(), "the person's file was written to")
+        assertTrue(
+            Regex("""^script-shell=\S*libbash\.so\nos=android\n$""").matches(File(filesDir, "usr/etc/npmrc").readText()),
+            "the lines the app owns are not in the file npm reads for every user of this prefix",
+        )
+    }
+
+    /**
+     * The linked file can hold the app's own lines: written into `~/.npmrc` before the person moved
+     * it into a repository and linked it back. npm reads a user file before the global one, so a
+     * script shell left there from before an update named a bash that is gone, and every npm
+     * script failed. They are taken out, through the link, and only they.
+     */
+    @Test
+    fun `the lines the app wrote into a file that is now linked are taken out of it`() {
+        val theirs = File(filesDir, "dotfiles/.npmrc").apply {
+            parentFile.mkdirs()
+            writeText(
+                "script-shell=/data/app/~~old==/com.vscodroid-old==/lib/arm64/libbash.so\nos=android\n" +
+                    "registry=https://registry.example/\r\nos[]=linux\n//registry.example/:_authToken=abc\n",
+            )
+        }
+        val npmrc = File(filesDir, "home/.npmrc")
+        npmrc.delete()
+        Files.createSymbolicLink(npmrc.toPath(), theirs.toPath())
+        File(filesDir, "usr/lib/node_modules/npm/bin/npm-cli.js").apply { parentFile.mkdirs(); writeText("") }
+
+        FirstRunSetup(context).createNpmWrappers()
+
+        assertTrue(Files.isSymbolicLink(npmrc.toPath()), "the link was replaced by a copy")
+        assertEquals(
+            "registry=https://registry.example/\r\n//registry.example/:_authToken=abc\n", theirs.readText(),
+            "the app's lines stayed in the linked file, or a line of the person's went with them",
+        )
+        assertTrue(File(filesDir, "usr/etc/npmrc").readText().startsWith("script-shell="), "npm is left with no script shell")
+    }
+
+    /** A script shell and a platform the person set are theirs, in whatever file: they stay and still override. */
+    @Test
+    fun `a script shell and an os the person set in the linked file stay`() {
+        val own = "script-shell=/bin/zsh\nos=linux\nscript-shell = /opt/libbash.so.bak\n"
+        val theirs = File(filesDir, "dotfiles/.npmrc").apply { parentFile.mkdirs(); writeText(own) }
+        val npmrc = File(filesDir, "home/.npmrc")
+        npmrc.delete()
+        Files.createSymbolicLink(npmrc.toPath(), theirs.toPath())
+        File(filesDir, "usr/lib/node_modules/npm/bin/npm-cli.js").apply { parentFile.mkdirs(); writeText("") }
+
+        FirstRunSetup(context).createNpmWrappers()
+
+        assertEquals(own, theirs.readText(), "a line the person set was taken for one of the app's")
+    }
+
+    /** The lines leave the linked file only once npm's global file holds them. */
+    @Test
+    fun `the linked file keeps the app's lines while the global file cannot be written`() {
+        val held = "script-shell=/data/app/x/lib/arm64/libbash.so\nos=android\n"
+        val theirs = File(filesDir, "dotfiles/.npmrc").apply { parentFile.mkdirs(); writeText(held) }
+        val npmrc = File(filesDir, "home/.npmrc")
+        npmrc.delete()
+        Files.createSymbolicLink(npmrc.toPath(), theirs.toPath())
+        File(filesDir, "usr/lib/node_modules/npm/bin/npm-cli.js").apply { parentFile.mkdirs(); writeText("") }
+        val blocker = blockAtomicWritesTo(File(filesDir, "usr/etc/npmrc").apply { parentFile.mkdirs() })
+
+        FirstRunSetup(context).createNpmWrappers()
+        blocker.close()
+
+        assertEquals(held, theirs.readText(), "npm was left with no script shell in either file")
+    }
+
+    /** What `npm config set -g` wrote into the global file is carried through, like the person's own file. */
+    @Test
+    fun `the global file keeps what npm wrote there`() {
+        val theirs = File(filesDir, "dotfiles/.npmrc").apply { parentFile.mkdirs(); writeText("") }
+        val npmrc = File(filesDir, "home/.npmrc")
+        npmrc.delete()
+        Files.createSymbolicLink(npmrc.toPath(), theirs.toPath())
+        val global = File(filesDir, "usr/etc/npmrc").apply { parentFile.mkdirs(); writeText("fund=false\n") }
+        File(filesDir, "usr/lib/node_modules/npm/bin/npm-cli.js").apply { parentFile.mkdirs(); writeText("") }
+
+        FirstRunSetup(context).createNpmWrappers()
+
+        assertTrue(global.readText().startsWith("script-shell="), "the lines the app owns are not first")
+        assertTrue(global.readText().endsWith("\nfund=false\n"), "a line npm wrote was dropped: ${global.readText()}")
+    }
+
+    /** The global file is found by npm through NPM_CONFIG_PREFIX, so the two have to name one directory. */
+    @Test
+    fun `the global file is under the prefix npm is given`() {
+        val environment = com.vscodroid.SourceScan.read("src/main/kotlin/com/vscodroid/util/Environment.kt")
+        val setup = com.vscodroid.SourceScan.read("src/main/kotlin/com/vscodroid/setup/FirstRunSetup.kt")
+
+        assertTrue(environment.contains("\"NPM_CONFIG_PREFIX\" to \"\$filesDir/usr\""), "npm's prefix moved")
+        assertTrue(setup.contains("File(context.filesDir, \"usr/etc/npmrc\")"), "the global file moved")
     }
 
     @Test
-    fun `every writer of a file the person owns writes through a link`() {
+    fun `every writer of the settings writes through a link`() {
         val source = com.vscodroid.SourceScan.read("src/main/kotlin/com/vscodroid/setup/FirstRunSetup.kt")
-        for (name in listOf("npmrc", "settingsFile")) {
-            val writers = Regex("""writeAtomically\($name\b""").findAll(source).count()
-            val through = Regex("""writeAtomically\($name, throughLink = true\)""").findAll(source).count()
+        val writers = Regex("""writeAtomically\(settingsFile\b""").findAll(source).count()
+        val through = Regex("""writeAtomically\(settingsFile, throughLink = true\)""").findAll(source).count()
 
-            assertTrue(writers > 0 && writers == through) {
-                "$writers writers of $name, $through of them write through a link"
-            }
+        assertTrue(writers > 0 && writers == through) {
+            "$writers writers of the settings, $through of them write through a link"
         }
     }
 
