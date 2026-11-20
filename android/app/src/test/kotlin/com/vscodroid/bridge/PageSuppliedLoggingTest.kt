@@ -270,14 +270,17 @@ class PageSuppliedLoggingTest {
     @Test
     fun `every page supplied value reaching a log call is redacted`() {
         val methods = bridgeMethods()
-        // The control for the split. check-bridge-api-spec.py counts 31 bridge
-        // methods, so a split that returns a handful means the annotation moved or
-        // the file did, and every assertion below would then pass by examining
-        // almost nothing.
-        assertTrue(
-            methods.size >= 25,
-            "only ${methods.size} @JavascriptInterface methods were found; the scan is " +
-                "looking at the wrong thing, and passing here would mean nothing",
+        // The control for the split: every line that starts with the annotation is a
+        // method of the bridge, and the split has to find as many as the file has, so
+        // that a split which returns a handful, or loses a few, cannot leave every
+        // assertion below passing over almost nothing.
+        val annotated = Regex("""^[ \t]*@JavascriptInterface\b""", RegexOption.MULTILINE)
+            .findAll(bridge.readText()).count()
+        assertEquals(
+            annotated,
+            methods.size,
+            "the file has $annotated @JavascriptInterface methods and the scan found ${methods.size}; " +
+                "it is looking at the wrong thing, and passing here would mean nothing",
         )
 
         val result = scan(bridge.readText())

@@ -368,11 +368,33 @@ if (process.platform === 'android') {
   var TOKEN_ENV = 'ANTIGRAVITY_SERVER_CSRF_TOKEN';
 
   /**
+   * A port nothing holds on 127.0.0.1 at this moment, other than `not`: bound without listening and let
+   * go, as the extension picks its own. Synchronous, because [antigravityHub] sits inside a spawn that
+   * must return its child at once, and a listening server answers its address only after a lookup.
+   * Null where this runtime has no such handle (it is an underscore export of net) or refuses one.
+   */
+  function loopbackPortNow(not) {
+    try {
+      for (var i = 0; i < 3; i++) {
+        var handle = require('net')._createServerHandle('127.0.0.1', 0, 4);
+        if (typeof handle === 'number') return null;
+        var out = {};
+        var failed = handle.getsockname(out);
+        handle.close();
+        if (!failed && out.port !== not) return out.port;
+      }
+    } catch (e) { /* the runtime has no such handle: the caller draws one */ }
+    return null;
+  }
+
+  /**
    * For `agy --hub --hub-port=<n>`: the port the extension chose, the one the
-   * engine is given instead and the argument list that says so. A random port
-   * in the dynamic range, as the extension's own is. A clash makes the engine
-   * print `port <n> is already in use`, which the extension's own port
-   * collision handling matches; that path was read, not run. False for that
+   * engine is given instead and the argument list that says so. A port nothing
+   * held a moment ago, the way the extension picks its own ([loopbackPortNow]);
+   * where that cannot be had, a random one in the dynamic range. A clash in the
+   * moment between the pick and the engine's bind makes the engine print
+   * `port <n> is already in use`, which the extension's own port collision
+   * handling matches; that path was read, not run. False for that
    * start with an argument outside HUB_ARGUMENT, null for anything else, which
    * runs as an ordinary program would, with no relay and no note.
    */
@@ -394,8 +416,11 @@ if (process.platform === 'android') {
     if (refused) return false;
     var front = Number(ports[0].slice('--hub-port='.length));
     if (front === 0 || front > 65535) return null;
-    var back = front;
-    while (back === front) back = 20000 + Math.floor(Math.random() * 40000);
+    var back = loopbackPortNow(front);
+    if (back === null) {
+      back = front;
+      while (back === front) back = 20000 + Math.floor(Math.random() * 40000);
+    }
     return { front: front, back: back, args: args.map(function (arg) { return arg === ports[0] ? '--hub-port=' + back : arg; }) };
   }
 

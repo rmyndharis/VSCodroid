@@ -409,4 +409,37 @@ class TruncatedRepairRetryTest {
         assertEquals(theirs, bashrc.readText(), "a file the user wrote was replaced")
         assertEquals(theirSettings, settings.readText(), "a settings file with content was replaced")
     }
+
+    /**
+     * A `.bashrc` that is a link is a file the person keeps elsewhere, often in a repository other
+     * machines read, and `writeBashrc` writes this device's paths into whatever the link names. A file
+     * that opens with this app's header and holds text of its own after it, and has no PROJECTS_DIR line
+     * because they took it out, is theirs: the header proves nothing about what follows it. It is kept
+     * aside and left as it is, where an empty file or the header alone, a cut-short copy of ours, is
+     * still rewritten through the link.
+     */
+    @Test
+    fun `a linked bashrc that opens with the header and holds text of its own is left alone`() {
+        val target = File(filesDir, "dotfiles/bashrc").apply { parentFile.mkdirs() }
+        val own = "# VSCodroid bash configuration\nalias ll='ls -l'\n"
+        target.writeText(own)
+        Files.createSymbolicLink(bashrc.toPath(), target.toPath())
+
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        assertTrue(Files.isSymbolicLink(bashrc.toPath()), "the link was replaced")
+        assertEquals(own, target.readText(), "the file the link names was rewritten with this device's paths")
+    }
+
+    @Test
+    fun `a linked bashrc that is only the header is still rewritten through the link`() {
+        val target = File(filesDir, "dotfiles/bashrc").apply { parentFile.mkdirs() }
+        target.writeText("# VSCodroid bash configuration\n")
+        Files.createSymbolicLink(bashrc.toPath(), target.toPath())
+
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        assertTrue(Files.isSymbolicLink(bashrc.toPath()), "the link was replaced")
+        assertTrue(target.readText().contains("export PROJECTS_DIR"), "a cut-short copy of ours was not repaired")
+    }
 }
