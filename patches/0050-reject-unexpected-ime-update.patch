@@ -830,7 +830,7 @@ index babfbb09..a7e0ec2a 100644
 +	// length, of the range that ends at the caret, in a composition that has already typed: a keyboard in step sends it when a Hangul syllable
 +	// gains a letter, when the word being composed grows in place or is corrected (a kana or a multi-tap letter cycles, an autocorrect). A stale
 +	// write comes as the first update of a composition that only reopened a word, and no recorded one is such a rewrite in a composition that typed. Nor does one unit
-+	// written over one unit: a kana toggled by a 12-key keyboard is that, and no recorded stale write is (they are words, or one unit over a word).
++	// written over one unit (code points, as the unit is everywhere here): a kana toggled by a 12-key keyboard is that, and no recorded stale write is (they are words, or one unit over a word).
 +	private _isRememberedWordRewrite(e: ITextUpdateEvent, selectionStartOffset: number, selectionEndOffset: number): boolean {
 +		return isAndroid && this._compositionOpen && selectionStartOffset === selectionEndOffset &&
 +			e.selectionStart === selectionStartOffset && e.selectionEnd === selectionStartOffset &&
@@ -838,7 +838,7 @@ index babfbb09..a7e0ec2a 100644
 +			e.updateRangeStart >= 0 && e.updateRangeStart < e.updateRangeEnd && e.updateRangeEnd <= selectionStartOffset &&
 +			this._previousEditContextText.slice(e.updateRangeStart, e.updateRangeEnd) !== e.text &&
 +			!this._isInStepRewrite(e, selectionStartOffset) &&
-+			!(e.text.length === 1 && e.updateRangeEnd - e.updateRangeStart === 1) &&
++			!(Array.from(e.text).length === 1 && Array.from(this._previousEditContextText.slice(e.updateRangeStart, e.updateRangeEnd)).length === 1) &&
 +			this._textTouchesCaret(e.text, selectionStartOffset);
 +	}
 +
@@ -871,7 +871,7 @@ index babfbb09..a7e0ec2a 100644
 +	// whole range it kept, and the caret is inside that range or at its end. Gboard 12.4 wrote it so after a turn of the screen, the first letter typed over a word it had
 +	// reopened without typing (two over 84..87 became x with the caret asked at 85, in a line holding line two; delta over 19..24 became z with the caret asked at 20, the
 +	// caret being at 22, in a line holding alpha beta Charlie delta); the word is gone and the letter stands alone. Such an update is refused. A Backspace on a reopened
-+	// word of two units writes the first unit of the range, which is not this shape (the second rule above refuses the one that drops the tail of a longer one), and a
++	// word of two letters writes the first letter of the range (counted in code points), which is not this shape (the second rule above refuses the one that drops the tail of a longer one), and a
 +	// selected word has a selection that is not collapsed.
 +	private _isOneUnitOverWord(e: ITextUpdateEvent, selectionStartOffset: number, selectionEndOffset: number): boolean {
 +		if (!isAndroid || !this._compositionOpen || this._compositionTyped || selectionStartOffset !== selectionEndOffset ||
@@ -881,7 +881,7 @@ index babfbb09..a7e0ec2a 100644
 +			return false;
 +		}
 +		const old = this._previousEditContextText.slice(e.updateRangeStart, e.updateRangeEnd);
-+		return !(old.length === e.text.length + 1 && old.startsWith(e.text));
++		return !(Array.from(old).length === Array.from(e.text).length + 1 && old.startsWith(e.text));
 +	}
 +
 +	// Whether the text is one letter or digit of an alphabet: one code point (an emoji or another character outside the basic plane is one, though it is two units long), and
