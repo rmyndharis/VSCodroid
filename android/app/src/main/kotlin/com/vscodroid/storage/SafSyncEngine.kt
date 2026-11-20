@@ -1249,11 +1249,16 @@ class SafSyncEngine(private val context: Context) {
         // there, or written into it; and an enumeration that succeeded and returned
         // nothing is a folder the user emptied and a provider answering for a volume
         // that is no longer mounted, told apart by nothing. This phase writes to the
-        // device, so both cases decline.
+        // device, so both cases decline. The exception is a record that holds only its
+        // header: nothing was ever vouched for in that mirror, so no file in it can be a
+        // document the device deleted, and the folder is the one that was empty when it was
+        // first opened and is empty still. A file made in it whose create died with the
+        // process is sent; one that cannot be (a volume that is gone) is reported as any
+        // other upload that did not finish.
         // The tick is added to the phase-2 figures rather than replacing them, so the
         // dialog goes on counting up instead of restarting at one, and the total grows
         // by exactly the work that is left.
-        val putBack = if (enumerationComplete && documents.isNotEmpty()) {
+        val putBack = if (enumerationComplete && (documents.isNotEmpty() || previousRecord?.isEmpty() == true)) {
             uploadMirrorOnlyDocuments(
                 safUri,
                 mirrorDir,
