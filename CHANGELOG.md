@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The Google Antigravity extension starts its engine and shows its panel, once **Vscodroid > Antigravity: Run Engine** is turned on in Settings; the engine is off by default because other apps on the phone can reach it while it runs.
 - **Vscodroid > Antigravity: Run Engine** is turned off again on a phone that restores VSCodroid from a backup or a transfer.
+- The privacy policy states that the Antigravity engine's version check (`--version`) still runs the downloaded program while the engine is turned off.
 - A program built for Android that an extension downloaded into the app's storage starts through the system loader when the extension calls `spawn` or `execFile`, instead of failing with `EACCES`, except one in `~/.gemini` while that setting is off.
 
 ### Fixed
@@ -65,17 +66,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A toolchain install whose links could not be made fails and asks for free space, instead of being recorded as installed with a tree that does not run.
 - After Stop Server, a webview of the earlier editor page is no longer sent the new connection token at the old port.
 - A workspace folder that holds the sign-in files of Claude Code, Codex or the cargo, Maven, Gradle, Azure, Google Cloud and git tools is no longer readable by webviews.
-- The log no longer carries the device folder or the download target named by a failed folder sync or a download that could not be removed.
+- The log no longer carries the device folder named by a failed folder sync, or the document of a download that could not be saved or removed.
 - Coming back from the Open Folder picker after more than five minutes no longer reloads the editor ahead of the folder you chose.
 - The About dialog is no longer opened on a screen that has already closed, which could end the app.
 - The notice about an old system WebView is marked as seen when it is dismissed, so a screen closed under it no longer hides it for good.
-- A file deleted on the device whose copy was being removed when the app was killed is no longer put back on the device under a made-up name at the next open.
-- A copy of a file deleted on the device that a killed removal left in the folder is deleted at the next open; one left by 1.9.0 under a made-up name is no longer created on the device.
+- A file deleted on the device is no longer put back there under a made-up name when the app was killed while removing its copy; the copy left behind is deleted at a later open, once it is matched to the deleted file.
 - A settings file whose lines end in a bare carriage return is read the way the editor reads it: the readers of the heap ceiling and of the managed settings no longer miss keys that follow a comment.
 - A save made while another write to the same device folder was still finishing is no longer held back and announced as kept inside the app; it is sent.
-- The privacy policy states that the Antigravity engine's version check (`--version`) still runs the downloaded program while the engine is turned off.
 - Behind a manual or global HTTP proxy with an empty bypass list, the Markdown preview and other webview panels showed the proxy's error page, because the editor's own server was fetched through the proxy, which also logged the connection token; that fetch now never uses a proxy.
-- The log no longer carries the document a download was being saved to when the provider refused to open or write it.
 - Setup and the Python repair remove the temporary file a killed copy left before they refuse for lack of room, so a nearly full phone is no longer asked to free the size of that file.
 
 ## [1.9.0] - 2026-11-16
