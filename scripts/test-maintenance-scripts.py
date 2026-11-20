@@ -326,7 +326,7 @@ def wheelhouse(source, root):
                     '<title>VSCodroid wheelhouse</title></head>\n<body>\n'
                     '<h1>VSCodroid wheelhouse</h1>\n'
                     '<p>Prebuilt Android wheels mirrored for the Python VSCodroid bundles.\n'
-                    'Not compiled here; the manifest records where each one came from.</p>\n'
+                    'Not compiled here, cffi excepted; the manifest records where each one came from.</p>\n'
                     f'    <a href="https://github.com/rmyndharis/VSCodroid/releases/download/fixture-wheels-3.14-1/{filename}#sha256={digest}">{filename}</a><br>'
                     '\n</body></html>\n'
                 )
@@ -665,6 +665,76 @@ class MaintenanceScriptsTest(unittest.TestCase):
         unkeyed = check()
         self.assertNotEqual(0, unkeyed.returncode, unkeyed.stdout + unkeyed.stderr)
         self.assertIn("check-editcontext-ime.js", unkeyed.stdout)
+
+    def cffi_builder(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("fixture_cffi_wheel", SOURCE / "scripts/build-cffi-wheel.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_cffi_wheel_is_packed_the_same_way_every_time(self):
+        builder = self.cffi_builder()
+        tag = "cp314-cp314-android_24_arm64_v8a"
+        module = self.root / "_cffi_backend.cpython-314-aarch64-linux-android.so"
+        module.write_bytes(b"\x7fELF fixture")
+        project = {
+            "scripts": {"cffi-gen-src": "cffi._cffi_gen_src:run"},
+            "entry-points": {"distutils.setup_keywords": {"cffi_modules": "cffi.setuptools_ext:cffi_modules"}},
+        }
+        points = builder.entry_points(project)
+        self.assertEqual(
+            "[console_scripts]\ncffi-gen-src = cffi._cffi_gen_src:run\n\n"
+            "[distutils.setup_keywords]\ncffi_modules = cffi.setuptools_ext:cffi_modules\n",
+            points,
+        )
+        wheels = []
+        for name in ("one.whl", "two.whl"):
+            wheel = self.root / name
+            builder.pack(wheel, "2.1.1", tag, module, {"api.py": b"API = 1\n", "_cffi_include.h": b"/* h */\n"},
+                         b"Metadata-Version: 2.4\nName: cffi\nVersion: 2.1.1\n", {"LICENSE": b"MIT-0\n"},
+                         points, "cffi-2.1.1.tar.gz")
+            wheels.append(wheel)
+        self.assertEqual(wheels[0].read_bytes(), wheels[1].read_bytes(), "the same inputs gave other bytes")
+        with zipfile.ZipFile(wheels[0]) as archive:
+            names = archive.namelist()
+            first_info = next(i for i, n in enumerate(names) if n.startswith("cffi-2.1.1.dist-info/"))
+            self.assertTrue(all(n.startswith("cffi-2.1.1.dist-info/") for n in names[first_info:]),
+                            "a package file comes after the dist-info")
+            self.assertIn("cffi-2.1.1.dist-info/licenses/LICENSE", names)
+            self.assertTrue(all(i.date_time == (1980, 1, 1, 0, 0, 0) for i in archive.infolist()),
+                            "an entry carries a time of the build, so another second gives other bytes")
+            self.assertIn("Tag: " + tag, archive.read("cffi-2.1.1.dist-info/WHEEL").decode())
+            self.assertEqual(0o100755, archive.getinfo(module.name).external_attr >> 16)
+            records = set(archive.read("cffi-2.1.1.dist-info/RECORD").decode().splitlines())
+            self.assertIn("cffi-2.1.1.dist-info/RECORD,,", records)
+            for member in (n for n in names if n != "cffi-2.1.1.dist-info/RECORD"):
+                digest = base64.urlsafe_b64encode(hashlib.sha256(archive.read(member)).digest()).rstrip(b"=").decode()
+                self.assertIn(f"{member},sha256={digest},{len(archive.read(member))}", records,
+                              f"RECORD does not describe {member}")
+
+    def test_cffi_wheel_refuses_unsafe_or_missing_inputs(self):
+        builder = self.cffi_builder()
+        with self.assertRaises(SystemExit):
+            builder.write_tree(self.root / "tree", {"../escape": b"x"})
+        with self.assertRaises(SystemExit):
+            builder.licence_files({"license-files": ["LICENSE", "AUTHORS"]}, {"LICENSE": b"x"})
+        with self.assertRaises(SystemExit):
+            builder.licence_files({}, {"LICENSE": b"x"})
+        sdk = self.root / "sdk"
+        for revision in ("27.2.12479018", "30.0.16248370"):
+            write(sdk / "ndk" / revision / "source.properties", f"Pkg.Revision = {revision}\n")
+        environ = {"ANDROID_HOME": str(sdk)}
+        found = builder.find_ndk("27.2.12479018", environ, self.root / "nohome")
+        self.assertEqual(sdk / "ndk" / "27.2.12479018", found)
+        with self.assertRaises(SystemExit) as refused:
+            builder.find_ndk("28.0.1", environ, self.root / "nohome")
+        self.assertIn("none was found", str(refused.exception))
+        # An NDK that answers to the wrong revision is not taken for the right one.
+        write(sdk / "ndk" / "29.0.0" / "source.properties", "Pkg.Revision = 29.0.1\n")
+        with self.assertRaises(SystemExit) as refused:
+            builder.find_ndk("29.0.0", {"ANDROID_NDK_HOME": str(sdk / "ndk" / "29.0.0")}, self.root / "nohome")
+        self.assertIn("29.0.1", str(refused.exception))
 
     def test_wheelhouse_checks_versioned_shared_objects(self):
         verifier = types.ModuleType("fixture_elf_verifier")

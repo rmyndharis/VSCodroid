@@ -620,9 +620,28 @@ disagree.
 
 When the bundled Python moves to a new minor, the manifest is re-pinned for it and a page is written
 beside the old one, never over it: every device still on an older APK keeps reading the page for its
-own interpreter. psutil comes from Termux's `python-psutil` package, whose pool keeps only the
-current revision, so a rebuild after Termux has moved on fails until that entry is re-pinned to the
-new file; the wheel already on the release is unaffected.
+own interpreter. psutil and cryptography come from Termux's `python-psutil` and
+`python-cryptography` packages, whose pool keeps only the current revision, so a rebuild after
+Termux has moved on fails until that entry is re-pinned to the new file; the wheel already on the
+release is unaffected.
+
+cffi is compiled here, by `scripts/build-cffi-wheel.py`, from the inputs `built-from` pins in its
+entry: nobody publishes an Android wheel of it and cryptography cannot be imported without it. That
+script runs only for a new cffi version or a new Python minor, and needs the NDK revision the entry
+names. Its wheel goes onto the new release first, because the entry's `url` is that asset and
+`build-wheelhouse.py` fetches it from there like any mirrored wheel:
+
+```bash
+python3 scripts/build-cffi-wheel.py            # leaves the wheel in .build/wheelhouse-built
+gh release create <release-tag> --prerelease --title "Python wheelhouse <minor>-<n>" \
+  --notes "..." .build/wheelhouse-built/cffi-*.whl
+# Point the cffi entry's url at that asset and clear its sha256, then:
+python3 scripts/build-wheelhouse.py --record
+gh release upload <release-tag> $(ls .build/wheelhouse/* | grep -v '/cffi-')
+```
+
+A release whose cffi is unchanged skips those steps: the entry keeps naming the asset on the release
+it was first uploaded to, and that wheel is uploaded again with the others.
 
 ### 8.4 Future: F-Droid
 
