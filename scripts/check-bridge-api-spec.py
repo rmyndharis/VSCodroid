@@ -95,24 +95,6 @@ invisible until a later probe happens to ask. That is not hypothetical: it ate
 three fixes mid-review here, and only a probe returning `0 occurrences` for a
 line just written revealed it. Committing first bounds the worst case to
 restoring a state you chose.
-
-Known limits, left unfixed on purpose. Both are wrong in the accusing direction
-rather than the missing one, and neither shape exists in the tree; widening the
-pattern for them would add surface for a hypothetical benefit:
-
-  * An expression-bodied method --  `fun f(t: String): Boolean = g(t)` -- has its
-    return type read as `Boolean = g(t)`, so a correctly documented `Boolean`
-    reports a mismatch. If one ever appears, fix the METHOD or this pattern; do
-    not "correct" a right document to match the garbage.
-  * An annotated method inside a `/* */` block is counted and parsed as real.
-    Which way that fails depends on what the commenter did to the spec, and the
-    likelier half is the silent one -- this comment used to name only the loud
-    one. Comment out the code AND delete its doc entry, and it accuses: the spec
-    is "missing" a method that no longer exists. Comment out the code and leave
-    the doc entry, which is what someone disabling a method in a hurry does, and
-    both sides still list it, the comparison is clean, and the spec goes on
-    describing a method the page can no longer call. `BridgeApiSpecParityTest`
-    has neither problem: commented-out code does not compile, so it is not there.
 """
 
 import pathlib
@@ -156,10 +138,15 @@ SIGNATURE = re.compile(
     ANNOTATION + r"[ \t]*\n"
     r"\s*fun\s+(?P<name>\w+)\s*"
     r"\((?P<params>[^)]*)\)"
-    r"(?:[ \t]*:[ \t]*(?P<returns>[^\n{/]+?))?"
+    r"(?:[ \t]*:[ \t]*(?P<returns>[^\n{/=]+?))?"
     r"[ \t]*(?://[^\n]*)?"
-    r"[ \t]*(?:\{|\n)"
+    r"[ \t]*(?P<end>\{|=|\n)"
 )
+
+# An annotated method inside a block comment is counted as real, which is silent when the comment hides
+# the code and leaves its entry in the spec. Refused outright rather than read: commented-out code is no
+# method of the bridge, and BridgeApiSpecParityTest, which reads the compiled class, never sees it.
+BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
 
 
 def signatures(path):
@@ -174,10 +161,17 @@ def signatures(path):
     text = path.read_text()
     found = {}
     for m in SIGNATURE.finditer(text):
-        found[m.group("name")] = (
-            re.sub(r"\s+", " ", m.group("params")).strip(),
-            (m.group("returns") or "Unit").strip(),
-        )
+        # A body written as `= expression` ends the signature at the equals sign. With no type
+        # declared the type is inferred, which no document can name, so it is said to differ.
+        returns = (m.group("returns") or ("<inferred>" if m.group("end") == "=" else "Unit")).strip()
+        found[m.group("name")] = (re.sub(r"\s+", " ", m.group("params")).strip(), returns)
+    if path == BRIDGE:
+        for comment in BLOCK_COMMENT.finditer(text):
+            if SIGNATURE.search(comment.group(0)):
+                raise SystemExit(
+                    f"  FAIL   {path.name} holds an annotated method inside a block comment, at line "
+                    f"{text.count(chr(10), 0, comment.start()) + 1}: delete the method rather than comment it out"
+                )
     return found, len(ANNOTATION_LINE.findall(text))
 
 

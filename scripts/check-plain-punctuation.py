@@ -133,6 +133,13 @@ REFERENCE = re.compile(r"&(?:#[0-9]+;?|#[xX][0-9a-fA-F]+;?|[^\t\n\f <&#;]{1,32};
 
 SKIP_PREFIXES = ("licenses/",)
 
+# Files named for text: one of these that does not decode is an offence, where any other undecodable
+# file is a binary that carries no prose.
+TEXT_SUFFIXES = frozenset((
+    ".md", ".txt", ".html", ".css", ".js", ".json", ".xml", ".yml", ".yaml", ".py", ".sh", ".kt",
+    ".kts", ".java", ".c", ".h", ".ts", ".patch", ".svg", ".gradle", ".properties", ".toml", ".tsv",
+))
+
 # How many offences to print before summarising. A first sweep of a stale
 # tree produces hundreds, and a wall of them buries the count that says how
 # much work is left.
@@ -296,10 +303,16 @@ def line_offences(path, number, line, added=False):
 def offences(path):
     try:
         text = pathlib.Path(path).read_text(encoding="utf-8")
-    except (UnicodeDecodeError, OSError):
-        # Not text this gate can read. A binary file carries no prose, and a
-        # file git tracks but the checkout does not hold is a different
-        # problem that a different gate should report.
+    except UnicodeDecodeError:
+        # A binary file carries no prose. A file named for text that is not UTF-8 does, in an
+        # encoding this gate cannot read, and passing it would count it as examined: a dash
+        # written there reaches a reader and nothing here sees it.
+        if pathlib.Path(path).suffix.lower() in TEXT_SUFFIXES:
+            return [(1, 1, "not UTF-8, so this gate cannot read it", "")]
+        return []
+    except OSError:
+        # A file git tracks but the checkout does not hold is a different problem
+        # that a different gate should report.
         return []
     judged, unplaced = checkable_lines(path, text)
     found = [(number, 1, why, line.strip()) for number, why, line in unplaced]

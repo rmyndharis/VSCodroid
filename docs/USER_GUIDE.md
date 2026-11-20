@@ -1371,6 +1371,7 @@ install like any other package:
 - `pydantic-core` 2.41.5, which is what `pydantic` 2.12 needs. The newest
   `pydantic` wants a later one, so install it as `pip install "pydantic<2.13"`.
 - `psutil` 7.2.2, which `ipykernel` needs for Jupyter notebooks
+- `cryptography` 50.0.2, with `cffi` 2.1.1, which it needs to load
 
 Each is available at that version only. `lxml`, `pygame`, `matplotlib`, `Pillow`
 and `scipy` still cannot be installed.

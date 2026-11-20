@@ -536,6 +536,25 @@ class MaintenanceScriptsTest(unittest.TestCase):
         for name in unplaced:
             self.assertIn(name + ":", whole["stdout"])
 
+    def test_plain_punctuation_refuses_a_text_file_it_cannot_decode(self):
+        checker = SOURCE / "scripts/check-plain-punctuation.py"
+        repo = self.root / "undecodable"
+        repo.mkdir()
+        # Windows-1252: the dash is the single byte 0x97, which is not UTF-8.
+        (repo / "notes.md").write_bytes(b"caf\xe9 a \x97 b\n")
+        (repo / "picture.png").write_bytes(b"\x89PNG\r\n\x1a\n\xff\xfe\x00")
+        write(repo / "ok.md", "plain words\n")
+        env = {"HOME": str(self.root), "GIT_CONFIG_NOSYSTEM": "1"}
+        self.assertEqual(0, run(["git", "init", "-q"], repo, env)["status"])
+        self.assertEqual(0, run(["git", "add", "--", "notes.md", "picture.png", "ok.md"], repo, env)["status"])
+        refused = run([sys.executable, "-I", str(checker), "notes.md"], repo, env)
+        self.assertEqual(1, refused["status"], refused)
+        self.assertIn("notes.md:", refused["stdout"])
+        for name in ("picture.png", "ok.md"):
+            with self.subTest(name=name):
+                result = run([sys.executable, "-I", str(checker), name], repo, env)
+                self.assertEqual(0, result["status"], result)
+
     def test_lint_policy_flags_must_be_live_code(self):
         fixture = self.root / "lint-policy"
         (fixture / "scripts").mkdir(parents=True)
@@ -735,6 +754,49 @@ class MaintenanceScriptsTest(unittest.TestCase):
         with self.assertRaises(SystemExit) as refused:
             builder.find_ndk("29.0.0", {"ANDROID_NDK_HOME": str(sdk / "ndk" / "29.0.0")}, self.root / "nohome")
         self.assertIn("29.0.1", str(refused.exception))
+
+    def test_bridge_spec_gate_reads_an_expression_body_and_refuses_a_commented_method(self):
+        source = SOURCE / "scripts/check-bridge-api-spec.py"
+        gate = types.ModuleType("fixture_bridge_spec")
+        gate.__file__ = str(source)
+        exec(compile(source.read_text(encoding="utf-8"), str(source), "exec"), gate.__dict__)
+        bridge = self.root / "AndroidBridge.kt"
+        gate.BRIDGE = bridge
+        write(bridge, "class B {\n    @JavascriptInterface\n    fun ping(token: String): Boolean = impl(token)\n\n"
+                      "    @JavascriptInterface\n    fun inferred(token: String) = impl(token)\n\n"
+                      "    @JavascriptInterface\n    fun other(token: String): String {\n        return \"\"\n    }\n}\n")
+        found, expected = gate.signatures(bridge)
+        self.assertEqual(3, expected)
+        self.assertEqual(("token: String", "Boolean"), found["ping"])
+        self.assertEqual(("token: String", "String"), found["other"])
+        # No declared type: it cannot equal any document's, so the gate reports a difference, never a match.
+        self.assertEqual(("token: String", "<inferred>"), found["inferred"])
+        write(bridge, "class B {\n    /*\n    @JavascriptInterface\n    fun gone(token: String): Boolean {\n    }\n    */\n}\n")
+        with self.assertRaises(SystemExit) as refused:
+            gate.signatures(bridge)
+        self.assertIn("inside a block comment", str(refused.exception))
+        # Prose that names the annotation in a block comment is no method.
+        write(bridge, "/**\n * one `@JavascriptInterface` method per call\n */\nclass B\n")
+        self.assertEqual(({}, 0), gate.signatures(bridge))
+
+    def test_wheelhouse_names_reach_the_documents_people_read(self):
+        source = SOURCE / "scripts/check-wheelhouse-abi.py"
+        gate = types.ModuleType("fixture_wheelhouse_abi")
+        gate.__file__ = str(source)
+        exec(compile(source.read_text(encoding="utf-8"), str(source), "exec"), gate.__dict__)
+        repo = self.root / "abi-repo"
+        gate.REPO = repo
+        manifest = {"packages": [{"name": "numpy"}, {"name": "pydantic-core"}, {"name": "cffi"}]}
+        write(repo / "docs/USER_GUIDE.md", "- `numpy`\n- `pydantic-core`\n- `cffi`\n")
+        write(repo / "NOTICE.md", "| numpy |\n| pydantic-core |\n| cffi |\n")
+        write(repo / "docs/LEGAL_NOTICES.md", "| numpy |\n| pydantic_core |\n| cffi |\n")
+        self.assertEqual([], gate.document_problems(manifest))
+        write(repo / "NOTICE.md", "| numpy |\n| pydantic-core |\n")
+        self.assertEqual(["NOTICE.md does not name cffi"], gate.document_problems(manifest))
+        (repo / "docs/USER_GUIDE.md").unlink()
+        self.assertEqual(
+            ["docs/USER_GUIDE.md is missing", "NOTICE.md does not name cffi"], gate.document_problems(manifest),
+        )
 
     def test_wheelhouse_checks_versioned_shared_objects(self):
         verifier = types.ModuleType("fixture_elf_verifier")
