@@ -736,6 +736,25 @@ class MaintenanceScriptsTest(unittest.TestCase):
             builder.find_ndk("29.0.0", {"ANDROID_NDK_HOME": str(sdk / "ndk" / "29.0.0")}, self.root / "nohome")
         self.assertIn("29.0.1", str(refused.exception))
 
+    def test_wheelhouse_names_reach_the_documents_people_read(self):
+        source = SOURCE / "scripts/check-wheelhouse-abi.py"
+        gate = types.ModuleType("fixture_wheelhouse_abi")
+        gate.__file__ = str(source)
+        exec(compile(source.read_text(encoding="utf-8"), str(source), "exec"), gate.__dict__)
+        repo = self.root / "abi-repo"
+        gate.REPO = repo
+        manifest = {"packages": [{"name": "numpy"}, {"name": "pydantic-core"}, {"name": "cffi"}]}
+        write(repo / "docs/USER_GUIDE.md", "- `numpy`\n- `pydantic-core`\n- `cffi`\n")
+        write(repo / "NOTICE.md", "| numpy |\n| pydantic-core |\n| cffi |\n")
+        write(repo / "docs/LEGAL_NOTICES.md", "| numpy |\n| pydantic_core |\n| cffi |\n")
+        self.assertEqual([], gate.document_problems(manifest))
+        write(repo / "NOTICE.md", "| numpy |\n| pydantic-core |\n")
+        self.assertEqual(["NOTICE.md does not name cffi"], gate.document_problems(manifest))
+        (repo / "docs/USER_GUIDE.md").unlink()
+        self.assertEqual(
+            ["docs/USER_GUIDE.md is missing", "NOTICE.md does not name cffi"], gate.document_problems(manifest),
+        )
+
     def test_wheelhouse_checks_versioned_shared_objects(self):
         verifier = types.ModuleType("fixture_elf_verifier")
         verifier.__file__ = str(SOURCE / "scripts/verify-android-elf.py")

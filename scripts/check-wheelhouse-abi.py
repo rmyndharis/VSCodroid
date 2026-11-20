@@ -35,6 +35,9 @@ MANIFEST = REPO / "wheelhouse.json"
 LIB_DIR = REPO / "android/app/src/main/assets/usr/lib"
 RELEASES = "https://github.com/rmyndharis/VSCodroid/releases/download"
 
+# Where a person looks for what pip is pointed at, and where the software VSCodroid re-hosts is credited.
+DOCUMENTS = ("docs/USER_GUIDE.md", "NOTICE.md", "docs/LEGAL_NOTICES.md")
+
 
 def page_problems(manifest, declared):
     """What is wrong with the committed page for this manifest, if anything."""
@@ -89,6 +92,26 @@ def page_problems(manifest, declared):
     return problems
 
 
+def document_problems(manifest):
+    """Every pinned wheel is named in the documents of DOCUMENTS.
+
+    The guide's list and the two notice tables were written by hand when each wheel was added, and two
+    wheels reached the manifest and the page with neither: a package pip installs from this project's
+    release, with its licence, was named nowhere a person reads.
+    """
+    names = sorted({package["name"] for package in manifest.get("packages", [])})
+    problems = []
+    for relative in DOCUMENTS:
+        path = REPO / relative
+        if not path.is_file():
+            problems.append(f"{relative} is missing")
+            continue
+        text = path.read_text(encoding="utf-8").lower().replace("_", "-")
+        problems += [f"{relative} does not name {name}" for name in names
+                     if name.lower().replace("_", "-") not in text]
+    return problems
+
+
 def main() -> int:
     if not MANIFEST.is_file():
         print(f"FAIL {MANIFEST.name} is missing, so nothing pins what pip is offered", file=sys.stderr)
@@ -106,6 +129,15 @@ def main() -> int:
             "FAIL the wheelhouse page does not match wheelhouse.json:\n     "
             + "\n     ".join(problems)
             + "\n     Regenerate it with scripts/build-wheelhouse.py.",
+            file=sys.stderr,
+        )
+        return 1
+
+    problems = document_problems(manifest)
+    if problems:
+        print(
+            "FAIL a wheel wheelhouse.json pins is not named where people look for it:\n     "
+            + "\n     ".join(problems),
             file=sys.stderr,
         )
         return 1
