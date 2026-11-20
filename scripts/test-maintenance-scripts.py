@@ -456,6 +456,31 @@ class MaintenanceScriptsTest(unittest.TestCase):
             "branding/workbench/x.svg": "<svg><text>a &#%d; b</text></svg>\n" % 0x2014,
             # Three backslashes: an escaped backslash, then the escape itself.
             "android/app/src/main/kotlin/Odd.kt": 'val s = "\\\\' + escape(0x2014) + '"\n',
+            # A line of the description that looks like a hunk header is text: no file is named yet.
+            "patches/0008-hunk-in-prose.patch": patch("same", "new line").replace(
+                "plain words", "plain words\n\n@@ -1,3 +1,3 @@ is how a hunk starts\nand this " + em + " follows it"),
+            # A space after the name of the file is not part of the name.
+            "patches/0009-space.patch": patch("same", "<p>a &mdash; b</p>", target="f.html").replace(
+                "+++ b/f.html\n", "+++ b/f.html \n"),
+            # A line below the diff that begins the way a header does is still text of the patch.
+            "patches/0018-header-text.patch": patch("same", "new line") + "index of the changes " + em + " notes\n",
+            # And so is what follows the line `git format-patch` ends a patch with.
+            "patches/0019-after-signature.patch": patch("same", "new line") + "-- \n2.43.0 " + em + "\n",
+        }
+        # Refused because the gate cannot place a line, whatever the line holds: what it cannot place it
+        # would not read.
+        unplaced = {
+            # A line of the description that starts as the old side of a file header does ended the
+            # description, and the lines after it were read by nobody.
+            "patches/0010-header-in-prose.patch": patch("same", "new line").replace(
+                "plain words", "plain words\n\n--- a/ names the old side\nand this " + em + " follows it"),
+            # Text after the last hunk.
+            "patches/0011-trailing.patch": patch("same", "new line") + "words after the diff " + em + "\n",
+            # A name git quotes, and the prefixes diff.mnemonicPrefix writes: no path to judge the line as.
+            "patches/0012-quoted.patch": patch("same", "<p>a &mdash; b</p>", target="f.html").replace(
+                "+++ b/f.html", '+++ "b/f page.html"'),
+            "patches/0013-mnemonic.patch": patch("same", "<p>a &mdash; b</p>", target="f.html").replace(
+                "--- a/f.html", "--- i/f.html").replace("+++ b/f.html", "+++ w/f.html"),
         }
         allowed = {
             "patches/0002-upstream.patch": patch("ctx " + em + " kept", "new line").replace(
@@ -469,24 +494,47 @@ class MaintenanceScriptsTest(unittest.TestCase):
                 "plain words", "keep the " + escape(0x2014) + " escape out"),
             # Two backslashes: an escaped backslash and a plain `u`, which shows no dash.
             "android/app/src/main/kotlin/Even.kt": 'val s = "\\' + escape(0x2014) + '"\n',
+            # A diff with no `diff --git` line, a new file, and a last line with no newline: all read.
+            "patches/0014-bare.patch": "Subject: plain words\n\n--- a/f.ts\n+++ b/f.ts\n@@ -1 +1 @@\n-old\n+new\n"
+                                       "\\ No newline at end of file\n",
+            "patches/0015-new-file.patch": "Subject: plain words\n\ndiff --git a/f.ts b/f.ts\nnew file mode 100644\n"
+                                           "index 0000000..1111111\n--- /dev/null\n+++ b/f.ts\n@@ -0,0 +1 @@\n+new\n",
+            # What `git diff --binary` writes for a file, and what plain `git diff` says of one.
+            "patches/0016-binary.patch": "Subject: plain words\n\ndiff --git a/i.png b/i.png\nnew file mode 100644\n"
+                                         "index 0000000..1111111\nGIT binary patch\nliteral 5\nMcmZQzU|?Wi00D\n\n"
+                                         "literal 0\nHcmV?d00001\n\ndiff --git a/j.png b/j.png\nindex 1111111..2222222 100644\n"
+                                         "Binary files a/j.png and b/j.png differ\n",
+            # The signature `git format-patch` ends a patch with.
+            "patches/0017-signed.patch": patch("same", "new line") + "-- \n2.43.0\n\n",
+            # A deletion, in a checkout that gave the patch CRLF line ends, which reading the file as text undoes.
+            "patches/0020-crlf.patch": "Subject: plain words\r\n\r\ndiff --git a/f.ts b/f.ts\r\ndeleted file mode 100644\r\n"
+                                       "index 1111111..0000000\r\n--- a/f.ts\r\n+++ /dev/null\r\n@@ -1 +0,0 @@\r\n-old\r\n",
         }
         # Not judged at all, so it is not even a path the gate accepts: only the whole-tree count shows it.
         verbatim = {"licenses/x.txt": "a " + em + " b\n"}
         repo = self.root / "punctuation"
-        for name, text in {**refused, **allowed, **verbatim}.items():
+        for name, text in {**refused, **unplaced, **allowed, **verbatim}.items():
             write(repo / name, text)
         env = {"HOME": str(self.root), "GIT_CONFIG_NOSYSTEM": "1"}
         self.assertEqual(0, run(["git", "init", "-q"], repo, env)["status"])
-        self.assertEqual(0, run(["git", "add", "--", *refused, *allowed, *verbatim], repo, env)["status"])
-        for name, expected in [(n, 1) for n in refused] + [(n, 0) for n in allowed]:
+        self.assertEqual(0, run(["git", "add", "--", *refused, *unplaced, *allowed, *verbatim], repo, env)["status"])
+        for name, expected in [(n, 1) for n in {**refused, **unplaced}] + [(n, 0) for n in allowed]:
             with self.subTest(name=name):
                 result = run([sys.executable, "-I", str(checker), name], repo, env)
                 self.assertEqual(expected, result["status"], result)
                 if expected:
                     self.assertIn(name + ":", result["stdout"])
+                self.assertEqual(name in unplaced, "cannot place" in result["stdout"], result)
         whole = run([sys.executable, "-I", str(checker)], repo, env)
         self.assertEqual(1, whole["status"], whole)
-        self.assertIn(f"{len(refused) + 1} banned dash characters", whole["stdout"])
+        # One for each refused file and a second in the page that names two, and one for each of the
+        # two unplaced lines that hold the character: a line the gate cannot place is still judged.
+        self.assertIn(f"{len(refused) + 1 + 2} banned dash characters", whole["stdout"])
+        # Counted apart from the characters, and by line: a hunk under a header that names no file is
+        # unplaced as well, so the number is more than one for a patch.
+        self.assertRegex(whole["stdout"], r"\n  \d+ lines of a patch that this gate cannot place")
+        for name in unplaced:
+            self.assertIn(name + ":", whole["stdout"])
 
     def test_lint_policy_flags_must_be_live_code(self):
         fixture = self.root / "lint-policy"
