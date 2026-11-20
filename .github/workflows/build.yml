@@ -402,6 +402,16 @@ jobs:
             exit 1
           fi
           echo "server-main.js present; libnode.so $libnode_size bytes"
+          # OpenSSL's legacy provider, which the app names through OPENSSL_MODULES. An
+          # absent file is a quiet failure: the variable names an empty directory and
+          # Python's cryptography warns at every import that the provider failed to
+          # load, with the build green. download-termux-tools.sh places it, and its
+          # own step fails first, but a cache restore skips that script.
+          legacy=android/app/src/main/assets/usr/lib/ossl-modules/legacy.so
+          if [ ! -s "$legacy" ]; then
+            echo "::error::$legacy is missing or empty; OPENSSL_MODULES would name a directory with no provider."
+            exit 1
+          fi
 
       # Reads the packaged jniLibs, so it belongs here rather than with the
       # source-only checks: the directory is empty until the download scripts
