@@ -536,6 +536,25 @@ class MaintenanceScriptsTest(unittest.TestCase):
         for name in unplaced:
             self.assertIn(name + ":", whole["stdout"])
 
+    def test_plain_punctuation_refuses_a_text_file_it_cannot_decode(self):
+        checker = SOURCE / "scripts/check-plain-punctuation.py"
+        repo = self.root / "undecodable"
+        repo.mkdir()
+        # Windows-1252: the dash is the single byte 0x97, which is not UTF-8.
+        (repo / "notes.md").write_bytes(b"caf\xe9 a \x97 b\n")
+        (repo / "picture.png").write_bytes(b"\x89PNG\r\n\x1a\n\xff\xfe\x00")
+        write(repo / "ok.md", "plain words\n")
+        env = {"HOME": str(self.root), "GIT_CONFIG_NOSYSTEM": "1"}
+        self.assertEqual(0, run(["git", "init", "-q"], repo, env)["status"])
+        self.assertEqual(0, run(["git", "add", "--", "notes.md", "picture.png", "ok.md"], repo, env)["status"])
+        refused = run([sys.executable, "-I", str(checker), "notes.md"], repo, env)
+        self.assertEqual(1, refused["status"], refused)
+        self.assertIn("notes.md:", refused["stdout"])
+        for name in ("picture.png", "ok.md"):
+            with self.subTest(name=name):
+                result = run([sys.executable, "-I", str(checker), name], repo, env)
+                self.assertEqual(0, result["status"], result)
+
     def test_lint_policy_flags_must_be_live_code(self):
         fixture = self.root / "lint-policy"
         (fixture / "scripts").mkdir(parents=True)
