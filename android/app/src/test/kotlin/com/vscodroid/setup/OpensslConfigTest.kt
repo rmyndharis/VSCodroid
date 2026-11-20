@@ -84,6 +84,25 @@ class OpensslConfigTest {
         )
     }
 
+    /**
+     * A provider module is loaded from a directory, and the one compiled into the bundled libcrypto is
+     * Termux's. The legacy provider ships in `usr/lib/ossl-modules`, where the build script puts it.
+     */
+    @Test
+    fun `the server environment names the directory the legacy provider ships in`() {
+        val env = Environment.buildProcessEnvironment(context, 13337)
+        val script = com.vscodroid.SourceScan.read("../../scripts/download-termux-tools.sh")
+
+        assertEquals(
+            File(filesDir, "usr/lib/ossl-modules").absolutePath, env["OPENSSL_MODULES"],
+            "OPENSSL_MODULES is not exported, so libcrypto looks for legacy.so in Termux's directory and " +
+                "Python's cryptography warns at every import that the legacy provider failed to load",
+        )
+        assertTrue(script.contains("OSSL_MODULES_DST=\"\$ASSETS_DIR/usr/lib/ossl-modules\"")) {
+            "the build no longer puts the provider where OPENSSL_MODULES points"
+        }
+    }
+
     @Test
     fun `the configuration file is written where the environment says it is`() {
         FirstRunSetup(context).setupOpensslConfig()

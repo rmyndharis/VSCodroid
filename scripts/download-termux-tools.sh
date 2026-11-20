@@ -346,6 +346,31 @@ for pkg in "${LIB_PACKAGES[@]}"; do
     done
 done
 
+# --- Step 5b: Place OpenSSL's legacy provider ---
+# The one part of OpenSSL that libcrypto loads from a directory at run time
+# instead of something linking it: RC2, RC4, single DES, Blowfish and the other
+# algorithms OpenSSL 3 moved out of its default provider. Nothing in the app
+# asks for it. Python's cryptography package does when it is imported, and warns
+# on every import when the module is missing, and a PKCS#12 file written by an
+# older tool cannot be read without it. libcrypto's compiled-in directory for
+# modules is another app's, so Environment.buildProcessEnvironment names this
+# one through OPENSSL_MODULES.
+echo ""
+echo "Placing OpenSSL's legacy provider in assets/usr/lib/ossl-modules/..."
+OSSL_MODULES_SRC="extracted/openssl/data/data/com.termux/files/usr/lib/ossl-modules"
+OSSL_MODULES_DST="$ASSETS_DIR/usr/lib/ossl-modules"
+rm -rf "$OSSL_MODULES_DST"
+if [ ! -f "$OSSL_MODULES_SRC/legacy.so" ]; then
+    # Fatal for the reason a missing library is: the environment would name a
+    # directory with nothing in it, and the first thing to ask for the provider
+    # would fail on a device.
+    echo "  ERROR: legacy.so not found in openssl (looked in $OSSL_MODULES_SRC)" >&2
+    exit 1
+fi
+mkdir -p "$OSSL_MODULES_DST"
+cp "$OSSL_MODULES_SRC/legacy.so" "$OSSL_MODULES_DST/legacy.so"
+echo "  ossl-modules/legacy.so ($(du -sh "$OSSL_MODULES_DST/legacy.so" | cut -f1))"
+
 # --- Step 6: Place git-core helpers ---
 echo ""
 echo "Setting up git-core..."
@@ -655,6 +680,8 @@ done
 for lib in "$ASSETS_DIR/usr/lib"/*.so*; do
     [ -f "$lib" ] && verify_object "$lib"
 done
+
+verify_object "$OSSL_MODULES_DST/legacy.so"
 
 for helper in "$GIT_CORE_DST"/*; do
     [ -f "$helper" ] && is_elf "$helper" && verify_object "$helper"

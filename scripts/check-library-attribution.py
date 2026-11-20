@@ -437,6 +437,10 @@ NESTED_LIBRARIES = {
     # PSF, and PSF-2.0 is precisely the licence that asks for the notice to
     # travel, so the file is named for what it is.
     "usr/lib/python*/site-packages/pip/_vendor/distlib/*": ("distlib", "PSF-2.0"),
+    # OpenSSL's legacy provider, a module libcrypto loads from this directory at
+    # run time. The same project and licence as libssl and libcrypto, which the
+    # flat map above attributes.
+    "usr/lib/ossl-modules/*": ("OpenSSL", "Apache-2.0"),
     # --- the server tree's native addons ---
     "vscode-reh/node_modules/node-pty/*": ("node-pty", "MIT"),
     "vscode-reh/node_modules/@parcel/watcher/*": ("@parcel/watcher", "MIT"),

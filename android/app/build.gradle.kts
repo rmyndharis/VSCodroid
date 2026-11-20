@@ -682,6 +682,11 @@ tasks.withType<Test> {
     inputs.file(rootProject.projectDir.parentFile.resolve("scripts/verify-server-tree.py"))
         .withPropertyName("serverTreeGate")
         .withPathSensitivity(PathSensitivity.RELATIVE)
+    // OpensslConfigTest holds OPENSSL_MODULES to the directory this script puts the
+    // legacy provider in.
+    inputs.file(rootProject.projectDir.parentFile.resolve("scripts/download-termux-tools.sh"))
+        .withPropertyName("termuxToolsDownloadScript")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
     // AuthBootstrapTest and WorkbenchPatchBehavior spawn these two Node self-checks
     // directly, and test-workbench-layout.js reads the panel-position fixture.
     // Declared per file with inputs.file so a directory spelling does not disarm

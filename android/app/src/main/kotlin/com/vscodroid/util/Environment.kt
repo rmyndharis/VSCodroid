@@ -253,6 +253,12 @@ object Environment {
             // server.log). The file this names is written on every launch by
             // FirstRunSetup.setupOpensslConfig, beside the CA bundle above.
             "OPENSSL_CONF" to "$filesDir/usr/etc/tls/openssl.cnf",
+            // Where libcrypto looks for a provider module, for the same reason: the
+            // directory compiled into it is Termux's. The legacy provider is the one
+            // module shipped (download-termux-tools.sh). Nothing loads it unless asked:
+            // Python's cryptography asks at import and warns when it is missing, and
+            // an old PKCS#12 file needs its RC2.
+            "OPENSSL_MODULES" to "$filesDir/usr/lib/ossl-modules",
             "NPM_CONFIG_PREFIX" to "$filesDir/usr",
             "NPM_CONFIG_CACHE" to "$cacheDir/npm-cache",
             // Beside npm's, for the same reason: a cache Clear Caches can empty and

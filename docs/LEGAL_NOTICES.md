@@ -378,7 +378,7 @@ licence that asks for the notice to travel with the copy.
 
 - **Project**: https://www.openssl.org
 - **License**: Apache License 2.0 (OpenSSL 3.x)
-- **Ships**: `libcrypto.so.3` and `libssl.so.3`. BoringSSL is not bundled; the bundled Node links these
+- **Ships**: `libcrypto.so.3` and `libssl.so.3`, and the legacy provider module `ossl-modules/legacy.so`. BoringSSL is not bundled; the bundled Node links these
 - **Used by**: Node.js, Python, Git, OpenSSH, ldns, libcrypt, libcurl, libssh2 and ngtcp2
 
 Git is GPL-2.0 and reaches OpenSSL through libcurl, and the two licenses are

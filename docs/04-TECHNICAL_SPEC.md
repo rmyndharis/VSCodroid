@@ -406,6 +406,8 @@ val env = mapOf(
     "SSL_CERT_DIR"            to "${filesDir}/usr/etc/tls",            // an empty bundle preserves an empty trust store
     "OPENSSL_CONF"            to "${filesDir}/usr/etc/tls/openssl.cnf",  // libcrypto's built-in path is Termux's,
                                                                          // and EACCES there is fatal to Node
+    "OPENSSL_MODULES"         to "${filesDir}/usr/lib/ossl-modules",   // where the legacy provider ships; the
+                                                                       // built-in directory is Termux's as well
     "NPM_CONFIG_PREFIX"       to "${filesDir}/usr",
     "NPM_CONFIG_CACHE"        to "${cacheDir}/npm-cache",
     "PIP_CACHE_DIR"           to "${cacheDir}/pip",

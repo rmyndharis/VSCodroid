@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The privacy policy states that the Antigravity engine's version check (`--version`) still runs the downloaded program while the engine is turned off.
 - A program built for Android that an extension downloaded into the app's storage starts through the system loader when the extension calls `spawn` or `execFile`, instead of failing with `EACCES`, except one in `~/.gemini` while that setting is off.
 - `pip install cryptography` succeeds: prebuilt Android builds of `cryptography` and of `cffi`, which it needs, are among the wheels pip is pointed at. This reaches 1.9.0 as well, which reads the same list.
+- OpenSSL's legacy provider ships with the app, so Python's `cryptography` loads without a warning and the algorithms OpenSSL 3 moved out of its default set, such as the RC2 of an old PKCS#12 file, work again.
 
 ### Fixed
 
