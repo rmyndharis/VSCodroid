@@ -173,6 +173,89 @@ class TruncatedRepairRetryTest {
         assertEquals(own, File(filesDir, "home/.vscodroid/bashrc.before-repair").readText())
     }
 
+    /**
+     * The place a text is kept in is one name, and the text kept there by an earlier repair is the only
+     * copy of what that repair replaced. A second repair wrote its own text over it.
+     */
+    @Test
+    fun `a second repair keeps the text an earlier one set aside`() {
+        val first = "# VSCodroid bash configuration\nalias first='true'\n"
+        val second = "# VSCodroid bash configuration\nalias second='true'\n"
+        val aside = File(filesDir, "home/.vscodroid/bashrc.before-repair")
+        bashrc.writeText(first)
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        bashrc.writeText(second)
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        assertEquals(second, aside.readText(), "the text the second repair replaced was not kept")
+        val earlier = aside.parentFile!!.listFiles { file -> file.name.startsWith(aside.name + ".") }.orEmpty()
+        assertEquals(listOf(first), earlier.map { it.readText() }, "the text the first repair kept is gone")
+    }
+
+    /** The name an earlier text moves to is one nothing holds, also when its time is taken. */
+    @Test
+    fun `an earlier text moves to a free name when the name of its time is taken`() {
+        val aside = File(filesDir, "home/.vscodroid/bashrc.before-repair")
+        bashrc.writeText("# VSCodroid bash configuration\nalias first='true'\n")
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+        val taken = File(aside.path + "." + aside.lastModified()).apply { writeText("held by an earlier move") }
+
+        bashrc.writeText("# VSCodroid bash configuration\nalias second='true'\n")
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        assertEquals("held by an earlier move", taken.readText(), "a text kept earlier was written over")
+        val kept = aside.parentFile!!.listFiles { file -> file.name.startsWith(aside.name) }.orEmpty().map { it.readText() }
+        assertTrue(kept.any { it.contains("alias first") } && kept.any { it.contains("alias second") }, "$kept")
+    }
+
+    /** What is at the name and cannot be read as a file is moved aside as well, never written over. */
+    @Test
+    fun `something at the name that is no file is moved aside before the text is kept`() {
+        val aside = File(filesDir, "home/.vscodroid/bashrc.before-repair")
+        File(aside, "inside").apply { parentFile!!.mkdirs(); writeText("a directory someone made") }
+        val own = "# VSCodroid bash configuration\nalias ll='ls -l'\n"
+        bashrc.writeText(own)
+
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        assertEquals(own, aside.readText(), "the text was not kept")
+        val moved = aside.parentFile!!.listFiles { file -> file.name.startsWith(aside.name + ".") }.orEmpty()
+        assertEquals(listOf("a directory someone made"), moved.map { File(it, "inside").readText() })
+    }
+
+    /** A rewrite that failed after the text was kept finds the same text again, and keeps it once. */
+    @Test
+    fun `the same text met again is kept once`() {
+        val own = "# VSCodroid bash configuration\nalias ll='ls -l'\n"
+        val aside = File(filesDir, "home/.vscodroid/bashrc.before-repair")
+        bashrc.writeText(own)
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        bashrc.writeText(own)
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        assertEquals(own, aside.readText())
+        assertEquals(
+            listOf(aside.name),
+            aside.parentFile!!.list { _, name -> name.startsWith(aside.name) }.orEmpty().toList(),
+            "a second copy of the same text was kept",
+        )
+    }
+
+    /** A `.bashrc` that is a link is repaired in the file it names, and stays a link. */
+    @Test
+    fun `an emptied bashrc that is a link is written again through the link`() {
+        val theirs = File(filesDir, "dotfiles/.bashrc").apply { parentFile!!.mkdirs(); writeText("") }
+        bashrc.delete()
+        java.nio.file.Files.createSymbolicLink(bashrc.toPath(), theirs.toPath())
+
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        assertTrue(java.nio.file.Files.isSymbolicLink(bashrc.toPath()), "the link was replaced by a copy")
+        assertTrue(theirs.readText().contains("export PROJECTS_DIR"), "the file the link names was not repaired")
+    }
+
     @Test
     fun `a header with nothing after it is replaced with no copy kept`() {
         bashrc.writeText("# VSCodroid bash configuration\n")

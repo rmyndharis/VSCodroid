@@ -360,6 +360,8 @@ class ToolchainActivity : AppCompatActivity() {
      * Sends the person to the splash screen when an install is asked for before this build's setup
      * has finished. The install itself is not carried over: they are told to wait for setup and
      * install again, because setup ends by opening the editor and nothing here would still be waiting.
+     * The splash screen says so, being the one in front: said from here, a text too long for a toast
+     * at the person's font size became a dialog on this screen, under the splash.
      *
      * The launcher shortcut an earlier version published survives an update, and an update runs
      * setup again, which unpacks `usr/`. Installing a toolchain from here in that minute writes into
@@ -371,8 +373,7 @@ class ToolchainActivity : AppCompatActivity() {
     private fun handOffToSetup(): Boolean {
         if (!FirstRunSetup(this).isFirstRun()) return false
         Logger.w(tag, "Install asked for before setup had run; handing it to the splash screen")
-        AppNotices.showNotice(this, R.string.toolchain_install_after_setup)
-        startActivity(Intent(this, SplashActivity::class.java))
+        startActivity(Intent(this, SplashActivity::class.java).setAction(ACTION_INSTALL_WAITS_FOR_SETUP))
         return true
     }
 

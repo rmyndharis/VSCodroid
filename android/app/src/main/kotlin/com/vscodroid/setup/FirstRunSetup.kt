@@ -2074,8 +2074,16 @@ class FirstRunSetup(
             }
         }
 
-        // Update .npmrc on every launch: nativeLibDir changes on APK reinstall
-        val npmrc = File(context.filesDir, "home/.npmrc")
+        // Update .npmrc on every launch: nativeLibDir changes on APK reinstall.
+        //
+        // A `.npmrc` that is a link is a file the person keeps elsewhere, often in a repository
+        // other machines read, and the two lines written here are this device's alone: a bash
+        // under this install's library directory, and android as the platform. Such a file is
+        // left with the person's own lines only, and the app's go into npm's global file
+        // instead, which npm finds under NPM_CONFIG_PREFIX and lets the person's own file override.
+        val ownNpmrc = File(context.filesDir, "home/.npmrc")
+        val linked = Files.isSymbolicLink(ownNpmrc.toPath())
+        val npmrc = if (linked) File(context.filesDir, "usr/etc/npmrc") else ownNpmrc
         val bashPath = "$nativeLibDir/libbash.so"
         // script-shell: use bundled bash for npm lifecycle scripts, because
         // npm's fallback is a POSIX shell and this app's scripts assume bash
@@ -2139,7 +2147,8 @@ class FirstRunSetup(
         // A file holding one byte that is not valid UTF-8 would never compare
         // equal to what was just written to it, so every launch would rewrite an
         // already-correct file for ever.
-        if (existing != expectedContent) {
+        var written = existing == expectedContent
+        if (!written) {
             // Atomically, like every other setup file this class writes. This one
             // was the exception, and it is a bad one to be: `writeText` truncates
             // before it writes, so a write that runs out of disk leaves an empty
@@ -2158,14 +2167,41 @@ class FirstRunSetup(
             // above is reached only when the content differs, and an empty file
             // does differ, but only on a launch that has room, which is the
             // launch that would not have broken it.
-            //
-            // Through a link: `.npmrc` is the person's, and one kept in a repository and
-            // linked here would otherwise be replaced by a copy on the first launch.
-            if (writeAtomically(npmrc, throughLink = true) { it.write(expectedContent.toByteArray(Charsets.ISO_8859_1)) }) {
-                Logger.d(tag, "Updated .npmrc")
+            npmrc.parentFile?.mkdirs()
+            written = writeAtomically(npmrc) { it.write(expectedContent.toByteArray(Charsets.ISO_8859_1)) }
+            if (written) {
+                Logger.d(tag, "Updated ${npmrc.name}")
             } else {
-                Logger.w(tag, "Could not update .npmrc; it keeps whatever it held before")
+                Logger.w(tag, "Could not update ${npmrc.name}; it keeps whatever it held before")
             }
+        }
+        // Only once the global file holds the lines: until then the linked file's are all npm has.
+        if (linked && written) dropDeviceLinesFromLinkedNpmrc(ownNpmrc)
+    }
+
+    /**
+     * Takes this app's own lines out of a `.npmrc` that is a link, through the link.
+     *
+     * The linked file can hold them: the app wrote them into `~/.npmrc` and the person then moved
+     * that file into a repository and linked it back. npm reads a user file before the global one,
+     * so a script shell left there from before an update named a bash that is gone and every npm
+     * script failed with ENOENT, and on another machine the two lines name a path and a platform
+     * that are not that machine's. Only the exact shapes this app writes go ([DEVICE_NPMRC_LINE]):
+     * a script shell or an `os` the person set stays and still overrides the global file.
+     */
+    private fun dropDeviceLinesFromLinkedNpmrc(link: File) {
+        // Latin-1 and a split on the line feed alone, so every other byte comes back as it was.
+        val lines = try {
+            String(link.readBytes(), Charsets.ISO_8859_1).split("\n")
+        } catch (_: IOException) {
+            return // A link to nothing.
+        }
+        val kept = lines.filterNot { DEVICE_NPMRC_LINE.containsMatchIn(it) }
+        if (kept.size == lines.size) return
+        if (writeAtomically(link, throughLink = true) { it.write(kept.joinToString("\n").toByteArray(Charsets.ISO_8859_1)) }) {
+            Logger.i(tag, "Took this device's lines out of the linked .npmrc; npm's global file holds them")
+        } else {
+            Logger.w(tag, "Could not take this device's lines out of the linked .npmrc; npm reads them before the global file")
         }
     }
 
@@ -2299,7 +2335,16 @@ class FirstRunSetup(
                 val aside = File(context.filesDir, "home/.vscodroid/bashrc.before-repair")
                 val kept = !beyondHeader || run {
                     aside.parentFile?.mkdirs()
-                    writeAtomically(aside, { Logger.w(tag, it) }) { it.write(bytes ?: ByteArray(0)) }
+                    // The same text again is a rewrite that failed after the text was kept. Anything
+                    // else at the name is an earlier repair's, the only copy of what that one replaced,
+                    // so it moves to a free name of its own before this one takes the place.
+                    val same = runCatching { aside.isFile && aside.readBytes().contentEquals(bytes) }.getOrDefault(false)
+                    same || (
+                        (!aside.exists() || aside.renameTo(
+                            generateSequence(aside.lastModified()) { it + 1 }
+                                .map { File("${aside.path}.$it") }.first { !it.exists() },
+                        )) && writeAtomically(aside, { Logger.w(tag, it) }) { it.write(bytes ?: ByteArray(0)) }
+                        )
                 }
                 // The rewrite is not expected to throw (a failed write is
                 // reported as false), but a throw must not skip the settings
@@ -5125,6 +5170,13 @@ claude() {
  * moved the repair would silently stop recognising its own output.
  */
 private const val BASHRC_HEADER = "# VSCodroid bash configuration"
+
+/**
+ * A line of `.npmrc` in a shape only this app writes: a script shell that is the bundled bash, and
+ * the platform lines of this and earlier versions.
+ */
+private val DEVICE_NPMRC_LINE =
+    Regex("""^\s*(script-shell\s*=\s*\S*/libbash\.so|os\s*=\s*android|os\[]\s*=\s*(linux|android))\s*$""")
 
 /**
  * What opens the file `BASH_ENV` names.

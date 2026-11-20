@@ -70,7 +70,12 @@ What is deliberately NOT checked, and why
   it: both are checked. An added line is read as the file it lands in, named
   by the `+++ b/` line, so a character reference added to a page is seen as
   one; and a hunk is followed by the counts in its `@@` line, so an added
-  line that starts `++ ` is not taken for a file header.
+  line that starts `++ ` is not taken for a file header. Below the first
+  diff line the gate reads file headers and hunks and nothing else, so a
+  line there that is neither is refused, and so is a file header it cannot
+  take a path from: a description that happened to start a line with
+  `--- a/` used to end the description for this gate, and what followed it
+  was read by nobody.
 * Anything git does not track, which is what keeps build output and
   downloaded toolchains out of the result.
 
@@ -146,14 +151,27 @@ def tracked(paths):
 HUNK = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
 
 
+# The lines git writes between `diff --git` and the first hunk of a file, besides the two that name it,
+# and the `diff -ruN a b` line GNU diff writes there.
+EXTENDED_HEADER = (
+    "diff ", "index ", "new file mode ", "deleted file mode ", "old mode ", "new mode ",
+    "similarity index ", "dissimilarity index ", "rename from ", "rename to ", "copy from ", "copy to ",
+    "Binary files ",
+)
+UNPLACED = "a line below the diff that is no file header and belongs to no hunk; nothing reads it"
+UNREAD_HEADER = "a file header this gate cannot take a path from"
+STRUCTURAL = (UNPLACED, UNREAD_HEADER)
+
+
 def checkable_lines(path, text):
-    """The (number, line, landing) triples this gate is allowed to judge. `landing` is None for a line
-    judged as the file it is in. For a line a patch adds it is the path of the file that line lands in:
-    the editor's build compiles it, or a page shows it, as that file and not as the `.patch`."""
+    """The (number, line, landing) triples this gate is allowed to judge, and the (number, why, line)
+    triples of a patch it could not place. `landing` is None for a line judged as the file it is in. For
+    a line a patch adds it is the path of the file that line lands in: the editor's build compiles it,
+    or a page shows it, as that file and not as the `.patch`."""
     lines = enumerate(text.split("\n"), start=1)
     if not path.endswith(".patch"):
-        return [(number, line, None) for number, line in lines]
-    judged, in_diff, landing = [], False, path
+        return [(number, line, None) for number, line in lines], []
+    judged, unplaced, in_diff, in_binary, landing = [], [], False, False, None
     old_left = new_left = 0
     for number, line in lines:
         if old_left or new_left:
@@ -169,22 +187,44 @@ def checkable_lines(path, text):
                 new_left -= 1
             continue
         hunk = HUNK.match(line)
-        if hunk:
-            in_diff = True
+        # A hunk belongs to a file. With no file named yet the line is text that looks like one, and
+        # taking its counts would pass over the lines that follow it unread.
+        if hunk and landing is not None:
             old_left = 1 if hunk.group(1) is None else int(hunk.group(1))
             new_left = 1 if hunk.group(2) is None else int(hunk.group(2))
             continue
-        if line.startswith("diff --git ") or line.startswith("--- a/"):
+        if line == "-- ":
+            # The line `git format-patch` ends a patch with. What follows is text again.
+            in_diff = in_binary = False
+        elif line.startswith("diff --git ") or line.startswith("--- a/"):
             in_diff = True
-        if line.startswith("+++ b/"):
-            landing = line[len("+++ b/"):].split("\t")[0]
-        # Outside a hunk (a description above the diff, or a hunk whose counts ran out early), the
-        # description is judged as it is, and below the diff line only an added line is ours.
+        # The description above the diff is ours and is judged as it is.
         if not in_diff:
             judged.append((number, line, None))
-        elif line.startswith("+") and not line.startswith("+++ "):
-            judged.append((number, line, landing))
-    return judged
+            continue
+        # Below it only file headers, hunks and the blocks of a binary file are read, so anything else
+        # is said, not passed over. What is read as a header is text of the patch file all the same and
+        # is judged as that, or a line that merely begins like one would carry anything past the gate.
+        if line.startswith("diff "):
+            in_binary = False
+        elif line == "GIT binary patch":
+            in_binary = True
+        if line.startswith("+++ b/"):
+            landing = line[len("+++ b/"):].split("\t")[0].rstrip()
+        elif line == "+++ /dev/null":
+            landing = path
+        elif in_binary:
+            pass
+        elif line.startswith("+++ ") or (line.startswith("--- ") and not line.startswith(("--- a/", "--- /dev/null"))):
+            unplaced.append((number, UNREAD_HEADER, line))
+        elif line.startswith("+"):
+            # A hunk whose counts ran out early: what it adds is still ours.
+            judged.append((number, line, landing or path))
+            continue
+        elif line and not line.startswith(EXTENDED_HEADER + ("--- ", "\\ ")):
+            unplaced.append((number, UNPLACED, line))
+        judged.append((number, line, None))
+    return judged, unplaced
 
 
 def compiled_by_aapt2(path):
@@ -261,8 +301,9 @@ def offences(path):
         # file git tracks but the checkout does not hold is a different
         # problem that a different gate should report.
         return []
-    found = []
-    for number, line, landing in checkable_lines(path, text):
+    judged, unplaced = checkable_lines(path, text)
+    found = [(number, 1, why, line.strip()) for number, why, line in unplaced]
+    for number, line, landing in judged:
         found.extend(line_offences(path if landing is None else landing, number, line, landing is not None))
     # The passes walk the same line, so a file holding one of each would
     # otherwise report the second line before the first column of the first.
@@ -314,10 +355,11 @@ def main(argv) -> int:
         print("  FAIL   no tracked files to examine; the path argument matches nothing")
         return 1
 
-    total = 0
+    total = unread = 0
     for path in sorted(files):
         for number, column, name, line in offences(path):
             total += 1
+            unread += name in STRUCTURAL
             if total <= MAX_SHOWN:
                 print(f"  FAIL   {path}:{number}:{column}  {name}")
                 print(f"         {line[:120]}")
@@ -326,11 +368,16 @@ def main(argv) -> int:
         if total > MAX_SHOWN:
             print(f"  ... and {total - MAX_SHOWN} more")
         print()
-        print(f"  {total} banned dash characters in {len(files)} tracked files.")
-        print("  Use a comma, a colon, a semicolon, a full stop, or parentheses.")
-        print("  The ASCII hyphen is not the subject here and must not be changed.")
-        print("  Reproducing text that already exists is the one exception: such")
-        print("  text belongs under licenses/, or below the diff line of a patch.")
+        if total > unread:
+            print(f"  {total - unread} banned dash characters in {len(files)} tracked files.")
+            print("  Use a comma, a colon, a semicolon, a full stop, or parentheses.")
+            print("  The ASCII hyphen is not the subject here and must not be changed.")
+            print("  Reproducing text that already exists is the one exception: such")
+            print("  text belongs under licenses/, or below the diff line of a patch.")
+        if unread:
+            print(f"  {unread} lines of a patch that this gate cannot place. A description ends at the")
+            print("  first line that starts `diff --git ` or `--- a/`; below it every line is a file")
+            print("  header or part of a hunk, and the `+++ b/` line names the file a hunk lands in.")
         return 1
 
     print(f"  ok     no banned dash characters in {len(files)} tracked files")

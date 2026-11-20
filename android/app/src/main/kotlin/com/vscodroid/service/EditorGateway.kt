@@ -417,7 +417,8 @@ internal class EditorGateway(
         fun finished() {
             if (pumps.decrementAndGet() == 0) {
                 close()
-                // Both pumps have left, so nothing can use the descriptor any more.
+                // Both pumps have left, so nothing reads or writes the descriptor any more, and a
+                // thread still on its way to shut it down finds it closed.
                 runCatching { local?.close() }
                 synchronized(lock) { connections.remove(this) }
                 left.countDown()
@@ -506,14 +507,26 @@ internal class EditorBackend(private val socket: LocalSocket) : Closeable {
     fun write(bytes: ByteArray, offset: Int, count: Int): Int = Os.write(descriptor, bytes, offset, count)
     fun shutdownOutput() = socket.shutdownOutput()
 
-    /** Ends both directions, which wakes a read or a write waiting on the socket, and keeps the descriptor. */
+    private var closed = false
+
+    /**
+     * Ends both directions, which wakes a read or a write waiting on the socket, and keeps the
+     * descriptor. Nothing once the socket is closed: a thread that ends a connection can still be on
+     * its way here when the last pump leaves and closes it, and the descriptor's number may by then
+     * be another file's.
+     */
+    @Synchronized
     fun shutdown() {
+        if (closed) return
         runCatching { socket.shutdownInput() }
         runCatching { socket.shutdownOutput() }
     }
 
+    @Synchronized
     override fun close() {
+        if (closed) return
         shutdown()
+        closed = true
         socket.close()
     }
 }

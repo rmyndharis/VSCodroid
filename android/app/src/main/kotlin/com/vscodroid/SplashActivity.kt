@@ -47,6 +47,16 @@ import com.vscodroid.service.NodeService
 import com.vscodroid.util.AppNotices
 import androidx.core.content.edit
 
+/**
+ * The action of the intent by which the Toolchains screen sends a tap on Install here while setup
+ * has not finished: the splash screen tells the person that the install waits for them to ask again.
+ *
+ * An action and not an extra. This screen is exported, and reading one extra unparcels the whole
+ * bundle another app sent with its intent, which up to Android 12 throws on a class this app does
+ * not have.
+ */
+internal const val ACTION_INSTALL_WAITS_FOR_SETUP = "com.vscodroid.action.INSTALL_WAITS_FOR_SETUP"
+
 @SuppressLint("CustomSplashScreen")
 class SplashActivity : AppCompatActivity() {
     private val tag = "SplashActivity"
@@ -103,6 +113,10 @@ class SplashActivity : AppCompatActivity() {
      */
     private var stopped = false
 
+    // The Toolchains screen sent the person here from a tap on Install ([ACTION_INSTALL_WAITS_FOR_SETUP]),
+    // and they have not been told yet that the install was not carried over.
+    private var installWaitsNotice = false
+
     /** [launchMain] was asked while [stopped]; [onStart] runs it when the user is back. */
     private var launchPending = false
 
@@ -125,6 +139,9 @@ class SplashActivity : AppCompatActivity() {
         // Before super.onCreate(), as the call it replaces required.
         drawBehindSystemBars()
         super.onCreate(savedInstanceState)
+        // Once, on the screen the tap made: one made again in its place (a turn, a font size) carries
+        // the same intent, and a notice still up is handed on to it by AppNotices.
+        installWaitsNotice = savedInstanceState == null && intent?.action == ACTION_INSTALL_WAITS_FOR_SETUP
         // The colour the editor last showed, for the window this screen and the
         // setup it hosts are drawn on; see lastPageColor.
         paintWindow(lastPageColor(this))
@@ -638,6 +655,13 @@ class SplashActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         progressSink?.let { FirstRunSetup.attachProgress(it) }
+        // From here and not from onStart or onCreate: a screen counts as started only once onStart
+        // has returned, and until then a text too long for a toast is cut to a toast now and kept
+        // as a dialog for a later start, which a setup that ends first never reaches.
+        if (installWaitsNotice) {
+            installWaitsNotice = false
+            AppNotices.showNotice(this, R.string.toolchain_install_after_setup)
+        }
     }
 
     override fun onStop() {

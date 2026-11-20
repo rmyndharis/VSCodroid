@@ -80,13 +80,59 @@ class ToolchainSetupHandOffTest {
         )
     }
 
+    /**
+     * Said by the splash screen, the one in front. Said by this screen before it started the splash, a
+     * text too long for a toast at the person's font size (German from a scale of 1.15) became a
+     * dialog here, under the splash, and the tap was dropped without a word after all.
+     *
+     * And said from onResume. A screen counts as started only once onStart has returned, so a long
+     * text raised inside onStart or onCreate is cut to a toast and its dialog kept for a later start.
+     */
     @Test
-    fun `the person is told the install was not carried over before the splash screen covers this one`() {
+    fun `the person is told by the splash screen, once it can show a dialog`() {
         val body = SourceScan.body(source, "private fun handOffToSetup(")
-        val notice = body.indexOf("AppNotices.showNotice(this, R.string.toolchain_install_after_setup)")
-        val splash = body.indexOf("startActivity(")
+        val splash = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/SplashActivity.kt"))
+        val create = SourceScan.body(splash, "override fun onCreate(")
+        val start = SourceScan.body(splash, "override fun onStart(")
+        val resume = SourceScan.body(splash, "override fun onResume(")
+        val notice = "AppNotices.showNotice(this, R.string.toolchain_install_after_setup)"
 
-        assertTrue(notice >= 0, "an install asked for before setup has finished is dropped without a word")
-        assertTrue(notice < splash, "the notice is raised after the splash screen has covered this screen")
+        assertTrue(
+            body.contains(".setAction(ACTION_INSTALL_WAITS_FOR_SETUP)"),
+            "the splash screen is not told that it was a tap on Install that sent the person there",
+        )
+        assertFalse(
+            body.contains("AppNotices.showNotice("),
+            "the notice is raised on this screen, which the splash screen is about to cover",
+        )
+        assertTrue(
+            create.contains("installWaitsNotice = savedInstanceState == null && intent?.action == ACTION_INSTALL_WAITS_FOR_SETUP"),
+            "a splash screen made again in place of the first would say it a second time, or the first never reads the intent",
+        )
+        val told = resume.indexOf(notice)
+        assertTrue(told >= 0, "an install asked for before setup has finished is dropped without a word")
+        assertTrue(
+            resume.indexOf("installWaitsNotice = false") in 0 until told,
+            "the notice is not spent before it is shown, so every return to the splash screen repeats it",
+        )
+        assertFalse(
+            create.contains(notice) || start.contains(notice),
+            "raised before onStart has returned, a long text is a cut toast now and a dialog only at a later start",
+        )
+    }
+
+    /**
+     * The splash screen is exported. Reading an extra unparcels the whole bundle the sender put on
+     * the intent, and up to Android 12 that throws on a class this app does not have, so another app
+     * could end the process, and the server with it, by starting this screen.
+     */
+    @Test
+    fun `the splash screen reads no extra of the intent that started it`() {
+        val splash = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/SplashActivity.kt"))
+
+        assertFalse(
+            Regex("""\bintent\??\.(extras|get\w*Extra\w*|has\w*Extra)\b""").containsMatchIn(splash),
+            "the splash screen reads an extra of an intent any app can send",
+        )
     }
 }
