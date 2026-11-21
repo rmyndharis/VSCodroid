@@ -4149,10 +4149,15 @@ class ToolchainManager(private val context: Context) {
      * toolchain is found through PATH and started by the exec of whatever runs
      * the command, which in a terminal is the preloaded one.
      *
-     * The cost is stated rather than hidden: without the preload (`LD_PRELOAD`
-     * set to null, an extension that starts a process itself, a
-     * `"type": "process"` task) the command is a file under `filesDir` that
-     * the kernel will not execute, and nothing here makes it one.
+     * The cost is stated rather than hidden: where nothing preloads the
+     * interceptor, the command is a file under `filesDir` that the kernel will
+     * not execute, and nothing here makes it one. That is a terminal with
+     * `LD_PRELOAD` set to null, a `"type": "process"` task, and an extension
+     * that starts the command by its bare name or through a shell. An
+     * extension that starts it by its full path without a shell (`spawn`,
+     * `execFile` and their synchronous forms) has it from `platform-fix.js`,
+     * which hands such a start the interceptor and, through the linker, the
+     * program's path in `TERMUX_EXEC__PROC_SELF_EXE`.
      *
      * What still applies to it: the execute bit, `pathDirs`, `env` rows, removal,
      * and the rows its `launchers` object names ([addLauncherRows]). Only the two
