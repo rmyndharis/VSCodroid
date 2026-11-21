@@ -392,6 +392,29 @@ class PublishedResourceRootsTest {
     }
 
     /**
+     * A credential a person keeps in the projects folder and links into the home directory, such as
+     * `~/.npmrc` linked to a dotfiles repository there, puts a location that must stay unreadable inside
+     * that root, so the root is not published. The log names the link, where it named only the root, which
+     * left no way to tell why every webview resource in the folder stopped loading.
+     */
+    @Test
+    fun `a credential linked into the projects folder is named when the folder is not published`() {
+        val context = contextWith(externalDir)
+        val kept = File(filesDir, "projects/dotfiles/npmrc").apply { parentFile.mkdirs(); writeText("") }
+        File(filesDir, "home").mkdirs()
+        Files.createSymbolicLink(File(filesDir, "home/.npmrc").toPath(), kept.toPath())
+        mockkObject(Logger)
+        val warnings = mutableListOf<String>()
+        every { Logger.w(any(), capture(warnings), any()) } just Runs
+
+        val roots = publishedResourceRoots(context)
+
+        assertFalse(File(filesDir, "projects").canonicalPath in roots, "a root holding a credential was published")
+        assertTrue(warnings.any { "~/.npmrc" in it }, "the log does not say which link kept the folder back: $warnings")
+        assertTrue(warnings.none { "dotfiles" in it }, "the log names where the person's link points: $warnings")
+    }
+
+    /**
      * Catches: a sensitive set that drifts from the paths the rest of the app
      * actually writes to. The first two entries are taken from Environment's
      * getters, so this fails if one is repointed out from under them or dropped.

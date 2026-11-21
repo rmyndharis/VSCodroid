@@ -11,6 +11,7 @@ import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
+import java.nio.file.Paths
 import java.util.UUID
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
@@ -344,15 +345,77 @@ class WriteAtomicallyTest {
         assertTrue(File(dir, "dotfiles").listFiles()!!.none { it.name.endsWith(".tmp~") }, "a temporary file was left")
     }
 
+    /**
+     * A link whose file has gone is still the person's statement of where the file lives, so the file is made
+     * there, resolved against the link's own folder as the kernel resolves it, and the link stays.
+     */
     @Test
-    fun `through a link that names nothing the link is replaced as before`() {
+    fun `through a link that names nothing the file is made where it points and the link stays`() {
+        File(dir, "dotfiles").mkdirs()
         val link = File(dir, ".bashrc")
-        Files.createSymbolicLink(link.toPath(), File(dir, "missing").toPath())
+        Files.createSymbolicLink(link.toPath(), Paths.get("dotfiles/missing"))
 
         assertTrue(writeAtomically(link, throughLink = true) { it.write("new".toByteArray()) })
 
-        assertFalse(Files.isSymbolicLink(link.toPath()))
-        assertEquals("new", link.readText())
+        assertTrue(Files.isSymbolicLink(link.toPath()), "the link a person made was replaced by a copy")
+        assertEquals("new", File(dir, "dotfiles/missing").readText())
+    }
+
+    /** Through a chain of links the file is made where the last one points, and every link stays. */
+    @Test
+    fun `through a chain of links that ends in nothing every link stays`() {
+        val link = File(dir, ".bashrc")
+        Files.createSymbolicLink(File(dir, "middle").toPath(), Paths.get("missing"))
+        Files.createSymbolicLink(link.toPath(), Paths.get("middle"))
+
+        assertTrue(writeAtomically(link, throughLink = true) { it.write("new".toByteArray()) })
+
+        assertTrue(Files.isSymbolicLink(link.toPath()) && Files.isSymbolicLink(File(dir, "middle").toPath()), "a link was replaced")
+        assertEquals("new", File(dir, "missing").readText())
+    }
+
+    /**
+     * A link into a folder that is not there: making the folder would put back one the person moved away, so
+     * nothing is written, the caller is told, and the link stays.
+     */
+    @Test
+    fun `through a link into a folder that is not there nothing is written and the link stays`() {
+        val link = File(dir, ".bashrc")
+        Files.createSymbolicLink(link.toPath(), Paths.get("gone/bashrc"))
+        var why: String? = null
+
+        assertFalse(writeAtomically(link, { why = it }, throughLink = true) { it.write("new".toByteArray()) })
+
+        assertTrue(Files.isSymbolicLink(link.toPath()), "the link a person made was replaced by a copy")
+        assertFalse(File(dir, "gone").exists(), "the folder the link points into was made")
+        assertTrue(why != null, "the caller was not told why nothing was written")
+    }
+
+    /** A link to a folder names no file to write; the rename fails and the link stays. */
+    @Test
+    fun `through a link to a folder nothing is written and the link stays`() {
+        val folder = File(dir, "dotfiles").apply { mkdirs() }
+        val link = File(dir, ".bashrc")
+        Files.createSymbolicLink(link.toPath(), folder.toPath())
+
+        assertFalse(writeAtomically(link, throughLink = true) { it.write("new".toByteArray()) })
+
+        assertTrue(Files.isSymbolicLink(link.toPath()), "the link a person made was replaced by a copy")
+        assertTrue(folder.isDirectory && folder.list().isNullOrEmpty(), "something was written into the folder")
+        assertTrue(dir.listFiles()!!.none { it.name.endsWith(".tmp~") }, "a temporary file was left")
+    }
+
+    /** Links that lead round in a circle name no file at all, and none of them is replaced. */
+    @Test
+    fun `through links that lead round in a circle nothing is written`() {
+        val link = File(dir, ".bashrc")
+        Files.createSymbolicLink(File(dir, "a").toPath(), Paths.get("b"))
+        Files.createSymbolicLink(File(dir, "b").toPath(), Paths.get("a"))
+        Files.createSymbolicLink(link.toPath(), Paths.get("a"))
+
+        assertFalse(writeAtomically(link, throughLink = true) { it.write("new".toByteArray()) })
+
+        assertTrue(listOf(".bashrc", "a", "b").all { Files.isSymbolicLink(File(dir, it).toPath()) }, "a link was replaced")
     }
 
     @Test

@@ -148,7 +148,10 @@ class NodeService : Service() {
 
     private var startupNotice: StartupNotice? = null
 
-    /** Whether the stop the notification asked for is still ending the server off the main thread. See [shutdown]. */
+    /**
+     * Whether the stop the notification asked for is still ending the server off the main thread. See [shutdown].
+     * While it is, a crash report or a retry spends nothing and schedules nothing ([handleServerCrash]).
+     */
     private var stopInFlight = false
 
     /**
@@ -520,8 +523,9 @@ class NodeService : Service() {
      * gateway to give up a temporary origin. On the main thread that froze the
      * screen for as long, and a touch in it waited for the system's input timeout.
      * The foreground card stays up until then, so the system does not cache and
-     * freeze the process with the stop half done. [serviceScope] cannot carry it:
-     * [onDestroy] cancels that.
+     * freeze the process with the stop half done; a Stop from the terminal state's
+     * detached card has no such cover, and [ProcessManager.stopServer] says why
+     * that costs little. [serviceScope] cannot carry it: [onDestroy] cancels that.
      *
      * The client is told last, in [stopEnded]. `MainActivity` answers that callback
      * with `runOnUiThread`, which on the main thread runs inline, so the
@@ -772,7 +776,8 @@ class NodeService : Service() {
      * budget is gone -- and everything else either retries or leaves.
      */
     private suspend fun retryOrGiveUp() {
-        when (crashAction(isServiceRunning, restartCount)) {
+        // A stop still running owns what comes next: see [handleServerCrash].
+        when (crashAction(isServiceRunning && !stopInFlight, restartCount)) {
             CrashAction.IGNORE -> return
 
             CrashAction.GIVE_UP -> enterTerminalState()
@@ -1034,8 +1039,11 @@ class NodeService : Service() {
         // the user asked to be rid of. The watchdog suppresses the expected exit
         // itself, but a crash already on its way to this scope when Stop was
         // pressed still lands here; reviving it, or rewriting a notification
-        // that has just been taken down, would both be wrong.
-        val action = crashAction(isServiceRunning, restartCount)
+        // that has just been taken down, would both be wrong. So does one that
+        // lands while that stop still runs after a start arrived: the start set
+        // [isServiceRunning] again and is [stopEnded]'s to launch, and a retry
+        // here would be a second chain beside that launch.
+        val action = crashAction(isServiceRunning && !stopInFlight, restartCount)
         if (action == CrashAction.IGNORE) {
             Logger.i(tag, "Server exit ($exitCode) after the service stopped; nothing to restart")
             return

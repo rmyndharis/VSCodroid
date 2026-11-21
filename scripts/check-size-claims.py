@@ -20,13 +20,16 @@ sentence cannot silently switch its check off: the check fails and says which se
 to look at. A toolchain the registry lists and this file has no label for is a hard
 failure for the same reason.
 
-The free space setup asks for before it unpacks is quoted in seven places. They are held
-to the README's figure, and the README's figure to the APK.
+The free space setup asks for before it unpacks is quoted in eight places: two in the
+README, four in the user guide, one in the requirements document and one on the site's
+front page. They are held to the README's figure, and the README's figure to the APK.
 
 With --apk (the release workflow, after the APK is built) the core figures are also
 compared with the APK: the bytes the app extracts (everything under assets/ except the
 translation bundles, which setup never unpacks) against the documented core size, and
-the size of the APK against the documented core download. The totals above are built
+the size of the APK against the documented core download and against the size the user
+guide gives for the APK on GitHub Releases, which is the file the release workflow
+uploads after this check reads it. The totals above are built
 from the documented core size, so that comparison is what keeps them honest as the
 editor tree grows. The free-space figures are compared with what
 FirstRunSetup.requiredExtractionBytes asks of that APK, worked out the way the app
@@ -50,6 +53,7 @@ SETUP = ROOT / "android/app/src/main/kotlin/com/vscodroid/setup/FirstRunSetup.kt
 README = ROOT / "README.md"
 GUIDE = ROOT / "docs/USER_GUIDE.md"
 SRS = ROOT / "docs/02-SRS.md"
+SITE = ROOT / "docs/site/index.html"
 
 # How the user guide's toolchain table names each pack. A pack the registry lists that is
 # missing here fails the check, so adding a toolchain cannot add one nobody compares.
@@ -61,6 +65,10 @@ TOTAL_TOLERANCE_MB = 5
 EXTRACTED_TOLERANCE = 0.01
 # The documented core download against the size of the APK.
 DOWNLOAD_TOLERANCE = 0.05
+# The user guide's size of the APK on GitHub Releases against that APK. Held as tightly as the
+# extraction, because the sentence names the file's own size rather than a rough download: an APK
+# that moved by more than a percent (about 2 MB) fails the tag until the guide says so.
+RELEASE_APK_TOLERANCE = 0.01
 # The documented free space against what setup asks for. Kept tight: a figure below
 # the demand sends someone to free space, then refuses them and asks for more.
 FREE_SPACE_TOLERANCE = 0.01
@@ -185,13 +193,13 @@ class Document:
 def check_documents(figures):
     estimated = {pack: whole_mb(pair[0]) for pack, pair in figures.items()}
     download = {pack: whole_mb(pair[1]) for pack, pair in figures.items()}
-    readme, guide, srs = Document(README), Document(GUIDE), Document(SRS)
+    readme, guide, srs, site = Document(README), Document(GUIDE), Document(SRS), Document(SITE)
 
     # The core size is the one figure the registry cannot give: it is measured from the APK
     # (--apk), and the totals below are built on it, so the documents have to agree on it.
     hit = readme.read(r"^\|\s*Extracted to internal storage \(core\)\s*\|\s*~([\d,]+) MB", "core extraction")
     if hit is None:
-        return [readme, guide, srs], readme, guide
+        return [readme, guide, srs, site], readme, guide
     core = hit[0]
     guide.expect(r"About ([\d,]+) MB of files are unpacked", "core extraction", core)
     guide.expect(r"Core installation extracts approximately ([\d,]+) MB", "core extraction", core)
@@ -239,9 +247,11 @@ def check_documents(figures):
             "free space to install", free,
         )
         srs.expect(r"about ([\d,]+) MB free for a fresh", "free space to install", free)
-    # Read here so a rewording fails on every pull request; only the APK can say what it should be.
+        site.expect(r"Around ([\d,]+) MB free", "free space to install", free)
+    # Read here so a rewording fails on every pull request; only the APK can say what they should be.
     guide.find(r"roughly ([\d,]+) MB for a complete tree", "free space for an update")
-    return [readme, guide, srs], readme, guide
+    guide.find(r"the APK on GitHub Releases is ([\d,]+) MB", "size of the APK on GitHub Releases")
+    return [readme, guide, srs, site], readme, guide
 
 
 def check_apk(apk_path, readme, guide, constants):
@@ -293,9 +303,11 @@ def check_apk(apk_path, readme, guide, constants):
                 f"{measured:.1f} MB under assets/ (translation bundles excluded)"
             )
 
-    for document, pattern, what in (
-        (readme, r"^\|\s*Play Store download \(core\)\s*\|\s*~([\d,]+) MB", "core download"),
-        (guide, r"The core download is roughly ([\d,]+) MB", "core download"),
+    for document, pattern, what, tolerance in (
+        (readme, r"^\|\s*Play Store download \(core\)\s*\|\s*~([\d,]+) MB", "core download", DOWNLOAD_TOLERANCE),
+        (guide, r"The core download is roughly ([\d,]+) MB", "core download", DOWNLOAD_TOLERANCE),
+        (guide, r"the APK on GitHub Releases is ([\d,]+) MB", "size of the APK on GitHub Releases",
+         RELEASE_APK_TOLERANCE),
     ):
         hit = document.find(pattern, what)
         if not hit:
@@ -303,7 +315,7 @@ def check_apk(apk_path, readme, guide, constants):
         groups, line = hit
         documented = number(groups[0])
         measured = apk_bytes / 1_000_000
-        if abs(documented - measured) > measured * DOWNLOAD_TOLERANCE:
+        if abs(documented - measured) > measured * tolerance:
             problems.append(f"{document.name}:{line}: {what} reads {documented} MB, the APK is {measured:.1f} MB")
     return problems, extracted, apk_bytes
 

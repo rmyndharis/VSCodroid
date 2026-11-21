@@ -77,7 +77,10 @@ import androidx.core.net.toUri
  * can: [Environment.getProjectsDir] follows `~/projects` when it cannot see shared
  * storage, and reads the link's target by its name, as written and one link deep, so
  * a `~/.claude/projects` or a `projects` that is itself a link to `~/.ssh` passed
- * that test and was published whole.
+ * that test and was published whole. The other way round counts too: a credential such as
+ * `~/.npmrc` that is a link into the projects folder or a device folder's copy puts a location
+ * that must stay unreadable inside that root, which is then left out, and the warning names the
+ * link, never where it points.
  */
 internal fun publishedResourceRoots(
     context: Context,
@@ -96,9 +99,12 @@ internal fun publishedResourceRoots(
     Environment.getProjectsDir(context),
     Environment.getSafMirrorsDir(context),
 ).mapNotNull(::canonicalOrNull).filter { root ->
-    val safe = sensitive.none { overlaps(root, it) }
-    if (!safe) Logger.w("WebViewClient", "Not published as a resource root, it overlaps a sensitive location: $root")
-    safe
+    val overlapping = sensitive.firstOrNull { overlaps(root, it) } ?: return@filter true
+    // Named as the app knows it, `~/.npmrc` and not where that link points, which is the person's own path.
+    val name = sensitiveLocationNames(context).firstOrNull { canonicalOrNull(it) == overlapping }
+        ?.replaceFirst(Environment.getHomeDir(context), "~") ?: overlapping
+    Logger.w("WebViewClient", "Not published as a resource root, it overlaps $name, which must stay unreadable: $root")
+    false
 }
 
 /**
@@ -211,21 +217,23 @@ internal fun openResourceFile(file: File, roots: List<String>): FileInputStream 
  * [workspaceRootOrNull] take them as a precondition instead of resolving them
  * itself.
  */
-internal fun sensitiveLocations(context: Context): List<String> {
+internal fun sensitiveLocations(context: Context): List<String> =
+    sensitiveLocationNames(context).mapNotNull(::canonicalOrNull)
+
+/** [sensitiveLocations] as the app names them, before a link among them is followed. */
+private fun sensitiveLocationNames(context: Context): List<String> {
     val home = Environment.getHomeDir(context)
-    return (
-        listOf(
-            Environment.getConnectionTokenPath(context),
-            Environment.getSshDir(context),
-            // The key that opens the sealed extension secrets, and the WebView's own stores, which
-            // hold what it seals.
-            context.noBackupFilesDir.path,
-            File(context.dataDir, "app_webview_vscodroid").path,
-            File(context.dataDir, "shared_prefs").path,
-            File(context.dataDir, "databases").path,
-            File(context.cacheDir, "webview_vscodroid").path,
-        ) + CREDENTIAL_PATHS_IN_HOME.map { "$home/$it" }
-    ).mapNotNull(::canonicalOrNull)
+    return listOf(
+        Environment.getConnectionTokenPath(context),
+        Environment.getSshDir(context),
+        // The key that opens the sealed extension secrets, and the WebView's own stores, which
+        // hold what it seals.
+        context.noBackupFilesDir.path,
+        File(context.dataDir, "app_webview_vscodroid").path,
+        File(context.dataDir, "shared_prefs").path,
+        File(context.dataDir, "databases").path,
+        File(context.cacheDir, "webview_vscodroid").path,
+    ) + CREDENTIAL_PATHS_IN_HOME.map { "$home/$it" }
 }
 
 /**
