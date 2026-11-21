@@ -108,9 +108,8 @@ class SafCutOffRemovalCopyTest : SafInitialSyncTestBase() {
         assertEquals(emptyList<String>(), names())
     }
 
-    /** The name a changed copy is given: the one builds up to 1.9.0 gave every copy a removal took. */
-    private fun keptName(capture: File) =
-        "removed${SafSyncEngine.LOCAL_COPY_SUFFIX}" + capture.name.removePrefix("removed-").removeSuffix(SafSyncEngine.PARTIAL_SUFFIX)
+    /** The copies a changed capture was given: `removed.local-<time>`, a name like every other kept copy's. */
+    private fun keptCopies() = mirror.list { _, name -> Regex("removed\\.local-\\d+").matches(name) }.orEmpty().sorted()
 
     @Test
     fun `an entry of that name with other bytes of the same length is kept under a name that is sent`() {
@@ -121,10 +120,11 @@ class SafCutOffRemovalCopyTest : SafInitialSyncTestBase() {
 
         sync()
 
-        val kept = File(mirror, keptName(capture))
+        val kept = File(mirror, keptCopies().single())
         assertFalse(capture.exists(), "the person's bytes stayed under a name that is never sent")
         assertEquals("NEW", kept.readText(), "bytes that are not the deleted document's were removed")
         assertEquals(listOf(kept.name), names(), "the person's edit never reached the device")
+        assertFalse(SafSyncEngine.isRemovalCaptureName(kept.name), "the kept copy has a name the next open takes for a removal's copy")
     }
 
     @Test
@@ -136,10 +136,29 @@ class SafCutOffRemovalCopyTest : SafInitialSyncTestBase() {
 
         sync()
 
-        val kept = File(mirror, keptName(capture))
+        val kept = File(mirror, keptCopies().single())
         assertFalse(capture.exists(), "the person's bytes stayed under a name that is never sent")
         assertEquals("first draft, and more the person wrote", kept.readText())
         assertEquals(listOf(kept.name), names(), "the person's edit never reached the device")
+    }
+
+    /**
+     * The copy a killed removal left of a document that the device lists again holds the bytes the record
+     * names for it, so it is not work. Another deleted document in the same folder is what brings the
+     * folder under the pass, and the copy matches no row of that one.
+     */
+    @Test
+    fun `a copy of the recorded bytes of a document the device lists again is not kept as work`() {
+        firstOpen(Child("notes.txt", contents = "first draft"), Child("gone.txt", contents = "a different length of bytes"))
+        val capture = cutOff("notes.txt", newName())
+        mirrorFile("gone.txt").delete()
+        deviceKeepsOnly(Child("notes.txt", contents = "first draft"))
+
+        sync()
+
+        assertTrue(capture.exists(), "the recorded copy of a document that is on the device again was taken away")
+        assertEquals(emptyList<String>(), keptCopies(), "the recorded bytes were kept as the person's work")
+        assertEquals(emptyList<String>(), names(), "the recorded bytes were sent to the device as the person's work")
     }
 
     @Test

@@ -1399,14 +1399,22 @@ class SafSyncEngine(private val context: Context) {
     ): Int {
         val onDevice = documents.mapTo(HashSet()) { it.relativePath }
         val filesOnDevice = documents.filterNot { it.isDirectory }.mapTo(HashSet()) { it.relativePath }
+        // Every row that has a digest, by its directory, and among them the rows of documents the device
+        // no longer lists. The second decide which folders the pass looks into and what a copy is removed
+        // for; the first, what a copy that is not removed may be: the recorded bytes of a document, which
+        // are no work of the person's.
+        val recordedRows = HashMap<File, MutableList<Pair<Long, ByteArray>>>()
         val goneRows = HashMap<File, MutableList<Pair<Long, ByteArray>>>()
         for ((identity, digest) in previous) {
             if (digest == null) continue
             val fields = identity.split('\t')
             val length = fields.getOrNull(2)?.toLongOrNull() ?: continue
             val path = unescapeRecordPath(fields[0])
-            if (path.isEmpty() || path in filesOnDevice) continue
+            if (path.isEmpty()) continue
             val file = File(mirrorDir, path)
+            val parent = file.parentFile ?: continue
+            recordedRows.getOrPut(parent) { ArrayList() } += length to digest
+            if (path in filesOnDevice) continue
             // A row this build cannot make a path of is left to phase 3, which reads rows the same way.
             // Held only by the copy the row names: a file at its path with that time and length. A
             // folder, a link or a file made since is not that copy, and the entry beside it is no less
@@ -1423,7 +1431,7 @@ class SafSyncEngine(private val context: Context) {
                 continue
             }
             if (held) continue
-            goneRows.getOrPut(file.parentFile ?: continue) { ArrayList() } += length to digest
+            goneRows.getOrPut(parent) { ArrayList() } += length to digest
         }
         var removed = 0
         for ((directory, rows) in goneRows) {
@@ -1440,8 +1448,16 @@ class SafSyncEngine(private val context: Context) {
                         val digest = if (sameLength.isEmpty()) null else (inboundEntry(selected)?.digest ?: return@use)
                         if (digest == null || sameLength.none { it.second.contentEquals(digest) }) {
                             // Bytes that are no deleted document's: a removal takes a copy only while it is the recorded
-                            // one, so these were written after, by the person, and exist nowhere else.
-                            if (name.endsWith(PARTIAL_SUFFIX)) keepCaptureAsLocalWork(selected, capture, mirrorDir)
+                            // one, so these were written after, by the person, and exist nowhere else. Unless they are
+                            // the recorded bytes of a document the device lists again, which a removal took before the
+                            // device undid the deletion: that copy is no work, and stays where it is.
+                            if (name.endsWith(PARTIAL_SUFFIX)) {
+                                val recordedAlike = recordedRows[directory].orEmpty().filter { it.first == attributes.size() }
+                                val seen = digest ?: if (recordedAlike.isEmpty()) null else (inboundEntry(selected)?.digest ?: return@use)
+                                if (seen == null || recordedAlike.none { it.second.contentEquals(seen) }) {
+                                    keepCaptureAsLocalWork(selected, capture, mirrorDir)
+                                }
+                            }
                             return@use
                         }
                         // A last look: what was hashed must still be what is removed.
@@ -1460,20 +1476,24 @@ class SafSyncEngine(private val context: Context) {
 
     /**
      * Gives a copy that a killed removal took from its name, and that holds bytes the person wrote
-     * since, the name builds up to 1.9.0 gave every such copy, `removed.local-<uuid>`. The
-     * machine-temporary name it was taken under is never sent, and the row that named the copy is
-     * dropped by this open, so the edit stayed in the mirror under a name nobody reads and went
-     * with the mirror when it was reclaimed. The new name is an ordinary one: the open creates the
-     * file on the device and a notice names it. A name that is taken leaves the copy where it is.
+     * since, a name of its own: `removed.local-<time>`, the shape of every other copy kept beside
+     * a file, with the copy's own time. The copy lost the name of its file when the removal took
+     * it, so the base is a fixed word. The machine-temporary name it was taken under is never
+     * sent, and the row that named the copy is dropped by this open, so the edit stayed in the
+     * mirror under a name nobody reads and went with the mirror when it was reclaimed. The new
+     * name is an ordinary one: the open creates the file on the device and a notice names it.
+     * A time that is taken goes on to the next.
      */
     private fun keepCaptureAsLocalWork(selected: OutboundPath, capture: File, mirrorDir: File) {
-        val identifier = capture.name.removePrefix("removed-").removeSuffix(PARTIAL_SUFFIX)
-        val kept = selected.sibling("removed$LOCAL_COPY_SUFFIX$identifier")
+        var time = selected.attributes().lastModifiedTime().toMillis()
+        var kept = selected.sibling(localCopyName("removed", time))
         requireCurrentParent(selected, capture, mirrorDir)
-        if (moveToFreeName(selected, capture, selected.leaf, kept)) {
-            notePreservedLocalCopy(File(capture.parentFile, kept.toString()))
-            Logger.w(tag, "Kept a changed copy a removal had taken as $kept")
+        while (!moveToFreeName(selected, capture, selected.leaf, kept)) {
+            time++
+            kept = selected.sibling(localCopyName("removed", time))
         }
+        notePreservedLocalCopy(File(capture.parentFile, kept.toString()))
+        Logger.w(tag, "Kept a changed copy a removal had taken as $kept")
     }
 
     private fun isStartOfSibling(
