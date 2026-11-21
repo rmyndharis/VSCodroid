@@ -5,6 +5,7 @@ import android.content.Context
 import android.database.Cursor
 import android.net.Uri
 import android.os.FileObserver
+import android.os.SystemClock
 import android.provider.DocumentsContract
 import com.vscodroid.util.Logger
 import io.mockk.Runs
@@ -19,6 +20,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -709,6 +711,366 @@ class SafQueuedWriteBackTest {
         assertFalse(SafSyncEngine.supersededByLaterJob(job(SyncType.DELETE, true), job(SyncType.CREATE)))
         assertFalse(SafSyncEngine.supersededByLaterJob(job(SyncType.DELETE), job(SyncType.MODIFY, true)))
         assertFalse(SafSyncEngine.supersededByLaterJob(job(SyncType.DELETE, true), job(SyncType.RENAME, true)))
+    }
+
+    /**
+     * A save the watcher delivered is vouched for by the record's row for its path. A folder
+     * rename moved every other memory of the folder to the new name and left those rows under the
+     * old one, so the next open found the renamed file with no row, took the device copy for one
+     * another app may have written, and kept this app's own delivered save beside the file as a
+     * `.device-` copy, with a notice saying a device edit was kept.
+     */
+    @Test
+    fun `a save delivered before its folder was renamed is not kept as a device edit at the next open`() {
+        onDevice("old_dir")
+        onDevice("old_dir/notes.txt", "baseline")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        inMirror("old_dir/notes.txt", "delivered")
+        observe(FileObserver.MODIFY, "old_dir/notes.txt")
+        drain()
+        assertEquals("delivered", text("old_dir/notes.txt"))
+        assertTrue(File(mirror, "old_dir").renameTo(File(mirror, "lib")))
+        observe(FileObserver.MOVED_FROM or isDirFlag, "old_dir")
+        Thread.sleep(2)
+        observe(FileObserver.MOVED_TO or isDirFlag, "lib")
+        drain()
+        assertEquals("delivered", text("lib/notes.txt"), "precondition: the rename reached the device")
+        // Edited again and never sent, as an edit made while the folder was not watched is.
+        inMirror("lib/notes.txt", "edited again, never sent")
+
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        assertEquals(
+            emptyList<String>(),
+            File(mirror, "lib").list()!!.filter { SafSyncEngine.DEVICE_COPY_SUFFIX in it },
+            "the open kept this app's own delivered save as if another app had written it",
+        )
+        assertEquals("edited again, never sent", text("lib/notes.txt"))
+    }
+
+    /**
+     * Stands in for the watch an open keeps on each directory of the mirror, which a JVM test
+     * cannot build: it remembers each directory's delivery, and [fire] reports an event the way
+     * the kernel would.
+     */
+    private inner class OpenWatches {
+        private val deliveries = mutableMapOf<String, (Int, String?) -> Unit>()
+        val watching = mutableSetOf<String>()
+
+        fun install() {
+            engine.directoryWatchFactory = { dir, deliver ->
+                deliveries[dir.absolutePath] = deliver
+                object : OpenWatch {
+                    override fun start() { watching += dir.absolutePath }
+                    override fun stop() { watching -= dir.absolutePath }
+                }
+            }
+        }
+
+        fun fire(event: Int, path: String) {
+            val file = File(mirror, path)
+            deliveries.getValue(file.parentFile.absolutePath)(event, file.name)
+        }
+    }
+
+    /**
+     * Stands in for FileObserver as Android has it: all observers of a process share one inotify
+     * instance, so two observers of one directory share one watch. The one started last is the one
+     * the directory's events go to, and stopping either removes the watch for both.
+     */
+    private inner class KernelWatches {
+        val log = mutableListOf<String>()
+        private val active = mutableMapOf<String, Boolean>()
+        private val receiver = mutableMapOf<String, (Int, String?) -> Unit>()
+
+        /** Whose watches are being made: the open's, or the watcher's once it starts. */
+        var owner = "open"
+
+        private fun name(dir: File) = dir.relativeTo(mirror).path.ifEmpty { "." }
+
+        fun install() {
+            engine.directoryWatchFactory = { dir, deliver ->
+                val whose = owner
+                object : OpenWatch {
+                    override fun start() {
+                        log += "start:$whose:${name(dir)}"
+                        active[name(dir)] = true
+                        receiver[name(dir)] = deliver
+                    }
+
+                    override fun stop() {
+                        log += "stop:$whose:${name(dir)}"
+                        active[name(dir)] = false
+                    }
+                }
+            }
+        }
+
+        fun watched(dir: String) = active[dir] == true
+
+        fun fire(event: Int, path: String) {
+            val file = File(mirror, path)
+            val dir = name(file.parentFile)
+            if (watched(dir)) receiver.getValue(dir)(event, file.name)
+        }
+    }
+
+    /**
+     * The watcher takes each directory over from the open's watch by starting its own first, and
+     * does not stop the open's then: stopped first, the moment between the two lost what happened
+     * in it; stopped after, the shared watch would go with it and leave the watcher deaf. The
+     * open's watch goes when the watcher's does.
+     */
+    @Test
+    fun `the watcher starts each directory's watch before the open's watch of it ends`() {
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } returns 0L
+        onDevice("src")
+        onDevice("src/a.txt", "alpha")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val kernel = KernelWatches().also { it.install() }
+        openRecording { _, _ -> }
+        kernel.owner = "watcher"
+
+        engine.startWatching(mirror, treeUri)
+        try {
+            for (dir in listOf(".", "src")) {
+                val started = kernel.log.indexOf("start:watcher:$dir")
+                val ended = kernel.log.indexOf("stop:open:$dir")
+                assertTrue(started >= 0, "the watcher never watched $dir: ${kernel.log}")
+                assertTrue(ended == -1 || ended > started, "the open's watch of $dir ended before the watcher's began: ${kernel.log}")
+                assertTrue(kernel.watched(dir), "the handover left $dir unwatched: ${kernel.log}")
+            }
+            inMirror("src/a.txt", "typed after the watcher started")
+            kernel.fire(FileObserver.MODIFY, "src/a.txt")
+            val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5)
+            while (text("src/a.txt") != "typed after the watcher started" && System.nanoTime() < deadline) Thread.sleep(10)
+            assertEquals("typed after the watcher started", text("src/a.txt"), "the watcher did not hear the directory it took over")
+        } finally {
+            engine.shutdown()
+        }
+        assertEquals(1, writes.count { it == "src/a.txt" }, "the save was sent more than once")
+        for (dir in listOf(".", "src")) {
+            assertTrue(kernel.log.indexOf("stop:open:$dir") > kernel.log.indexOf("stop:watcher:$dir"), "the open's watch of $dir outlived the watcher: ${kernel.log}")
+        }
+    }
+
+    /** An open that records what changes while it runs, as the folder open the editor waits on does. */
+    private fun openRecording(onProgress: (Int, Int) -> Unit) =
+        runBlocking { engine.initialSync(treeUri, mirror, recordChanges = true, onProgress = onProgress) }
+
+    /** What the watcher does with that record once it starts, without the observers it builds. */
+    private fun replayWhatTheOpenRecorded() {
+        val changes = checkNotNull(engine.takeChangesDuringOpen(mirror)) { "the open kept no record of its changes" }
+        engine.replayChangesDuringOpen(changes, mirror, treeUri)
+    }
+
+    /**
+     * The watcher is stopped while a folder opens, so a file deleted before the open reached it was
+     * fetched back from the device, and the deletion was undone with nothing said.
+     */
+    @Test
+    fun `a file deleted while its folder opens is deleted on the device and not fetched back`() {
+        onDevice("a.txt", "alpha")
+        onDevice("b.txt", "bravo")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val watches = OpenWatches().also { it.install() }
+        var deleted = false
+
+        openRecording { done, _ ->
+            if (done == 1 && !deleted) {
+                deleted = true
+                assertTrue(File(mirror, "b.txt").delete())
+                watches.fire(FileObserver.DELETE, "b.txt")
+            }
+        }
+        assertTrue(deleted, "precondition: the file was deleted while the folder opened")
+        assertFalse(File(mirror, "b.txt").exists(), "the open fetched back a file deleted while it ran")
+        replayWhatTheOpenRecorded()
+        drain()
+
+        assertEquals(setOf("a.txt"), device.keys, "the deletion did not reach the device")
+        assertEquals(emptyList<String>(), lost + refused)
+        assertTrue(watches.watching.isEmpty(), "the open's watches were left running")
+    }
+
+    /** What decides the deletion is what decides any other: another app's edit since the last open is kept. */
+    @Test
+    fun `a file deleted while its folder opens stays on the device when another app changed it since`() {
+        onDevice("a.txt", "alpha")
+        onDevice("b.txt", "bravo")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        onDevice("b.txt", "BRAVO")
+        val kept = mutableListOf<String>()
+        engine.onKeptOnDevice = { file, _, changed -> kept += "${file.name}:$changed" }
+        val watches = OpenWatches().also { it.install() }
+        var deleted = false
+
+        openRecording { done, _ ->
+            if (done == 1 && !deleted) {
+                deleted = true
+                assertTrue(File(mirror, "b.txt").delete())
+                watches.fire(FileObserver.DELETE, "b.txt")
+            }
+        }
+        replayWhatTheOpenRecorded()
+        drain()
+
+        assertEquals("BRAVO", text("b.txt"), "another app's edit went with a deletion made before the open read it")
+        assertEquals(listOf("b.txt:true"), kept)
+    }
+
+    /** A folder removed with what is in it while the open runs, as `rm -r` reports it: each file, then the folder. */
+    @Test
+    fun `a folder removed while its folder opens is removed on the device and not fetched back`() {
+        onDevice("a.txt", "alpha")
+        onDevice("d")
+        onDevice("d/x.txt", "x-ray")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val watches = OpenWatches().also { it.install() }
+        var removed = false
+
+        openRecording { done, _ ->
+            if (done == 1 && !removed) {
+                removed = true
+                assertTrue(File(mirror, "d").deleteRecursively())
+                watches.fire(FileObserver.DELETE, "d/x.txt")
+                watches.fire(FileObserver.DELETE or isDirFlag, "d")
+            }
+        }
+        assertTrue(removed, "precondition: the folder was removed while the open ran")
+        assertFalse(File(mirror, "d").exists(), "the open fetched back a folder removed while it ran")
+        replayWhatTheOpenRecorded()
+        drain()
+
+        assertEquals(setOf("a.txt"), device.keys)
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /**
+     * A file made while its folder opens is sent once the folder is open, also over a record the open
+     * could not read, where the record the open writes names the file without a digest: such a row
+     * only says the open could not place the file, not that the device has it.
+     */
+    @Test
+    fun `a file made while its folder opens over an unreadable record reaches the device once the watcher starts`() {
+        onDevice("a.txt", "alpha")
+        onDevice("b.txt", "bravo")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val record = File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+        record.writeText("not a record this build wrote")
+        val watches = OpenWatches().also { it.install() }
+        var made = false
+
+        openRecording { done, _ ->
+            if (done == 1 && !made) {
+                made = true
+                inMirror("n.txt", "made while it opened")
+                watches.fire(FileObserver.CREATE, "n.txt")
+                watches.fire(FileObserver.MODIFY, "n.txt")
+            }
+        }
+        assertTrue(made, "precondition: the file was made while the folder opened")
+        val row = record.readLines().single { it.startsWith("n.txt\t") }
+        assertNull(SafSyncEngine.splitRecordLine(row).second, "precondition: the record names the file without a digest")
+        replayWhatTheOpenRecorded()
+        drain()
+
+        assertEquals("made while it opened", text("n.txt"))
+    }
+
+    /**
+     * A shutdown that lands while a folder opens ends the open's watches then. Kept by the open alone,
+     * they stayed registered until it finished, and the watch of a directory is shared with any other
+     * observer of it, which the close at the end then ended too.
+     */
+    @Test
+    fun `a shutdown during an open stops the open's watches at once`() {
+        onDevice("a.txt", "alpha")
+        onDevice("b.txt", "bravo")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val watches = OpenWatches().also { it.install() }
+        var afterShutdown: Set<String>? = null
+
+        openRecording { done, _ ->
+            if (done == 1 && afterShutdown == null) {
+                assertTrue(watches.watching.isNotEmpty(), "precondition: the open was watching")
+                engine.shutdown()
+                afterShutdown = watches.watching.toSet()
+            }
+        }
+
+        assertEquals(emptySet<String>(), afterShutdown, "the shutdown left the open's watches running")
+        assertNull(engine.takeChangesDuringOpen(mirror), "a record was kept for a watcher that can never start")
+    }
+
+    /** The same window for a save: one made after the open had passed its file waited for the next save or open. */
+    @Test
+    fun `a save made after its folder's open passed the file reaches the device once the watcher starts`() {
+        onDevice("a.txt", "alpha")
+        onDevice("b.txt", "bravo")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val watches = OpenWatches().also { it.install() }
+        var saved = false
+
+        openRecording { done, _ ->
+            if (done == 2 && !saved) {
+                saved = true
+                inMirror("a.txt", "typed after the open passed it")
+                watches.fire(FileObserver.MODIFY, "a.txt")
+            }
+        }
+        assertTrue(saved, "precondition: the save was made while the folder opened")
+        replayWhatTheOpenRecorded()
+        drain()
+
+        assertEquals("typed after the open passed it", text("a.txt"))
+        assertEquals(emptyList<String>(), lost)
+    }
+
+    /**
+     * The open raises events of its own: it puts fetched copies in place, makes the device's
+     * folders, and removes what the device no longer holds. None of that is sent back, while the
+     * person's deletion in the same open still is.
+     */
+    @Test
+    fun `what the open put in place, made or removed itself is not sent back`() {
+        onDevice("0.txt", "zero")
+        onDevice("a.txt", "alpha")
+        onDevice("c.txt", "charlie")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        device.remove("c.txt")
+        onDevice("d")
+        onDevice("d/x.txt", "x-ray")
+        onDevice("new.txt", "november")
+        val watches = OpenWatches().also { it.install() }
+        var deleted = false
+
+        openRecording { done, _ ->
+            if (done == 1 && !deleted) {
+                deleted = true
+                assertTrue(File(mirror, "a.txt").delete())
+                watches.fire(FileObserver.DELETE, "a.txt")
+            }
+        }
+        assertTrue(deleted, "precondition: the file was deleted while the folder opened")
+        assertFalse(File(mirror, "c.txt").exists(), "precondition: the open removed what the device no longer holds")
+        assertEquals("november", File(mirror, "new.txt").readText(), "precondition: the open fetched the new file")
+        // What the kernel reports for the open's own work, which reaches the watch after the fact.
+        val capture = "removed-00000000-0000-0000-0000-000000000000" + SafSyncEngine.PARTIAL_SUFFIX
+        watches.fire(FileObserver.CREATE or isDirFlag, "d")
+        watches.fire(FileObserver.MOVED_TO, "new.txt")
+        watches.fire(FileObserver.MOVED_FROM, "c.txt")
+        watches.fire(FileObserver.MOVED_TO, capture)
+        watches.fire(FileObserver.DELETE, capture)
+        writes.clear()
+        attempts.clear()
+        replayWhatTheOpenRecorded()
+        drain()
+
+        assertEquals(setOf("0.txt", "d", "d/x.txt", "new.txt"), device.keys)
+        assertEquals(emptyList<String>(), attempts, "the open's own work was written back to the device")
+        assertEquals(emptyList<String>(), lost + refused)
     }
 
     @Test

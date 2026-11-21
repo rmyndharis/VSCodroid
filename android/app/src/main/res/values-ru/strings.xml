@@ -271,6 +271,7 @@
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">Папка %1$s оставлена в папке на устройстве: другое приложение могло изменить файл в ней с тех пор, как редактор в последний раз прочитал или сохранил этот файл. Удалите её там, если она больше не нужна.</string>
     <string name="saf_delete_refused">Не удалось удалить %1$s из папки на устройстве, поэтому этот элемент появится снова при следующем открытии папки. Удалите его в файловом менеджере устройства.</string>
+    <string name="saf_delete_busy">%1$s не удалён из папки на устройстве, потому что в то же хранилище ещё шла другая запись. Этот элемент появится снова при следующем открытии папки; тогда удалите его ещё раз.</string>
     <!-- Device and app edits kept beside their file instead of being overwritten -->
     <string name="saf_device_copy_preserved">Изменение с устройства рядом: %1$s.</string>
     <plurals name="saf_device_copies_preserved">

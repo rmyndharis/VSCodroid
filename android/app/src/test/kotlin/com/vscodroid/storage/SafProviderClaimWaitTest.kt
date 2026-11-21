@@ -309,6 +309,7 @@ class SafProviderClaimWaitTest {
         val deleted: AtomicBoolean = AtomicBoolean(),
         val refused: AtomicBoolean = AtomicBoolean(),
         val kept: AtomicBoolean = AtomicBoolean(),
+        val busy: AtomicBoolean = AtomicBoolean(),
     )
 
     private fun deleteWith(engine: SafSyncEngine, outcome: DeleteOutcome) {
@@ -320,6 +321,7 @@ class SafProviderClaimWaitTest {
             true
         }
         engine.onDeleteRefused = { outcome.refused.set(true) }
+        engine.onDeleteBusy = { outcome.busy.set(true) }
         engine.onKeptOnDevice = { _, _, _ -> outcome.kept.set(true) }
         assertTrue(file.delete())
         engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, treeUri)
@@ -338,12 +340,17 @@ class SafProviderClaimWaitTest {
         val (_, ms) = timed { deleteWith(engine, outcome) }
 
         assertTrue(outcome.deleted.get(), "the delete was refused although the other write ended within the wait")
-        assertFalse(outcome.refused.get() || outcome.kept.get(), "the user was told about a delete that went through")
+        assertFalse(outcome.refused.get() || outcome.kept.get() || outcome.busy.get(), "the user was told about a delete that went through")
         assertTrue(ms >= 300, "the delete did not wait for the claim ($ms ms)")
     }
 
+    /**
+     * A delete that gave up on a busy claim was announced in the wording for a device folder that
+     * refused it, which tells the person to go and delete the file in their file manager. Nothing
+     * refused it: another write to the same storage was still running. It has a notice of its own.
+     */
     @Test
-    fun `a delete is refused with the notice when the claim stays held past the wait`() {
+    fun `a delete is announced as not done yet when the claim stays held past the wait`() {
         val engine = engineOnDevice()
         engine.providerClaimWaitMs = 300
         val outcome = DeleteOutcome()
@@ -352,7 +359,8 @@ class SafProviderClaimWaitTest {
         deleteWith(engine, outcome)
 
         assertFalse(outcome.deleted.get(), "the device document was deleted without the claim")
-        assertTrue(outcome.refused.get(), "a delete refused while the provider is busy did not report the delete-refused notice")
+        assertTrue(outcome.busy.get(), "a delete given up on a busy provider was not announced")
+        assertFalse(outcome.refused.get(), "a delete given up on a busy provider was announced as refused by the device folder")
         assertFalse(outcome.kept.get(), "a delete refused while the provider is busy reported that another app may have changed the document")
     }
 
@@ -417,8 +425,10 @@ class SafProviderClaimWaitTest {
             true
         }
         val refused = mutableListOf<String>()
+        val busy = mutableListOf<String>()
         val kept = mutableListOf<String>()
         engine.onDeleteRefused = { refused += it.name }
+        engine.onDeleteBusy = { busy += it.name }
         engine.onKeptOnDevice = { f, _, _ -> kept += f.name }
 
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
@@ -430,7 +440,8 @@ class SafProviderClaimWaitTest {
         assertTrue(file.delete())
         engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, treeUri)
         engine.runWriteBackLoop { false }
-        assertEquals(listOf("notes.md"), refused)
+        assertEquals(listOf("notes.md"), busy)
+        assertTrue(refused.isEmpty(), "busy delete was announced as refused by the device folder")
         assertTrue(kept.isEmpty(), "busy delete recorded kept-on-device notice")
 
         release(claim)
@@ -487,6 +498,83 @@ class SafProviderClaimWaitTest {
 
         assertFalse(created.get(), "a document was created without the claim")
         assertTrue(failed.get(), "the refusal was not announced")
+    }
+
+    /**
+     * Waits until [thread] is parked in the claim's wait, which is the one timed wait these drains make while
+     * nobody else holds the mirror's turn.
+     */
+    private fun waitingForClaim(thread: Thread): Boolean {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (System.nanoTime() < deadline) {
+            if (thread.state == Thread.State.TIMED_WAITING) return true
+            Thread.sleep(5)
+        }
+        return false
+    }
+
+    /**
+     * A delete takes the provider claim before the mirror's turn, as a save and a rename do, so the
+     * order is the same on every path. Taken inside the turn, a delete held the mirror for the whole
+     * wait while a save of the same mirror held the claim and waited for that turn: two drains of one
+     * mirror, which a busy reopen leaves, stalled each other until the wait ran out, the delete was
+     * refused, and the holder, marked as waited out, had every other mutation of that provider refused
+     * at once until it let go.
+     *
+     * Read off the thread rather than raced: the claim is held here, and while the delete waits for it
+     * the mirror's turn must be free.
+     */
+    @Test
+    fun `a delete waiting for the provider claim does not hold the mirror's turn`() {
+        val engine = engineOnDevice()
+        engine.providerClaimWaitMs = 10_000
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val deleted = AtomicBoolean()
+        every { DocumentsContract.deleteDocument(resolver, document) } answers {
+            deleted.set(true)
+            true
+        }
+        val file = File(mirror, "notes.md")
+        assertTrue(file.delete())
+        engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, treeUri)
+        val claim = hold("test")
+        val drain = Thread { engine.runWriteBackLoop { false } }.apply { isDaemon = true; start() }
+        try {
+            assertTrue(waitingForClaim(drain), "the delete never came to wait for the claim")
+            assertFalse(turnOf(mirror).isLocked, "the delete held the mirror's turn while it waited for the provider claim")
+        } finally {
+            release(claim)
+            held.remove(claim)
+            drain.join(10_000)
+        }
+        assertFalse(drain.isAlive)
+        assertTrue(deleted.get(), "the delete did not go through once the claim was free")
+    }
+
+    /** The same for a create, which asks for the claim of the folder it makes the document in. */
+    @Test
+    fun `a create waiting for the provider claim does not hold the mirror's turn`() {
+        val engine = engineOnDevice()
+        engine.providerClaimWaitMs = 10_000
+        val created = AtomicBoolean()
+        every { DocumentsContract.createDocument(any(), any(), any(), any()) } answers {
+            created.set(true)
+            document
+        }
+        val file = File(mirror, "fresh.txt").apply { writeText("new") }
+        engine.handleMirrorEvent(FileObserver.CREATE, file, mirror, treeUri)
+        val claim = hold("test")
+        val drain = Thread { engine.runWriteBackLoop { false } }.apply { isDaemon = true; start() }
+        try {
+            assertTrue(waitingForClaim(drain), "the create never came to wait for the claim")
+            assertFalse(turnOf(mirror).isLocked, "the create held the mirror's turn while it waited for the provider claim")
+        } finally {
+            release(claim)
+            held.remove(claim)
+            drain.join(10_000)
+        }
+        assertFalse(drain.isAlive)
+        assertTrue(created.get(), "the create did not go through once the claim was free")
     }
 
     /**

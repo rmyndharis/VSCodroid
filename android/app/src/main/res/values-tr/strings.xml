@@ -267,6 +267,7 @@
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">%1$s cihaz klasöründe tutuldu: düzenleyici içindeki bir dosyayı en son okuduğundan veya kaydettiğinden beri başka bir uygulama o dosyayı değiştirmiş olabilir. Buna artık ihtiyacınız yoksa orada silin.</string>
     <string name="saf_delete_refused">%1$s cihaz klasöründen silinemedi ve klasör yeniden açıldığında tekrar görünecek. Bu öğeyi cihazınızdaki dosya yöneticisinden silin.</string>
+    <string name="saf_delete_busy">Aynı depolamaya başka bir yazma işlemi hâlâ sürdüğü için %1$s cihaz klasöründen silinmedi. Klasör yeniden açıldığında tekrar görünecek; o zaman yeniden silin.</string>
     <!-- Device and app edits kept beside their file instead of being overwritten -->
     <string name="saf_device_copy_preserved">Cihazdaki değişiklik dosyanın yanında: %1$s.</string>
     <plurals name="saf_device_copies_preserved">

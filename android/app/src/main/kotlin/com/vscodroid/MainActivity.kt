@@ -963,6 +963,16 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
             }
         }
 
+        // The same outcome when nothing refused: another write to the same storage held the
+        // delete past its wait. Its own sentence, because the refusal's sends the user to the
+        // file manager for a file that deleting again after the next open removes.
+        safManager.onDeleteBusy { busy ->
+            val message = appContext.getString(R.string.saf_delete_busy, busy.name)
+            toMainThread.post {
+                AppNotices.showNotice(appContext, message, Toast.LENGTH_LONG, screen.get())
+            }
+        }
+
         safManager.onLocalCopiesPreserved { copies ->
             if (copies.isEmpty()) return@onLocalCopiesPreserved
             val message = if (copies.size == 1) {

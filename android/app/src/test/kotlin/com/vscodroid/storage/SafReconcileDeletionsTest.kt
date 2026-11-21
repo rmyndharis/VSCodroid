@@ -245,8 +245,9 @@ class SafReconcileDeletionsTest {
 
         sync { engine ->
             engine.exclusiveMove = { directory, _, from, to ->
-                asked += to
-                if (asked.size == 1) {
+                // The set-aside's own moves; the device copy then goes onto the name through the same step.
+                if (SafSyncEngine.LOCAL_COPY_SUFFIX in to) asked += to
+                if (asked.size == 1 && SafSyncEngine.LOCAL_COPY_SUFFIX in to) {
                     File(directory, to).writeText("MADE IN BETWEEN")
                     ExclusiveMove.Outcome.TAKEN
                 } else {
@@ -273,7 +274,8 @@ class SafReconcileDeletionsTest {
 
         sync { engine ->
             engine.exclusiveMove = { directory, _, from, to ->
-                asked += to
+                // The set-aside's own moves; the device copy then goes onto the name through the same step.
+                if (SafSyncEngine.LOCAL_COPY_SUFFIX in to) asked += to
                 Files.move(File(directory, from).toPath(), File(directory, to).toPath())
                 ExclusiveMove.Outcome.UNKNOWN
             }

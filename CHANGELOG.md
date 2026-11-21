@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Opening a device folder no longer keeps a `.device-` copy of a save VSCodroid itself delivered when the file was edited again since, also after the folder holding it was renamed.
+- A delete or a new file in a device folder that waits for another folder's write to the same storage no longer stalls that folder's saves for up to ten seconds.
+- A delete that gave up waiting for another write to the same storage says so, instead of saying the device folder refused it and to delete the file in the file manager.
+- A file or folder a program deletes while its device folder is opening is deleted on the device instead of being copied back, and a file it saves after the open has read it is sent once the folder is open.
+- Opening a device folder no longer replaces a save that lands in a file it already had just as the device's newer copy of it is put in place.
+
 ## [1.10.1] - 2026-11-21
 
 ### Fixed

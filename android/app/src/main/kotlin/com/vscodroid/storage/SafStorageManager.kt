@@ -173,6 +173,21 @@ class SafStorageManager(context: Context) {
         }
     }
 
+    /**
+     * Told when a deletion the editor made did not reach the device folder because another
+     * write to the same storage held it past the wait; see [SafSyncEngine.onDeleteBusy].
+     * On [lastKeptAnnouncedAt] with [onDeleteRefused], for the reason that one gives: its
+     * sentence also ends with the file still in the device folder.
+     */
+    fun onDeleteBusy(announce: (File) -> Unit) {
+        syncEngine.onDeleteBusy = { file ->
+            val last = lastKeptAnnouncedAt.get()
+            if (claimAnnouncement(SystemClock.elapsedRealtime(), last, lastKeptAnnouncedAt)) {
+                announce(file)
+            }
+        }
+    }
+
     /** Reports each preserved mirror copy, or one batch for an initial sync. */
     fun onLocalCopiesPreserved(announce: (List<File>) -> Unit) {
         syncEngine.onLocalCopiesPreserved = announce
@@ -839,7 +854,8 @@ class SafStorageManager(context: Context) {
         val mirrorDir = getMirrorDir(safUri)
         mirrorDir.mkdirs()
 
-        syncEngine.initialSync(safUri, mirrorDir, onProgress)
+        // Recording what changes while it opens, for the watcher [startFileWatcher] starts next.
+        syncEngine.initialSync(safUri, mirrorDir, recordChanges = true, onProgress = onProgress)
         updateLastOpened(safUri)
 
         // By mirror name, for the reason [persistPermission] gives: the tree URI is the

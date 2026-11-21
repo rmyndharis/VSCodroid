@@ -269,6 +269,7 @@
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">%1$s continua na pasta do dispositivo: outro app pode ter alterado um arquivo dentro dela desde a última vez que o editor o leu ou salvou. Exclua por lá se não precisar mais.</string>
     <string name="saf_delete_refused">Não foi possível excluir %1$s da pasta do dispositivo, então ele voltará na próxima vez que a pasta for aberta. Exclua-o no gerenciador de arquivos do dispositivo.</string>
+    <string name="saf_delete_busy">%1$s não foi excluído da pasta do dispositivo porque outra gravação no mesmo armazenamento ainda estava em andamento. Ele voltará na próxima vez que a pasta for aberta; exclua-o novamente nesse momento.</string>
     <!-- Device and app edits kept beside their file instead of being overwritten -->
     <string name="saf_device_copy_preserved">Edição do dispositivo ao lado: %1$s.</string>
     <plurals name="saf_device_copies_preserved">

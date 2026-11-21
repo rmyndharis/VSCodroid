@@ -271,6 +271,7 @@
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">Folder %1$s został zachowany w folderze na urządzeniu: inna aplikacja mogła zmienić znajdujący się w nim plik, odkąd edytor ostatnio go odczytał lub zapisał. Usuń go tam, jeśli nie jest już potrzebny.</string>
     <string name="saf_delete_refused">Nie udało się usunąć %1$s z folderu w urządzeniu, więc pojawi się ponownie przy następnym otwarciu folderu. Usuń go w menedżerze plików w urządzeniu.</string>
+    <string name="saf_delete_busy">Nie usunięto %1$s z folderu w urządzeniu, ponieważ trwał jeszcze inny zapis w tej samej pamięci. Pojawi się ponownie przy następnym otwarciu folderu; wtedy usuń go jeszcze raz.</string>
     <!-- Device and app edits kept beside their file instead of being overwritten -->
     <string name="saf_device_copy_preserved">Zmiana z urządzenia obok pliku: %1$s.</string>
     <plurals name="saf_device_copies_preserved">
