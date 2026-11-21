@@ -53,7 +53,7 @@
  * a quick suggestion by another.
  *
  * NEGATIVE CONTROL, measured on the 1.139.1 tree with Node 22.23.2. Against upstream's
- * files, with no patch applied, 126 of the 140 cases fail. Each of these single edits to a
+ * files, with no patch applied, 126 of the 141 cases fail. Each of these single edits to a
  * copy of a patched file fails at least one case:
  *
  *   0046  the body of the blur listener removed; the composing clause dropped from the
@@ -95,7 +95,8 @@
  *         selection; the place of a move that is not followed not noted;
  *         `_composesTypedLetters` answering true; its test for a converted script
  *         removed, or for a full-width form alone; its test for a last letter removed,
- *         widened to modifier letters, or without the dollar sign.
+ *         widened to modifier letters, or without the dollar sign; its combining marks
+ *         after the letter removed, or a lone mark or one after a modifier letter taken.
  *
  * Three edits change no case, and no case could see them. The calls of
  * `_isStaleWriteAfterCaret` and `_isGrowthAfterCaret` removed from the chain:
@@ -1506,15 +1507,27 @@ check('0054: a lone accent of a dead key arms nothing, a symbol or a modifier le
     return [model.armed(), 0];
 });
 
-// Known limit: the mark is no letter, so the syllable or the accented letter waits for the letter after it.
-check('0054: a word that ends in a combining mark arms nothing until its next letter', async () => {
+// A mark that follows its letter belongs to the word: a Thai syllable with a tone, a Devanagari consonant with a vowel sign
+// and a letter followed by a combining accent are typed and armed like a letter. Recorded on Gboard 12.4, API 33: Thai
+// is composed word by word, and with the list closed the key of a tone or a vowel sign opened nothing.
+check('0054: a word that ends in a combining mark arms, as one that ends in its letter does', async () => {
     const model = suggestModel(android, false);
     model.hooks.compositionStart();
     model.caret('e\u0301', 3);
     model.caret('\u0e01\u0e48', 5);
-    const before = model.armed();
+    const atMarks = model.armed();
     model.caret('\u0e01\u0e48\u0e01', 6);
-    return [[before, model.armed()], [0, 1]];
+    return [[atMarks, model.armed()], [2, 3]];
+});
+
+check('0054: a lone combining mark, one after a modifier letter and one after a converted script arm nothing', async () => {
+    const model = suggestModel(android, false);
+    model.hooks.compositionStart();
+    let column = 1;
+    for (const word of ['\u0301', '\u02c6\u0301', '\u304b\u3099']) {
+        model.caret(word, ++column);
+    }
+    return [model.armed(), 0];
 });
 
 check('0054: a letter with a diacritic, a Cyrillic letter, a digit after a letter, an underscore and a dollar sign arm one each', async () => {
