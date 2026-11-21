@@ -4,8 +4,10 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeFalse
 import org.junit.jupiter.api.Test
 import java.io.File
+import java.nio.file.Files
 import java.security.MessageDigest
 
 class SafRecordSafetyTest : SafInitialSyncTestBase() {
@@ -30,6 +32,33 @@ class SafRecordSafetyTest : SafInitialSyncTestBase() {
 
         assertFalse(local.exists())
         assertTrue(created.isEmpty(), "the device deletion was undone after a delivered upload")
+    }
+
+    /**
+     * A record that could not be read says nothing about the folder, so the open writes nothing in its place.
+     * Read as empty, it was replaced: every document the device no longer listed got a row without a digest,
+     * and its copy stayed in the app for good, neither removed nor sent.
+     */
+    @Test
+    fun `an open that cannot read the record leaves it to the next open, which finishes the deletion`() {
+        deviceTree(mapOf("root" to listOf(Child("keep.txt", contents = "k"), Child("gone.txt", contents = "deleted on the device"))))
+        sync()
+        val before = record.readText()
+        deviceTree(mapOf("root" to listOf(Child("keep.txt", contents = "k"))))
+        assertTrue(record.setReadable(false, false))
+        try {
+            assumeFalse(Files.isReadable(record.toPath()), "This account bypasses file read permissions")
+            sync()
+        } finally {
+            record.setReadable(true, true)
+        }
+        assertEquals(before, record.readText(), "the open replaced a record it could not read")
+        assertEquals(emptyList<Int>(), didNotReach, "the open told of files on the word of a record it could not read")
+
+        sync()
+
+        assertFalse(mirrorFile("gone.txt").exists(), "the copy of a document deleted on the device stayed in the app")
+        assertTrue(created.isEmpty(), "a document deleted on the device was put back")
     }
 
     @Test

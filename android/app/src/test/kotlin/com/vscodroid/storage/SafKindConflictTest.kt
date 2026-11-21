@@ -152,6 +152,41 @@ class SafKindConflictTest : SafInitialSyncTestBase() {
         assertEquals(emptyList<Pair<String, String>>(), created, "an unchanged copy was put back on the device")
     }
 
+    /**
+     * A copy the record names without a digest cannot be shown to be the device's old bytes or the person's
+     * work. Where the device deletes such a file, the open keeps the copy inside the app and does not send it;
+     * where the device replaces it with a folder, the copy set aside beside the folder was sent to the device,
+     * whose owner had replaced the file. It is now kept the same way, and the person is told.
+     */
+    @Test
+    fun `a copy the record names without a digest is kept inside the app when the device replaces it with a folder`() {
+        deviceTree(mapOf("root" to listOf(Child("keep.txt", contents = "kept"), Child("foo", contents = "first draft"))))
+        sync()
+        created.clear()
+        record.writeText(record.readLines().joinToString("\n") {
+            if (it.startsWith("foo\t")) it.substringBeforeLast('\t') else it
+        })
+        deviceTree(
+            mapOf(
+                "root" to listOf(Child("keep.txt", contents = "kept"), Child("foo", isDirectory = true)),
+                "doc:foo" to emptyList(),
+            ),
+        )
+
+        sync()
+
+        assertTrue(mirrorFile("foo").isDirectory, "the device folder never took its name")
+        assertEquals("first draft", setAsideCopies("foo").single().readText(), "the copy was not kept beside the folder")
+        assertEquals(emptyList<String>(), created.map { it.second }, "a copy nothing proves is work was sent to the device")
+        assertEquals(listOf(1), didNotReach, "the copy kept inside the app was not told of")
+
+        sync()
+
+        assertEquals(emptyList<String>(), created.map { it.second }, "the next open sent the kept copy")
+        assertEquals(emptyList<Int>(), didNotReach, "the next open told of the same copy again")
+        assertEquals("first draft", setAsideCopies("foo").single().readText())
+    }
+
     @Test
     fun `a folder made where the device holds a file gives way and is kept beside it`() {
         openedBefore()

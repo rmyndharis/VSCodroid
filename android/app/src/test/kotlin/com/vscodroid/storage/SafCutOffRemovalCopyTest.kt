@@ -1,10 +1,12 @@
 package com.vscodroid.storage
 
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 import java.util.UUID
 
@@ -159,6 +161,105 @@ class SafCutOffRemovalCopyTest : SafInitialSyncTestBase() {
         assertTrue(capture.exists(), "the recorded copy of a document that is on the device again was taken away")
         assertEquals(emptyList<String>(), keptCopies(), "the recorded bytes were kept as the person's work")
         assertEquals(emptyList<String>(), names(), "the recorded bytes were sent to the device as the person's work")
+    }
+
+    /**
+     * The person wrote to the copy a killed removal had taken, and the device lists the document again by the next
+     * open. No row of a deleted document stood in the folder, so no open looked there and the edit stayed under a
+     * name that is never sent.
+     */
+    @Test
+    fun `an edit left in a removal's copy is kept and sent when the device lists the document again`() {
+        firstOpen(Child("notes.txt", contents = "old"))
+        val capture = cutOff("notes.txt", newName())
+        capture.writeText("NEW")
+        deviceKeepsOnly(Child("notes.txt", contents = "old"))
+
+        sync()
+
+        assertFalse(capture.exists(), "the person's bytes stayed under a name that is never sent")
+        val kept = File(mirror, keptCopies().single())
+        assertEquals("NEW", kept.readText())
+        assertEquals(listOf(kept.name), names(), "the person's edit never reached the device")
+    }
+
+    /**
+     * A copy that changed while a removal held it, where the move to a name of its own failed: it stays under the
+     * removal's name, and the open let the row of its document go. In a folder with no other row, no later open
+     * looked there, and the edit was never sent.
+     */
+    @Test
+    fun `an edit a removal could not give a name of its own is kept and sent at the next open`() {
+        val holding = mapOf(
+            "root" to listOf(Child("keep.txt", contents = "k"), Child("sub", isDirectory = true)),
+            "doc:sub" to listOf(Child("notes.txt", contents = "first draft")),
+        )
+        deviceTree(holding)
+        sync()
+        deviceTree(holding + ("doc:sub" to emptyList()))
+        val sub = mirrorFile("sub")
+        var edited = false
+        afterReading("first draft") {
+            val held = sub.listFiles { _, name -> SafSyncEngine.isRemovalCaptureName(name) }.orEmpty().singleOrNull()
+            if (held != null && !edited) {
+                edited = true
+                held.appendText(" and an edit")
+            }
+        }
+        runBlocking {
+            val engine = SafSyncEngine(context)
+            engine.exclusiveMove = { _, _, _, _ -> throw IOException("the move failed") }
+            engine.initialSync(named("tree"), mirror) { _, _ -> }
+        }
+        assertTrue(edited, "the edit never landed while the removal held the copy")
+        assertEquals(
+            1, sub.list { _, name -> SafSyncEngine.isRemovalCaptureName(name) }.orEmpty().size,
+            "the fixture did not leave the copy under the removal's name: ${sub.list()?.toList()}",
+        )
+
+        sync()
+
+        val kept = sub.list { _, name -> Regex("removed\\.local-\\d+").matches(name) }.orEmpty().single()
+        assertEquals("first draft and an edit", File(sub, kept).readText())
+        assertEquals(listOf(kept), names(), "the person's edit never reached the device")
+    }
+
+    /**
+     * The same, with another row of a deleted document in the folder whose copy was already gone. The open that
+     * met that row first found no removal's copy in the folder and let both rows go, and the edit stayed under a
+     * name that is never sent.
+     */
+    @Test
+    fun `an edit a removal could not give a name of its own is sent though a row before it had no copy`() {
+        val holding = mapOf(
+            "root" to listOf(Child("keep.txt", contents = "k"), Child("sub", isDirectory = true)),
+            "doc:sub" to listOf(Child("a.txt", contents = "gone already"), Child("notes.txt", contents = "first draft")),
+        )
+        deviceTree(holding)
+        sync()
+        assertTrue(mirrorFile("sub/a.txt").delete())
+        deviceTree(holding + ("doc:sub" to emptyList()))
+        val sub = mirrorFile("sub")
+        var edited = false
+        afterReading("first draft") {
+            val held = sub.listFiles { _, name -> SafSyncEngine.isRemovalCaptureName(name) }.orEmpty().singleOrNull()
+            if (held != null && !edited) {
+                edited = true
+                held.appendText(" and an edit")
+            }
+        }
+        runBlocking {
+            val engine = SafSyncEngine(context)
+            engine.exclusiveMove = { _, _, _, _ -> throw IOException("the move failed") }
+            engine.initialSync(named("tree"), mirror) { _, _ -> }
+        }
+        assertTrue(edited, "the edit never landed while the removal held the copy")
+
+        sync()
+
+        val kept = sub.list { _, name -> Regex("removed\\.local-\\d+").matches(name) }.orEmpty().single()
+        assertEquals("first draft and an edit", File(sub, kept).readText())
+        assertEquals(listOf(kept), names(), "the person's edit never reached the device")
     }
 
     @Test
