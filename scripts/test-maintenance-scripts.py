@@ -614,6 +614,8 @@ class MaintenanceScriptsTest(unittest.TestCase):
         (fixture / "android/app").mkdir(parents=True)
         shutil.copy2(SOURCE / "android/app/build.gradle.kts", fixture / "android/app")
         shutil.copy2(SOURCE / "CONTRIBUTING.md", fixture)
+        (fixture / "docs").mkdir()
+        shutil.copy2(SOURCE / "docs/USER_GUIDE.md", fixture / "docs")
         checker = fixture / "scripts/check-build-steps.py"
 
         def check():
@@ -645,6 +647,8 @@ class MaintenanceScriptsTest(unittest.TestCase):
         (fixture / "android/app").mkdir(parents=True)
         shutil.copy2(SOURCE / "android/app/build.gradle.kts", fixture / "android/app")
         shutil.copy2(SOURCE / "CONTRIBUTING.md", fixture)
+        (fixture / "docs").mkdir()
+        shutil.copy2(SOURCE / "docs/USER_GUIDE.md", fixture / "docs")
 
         def check():
             return subprocess.run([sys.executable, str(fixture / "scripts/check-build-steps.py")],
@@ -669,6 +673,8 @@ class MaintenanceScriptsTest(unittest.TestCase):
         (fixture / "android/app").mkdir(parents=True)
         shutil.copy2(SOURCE / "android/app/build.gradle.kts", fixture / "android/app")
         shutil.copy2(SOURCE / "CONTRIBUTING.md", fixture)
+        (fixture / "docs").mkdir()
+        shutil.copy2(SOURCE / "docs/USER_GUIDE.md", fixture / "docs")
 
         def check():
             return subprocess.run([sys.executable, str(fixture / "scripts/check-build-steps.py")],
@@ -684,6 +690,35 @@ class MaintenanceScriptsTest(unittest.TestCase):
         unkeyed = check()
         self.assertNotEqual(0, unkeyed.returncode, unkeyed.stdout + unkeyed.stderr)
         self.assertIn("check-editcontext-ime.js", unkeyed.stdout)
+
+    def test_build_step_check_refuses_a_guide_naming_another_npm_major(self):
+        fixture = self.root / "build-steps-npm"
+        shutil.copytree(SOURCE / "scripts", fixture / "scripts")
+        shutil.copytree(SOURCE / ".github/workflows", fixture / ".github/workflows")
+        (fixture / "android/app").mkdir(parents=True)
+        shutil.copy2(SOURCE / "android/app/build.gradle.kts", fixture / "android/app")
+        shutil.copy2(SOURCE / "CONTRIBUTING.md", fixture)
+        (fixture / "docs").mkdir()
+        shutil.copy2(SOURCE / "docs/USER_GUIDE.md", fixture / "docs")
+
+        def check():
+            return subprocess.run([sys.executable, str(fixture / "scripts/check-build-steps.py")],
+                                  cwd=fixture, capture_output=True, text=True, timeout=30)
+
+        healthy = check()
+        self.assertEqual(0, healthy.returncode, healthy.stdout + healthy.stderr)
+        guide = fixture / "docs/USER_GUIDE.md"
+        text = guide.read_text()
+        line = "npm -v            # npm 11.x"
+        self.assertEqual(1, text.count(line))
+        guide.write_text(text.replace(line, "npm -v            # npm 10.x"))
+        stale = check()
+        self.assertNotEqual(0, stale.returncode, stale.stdout + stale.stderr)
+        self.assertIn("npm 10.x", stale.stdout)
+        guide.write_text(text.replace(line, "npm -v            # npm"))
+        unread = check()
+        self.assertNotEqual(0, unread.returncode, unread.stdout + unread.stderr)
+        self.assertIn("the pattern stopped matching", unread.stdout)
 
     def cffi_builder(self):
         import importlib.util
@@ -786,17 +821,99 @@ class MaintenanceScriptsTest(unittest.TestCase):
         exec(compile(source.read_text(encoding="utf-8"), str(source), "exec"), gate.__dict__)
         repo = self.root / "abi-repo"
         gate.REPO = repo
-        manifest = {"packages": [{"name": "numpy"}, {"name": "pydantic-core"}, {"name": "cffi"}]}
-        write(repo / "docs/USER_GUIDE.md", "- `numpy`\n- `pydantic-core`\n- `cffi`\n")
-        write(repo / "NOTICE.md", "| numpy |\n| pydantic-core |\n| cffi |\n")
-        write(repo / "docs/LEGAL_NOTICES.md", "| numpy |\n| pydantic_core |\n| cffi |\n")
-        self.assertEqual([], gate.document_problems(manifest))
-        write(repo / "NOTICE.md", "| numpy |\n| pydantic-core |\n")
-        self.assertEqual(["NOTICE.md does not name cffi"], gate.document_problems(manifest))
+        manifest = {"packages": [
+            {"name": "numpy", "version": "2.5.0"}, {"name": "pydantic-core", "version": "2.41.5"},
+            {"name": "cryptography", "version": "50.0.2"}, {"name": "cffi", "version": "2.1.1"},
+        ]}
+        guide = ("- `numpy` 2.5.0\n- `pydantic-core` 2.41.5\n"
+                 "- `cryptography` 50.0.2, with `cffi` 2.1.1, which it needs to load\n")
+        notice = ("| Software | License |\n|---|---|\n| numpy | BSD 3-Clause |\n| pydantic-core | MIT |\n"
+                  "| cryptography | Apache 2.0 |\n| cffi | MIT-0 |\n")
+        legal = "| numpy 2.5.0 | x |\n| pydantic_core 2.41.5 | x |\n| cryptography 50.0.2 | x |\n| cffi 2.1.1 | x |\n"
+
+        def problems(guide=guide, notice=notice, legal=legal):
+            write(repo / "docs/USER_GUIDE.md", guide)
+            write(repo / "NOTICE.md", notice)
+            write(repo / "docs/LEGAL_NOTICES.md", legal)
+            return gate.document_problems(manifest)
+
+        self.assertEqual([], problems())
+        # A version that ends a sentence is still that version.
+        self.assertEqual([], problems(guide=guide.replace("2.1.1, which it needs to load", "2.1.1.")))
+        # Named only in prose: a reader cannot tell which version pip is offered.
+        self.assertEqual(["docs/USER_GUIDE.md does not name cryptography 50.0.2"],
+                         problems(guide=guide.replace("`cryptography` 50.0.2", "the cryptography module")))
+        # A version the manifest no longer pins, or one that only starts like it.
+        for stale in ("cffi 2.1.0", "cffi 2.1.10", "cffi 2.1.1.1", "cffi 2.1.1.post1", "cffi 2.1.1rc1"):
+            self.assertEqual(["docs/LEGAL_NOTICES.md does not name cffi 2.1.1"],
+                             problems(legal=legal.replace("cffi 2.1.1", stale)), stale)
+        # Another package whose name ends in this one's.
+        self.assertEqual(["docs/LEGAL_NOTICES.md does not name cffi 2.1.1"],
+                         problems(legal=legal.replace("| cffi 2.1.1", "| pycffi 2.1.1")))
+        # The licence table is what credits a wheel; a mention elsewhere in NOTICE.md is not a row.
+        self.assertEqual(["NOTICE.md has no table row for cffi"],
+                         problems(notice=notice.replace("| cffi | MIT-0 |\n", "") + "\ncffi is compiled here.\n"))
         (repo / "docs/USER_GUIDE.md").unlink()
+        write(repo / "NOTICE.md", notice.replace("| cffi | MIT-0 |\n", ""))
         self.assertEqual(
-            ["docs/USER_GUIDE.md is missing", "NOTICE.md does not name cffi"], gate.document_problems(manifest),
+            ["docs/USER_GUIDE.md is missing", "NOTICE.md has no table row for cffi"], gate.document_problems(manifest),
         )
+
+    def test_guide_tool_versions_follow_the_build_manifest(self):
+        source = SOURCE / "scripts/check-guide-versions.py"
+        gate = types.ModuleType("fixture_guide_versions")
+        gate.__file__ = str(source)
+        exec(compile(source.read_text(encoding="utf-8"), str(source), "exec"), gate.__dict__)
+        guide = (
+            "### Bundled Tools\n\nAll tools are available:\n\n```\n"
+            "node -v           # Node.js 24.x\n"
+            "npm -v            # npm 11.x\n"
+            "python3 --version # Python 3.14.x\n"
+            "python3 -m pip --version   # pip, bundled inside Python's site-packages\n"
+            "git --version     # Git 2.x\n"
+            "bash --version    # Bash 5.3.x\n"
+            "tmux -V           # tmux 3.x\n"
+            "make --version    # GNU Make 4.4.1\n"
+            "ssh -V            # OpenSSH 10.x client\n"
+            "rg --version      # ripgrep (powers VS Code search)\n"
+            "```\n"
+        )
+        shipped = {"nodejs-lts": "24.22.3", "python": "3.14.10", "git": "2.56.1", "bash": "5.3.20",
+                   "tmux": "3.8", "make": "4.4.1-1", "openssh": "10.6p2", "openssl": "1:3.6.5"}
+
+        def manifest(**changes):
+            rows = {**shipped, **changes}
+            return "app-version\t1.10.1\n" + "".join(
+                f"termux\t{package}\t{version}\tdigest\n" for package, version in rows.items() if version)
+
+        self.assertEqual([], gate.problems(guide, manifest()))
+        # The version the program reports: an epoch and a Debian revision are not part of it.
+        self.assertEqual([], gate.problems(guide, manifest(make="1:4.4.1-3")))
+        for package, version, command, stated in (
+            ("make", "4.4.2-1", "make --version", "4.4.1"),
+            ("nodejs-lts", "25.0.1", "node -v", "24.x"),
+            ("python", "3.15.0", "python3 --version", "3.14.x"),
+            ("bash", "5.30.1", "bash --version", "5.3.x"),
+            ("openssh", "11.0p1", "ssh -V", "10.x"),
+        ):
+            self.assertEqual(
+                [f"the guide says `{command}` gives {stated}; this build ships {package} {gate.upstream(version)}"],
+                gate.problems(guide, manifest(**{package: version})), package)
+        self.assertEqual(["the manifest records no tmux, so `tmux -V` cannot be compared"],
+                         gate.problems(guide, manifest(tmux=None)))
+        self.assertEqual(["`ruby -v` gives a version and has no Termux package in PACKAGES to compare it with"],
+                         gate.problems(guide.replace("rg --version", "ruby -v           # Ruby 3.4.x\nrg --version"),
+                                       manifest()))
+        self.assertEqual(
+            ["the Bundled Tools list has no versioned `make --version` line; the pattern stopped matching"],
+            gate.problems(guide.replace("# GNU Make 4.4.1", "# GNU Make"), manifest()))
+        with self.assertRaises(SystemExit):
+            gate.problems(guide.replace("### Bundled Tools", "### Tools"), manifest())
+        # The guide this repository ships still reads as the release step expects, so a rewording
+        # fails here, on the pull request, rather than on the tag.
+        listed = gate.listed_versions((SOURCE / "docs/USER_GUIDE.md").read_text(encoding="utf-8"))
+        self.assertLessEqual(set(gate.PACKAGES), set(listed))
+        self.assertLessEqual(set(listed), set(gate.PACKAGES) | gate.CHECKED_ELSEWHERE)
 
     def test_wheelhouse_checks_versioned_shared_objects(self):
         verifier = types.ModuleType("fixture_elf_verifier")
@@ -1145,10 +1262,13 @@ esac
             "| Extracted, plus Ruby and Java          | ~230 MB              |\n"
             "| Extracted, plus Ruby, Java and C/C++   | ~510 MB            |\n"
             "| + Codex, on top of any of these        | +395 MB              |\n"
+            "| Storage      | ~6 MB free to install            |\n"
+            "| Free space required to install         | ~6 MB              |\n"
         )
         guide = (
-            "The core download is roughly 1 MB, and you need room.\n"
-            "About 1 MB of files are unpacked, one by one.\n"
+            "The core download is roughly 1 MB, and you need about 6 MB free for the extraction that follows.\n"
+            "About 1 MB of files are unpacked, one by one. Setup wants room: the ~6 MB above is what it insists on "
+            "having free before it will start. An update (roughly 2 MB for a complete tree rather than 6 MB).\n"
             "| Language | Download Size | Installed Size | Includes |\n"
             "| Ruby | 11 MB | 41 MB | ruby |\n"
             "| Java 25 (OpenJDK) | 70 MB | 192 MB | java |\n"
@@ -1157,15 +1277,25 @@ esac
             "it runs, which for this one is about 840 MB. Reinstalling\n"
             "once unpacked, on top of the\n  toolchain's 395 MB, and Codex keeps\n"
             "Core installation extracts approximately 1 MB to internal storage. With Ruby and Java installed, "
-            "expect around 230 MB, and about 510 MB with C/C++ as well. The Codex toolchain adds about 395 MB.\n"
+            "expect around 230 MB, and about 510 MB with C/C++ as well. The Codex toolchain adds about 395 MB. "
+            "These are the sizes of the files; setup counts their allocation and adds a small working margin, "
+            "which is why it needs about 6 MB free before it starts.\n"
         )
         srs = (
             "| NFR-RES-05 | Runtime storage | About 1 MiB (1 MB), the asset tree that is measured; about 219 MiB "
             "(230 MB) with Ruby and Java installed, and about 486 MiB (510 MB) with C/C++ as well, by the estimates |\n"
+            "| Storage | About 1 MB extracted for core and about 6 MB free for a fresh installation |\n"
         )
         manager = "internal const val SPACE_BUFFER = 50_000_000L\n"
+        # A block of a million bytes makes the allocation setup counts big enough to see in whole MB: two files
+        # of 400,000 and 600,000 bytes and the directory one of them sits in take 4 MB, and with the margin and
+        # the 1 MB of files a fresh install needs 6 MB, over the 1.4 MB minimum. An update needs room to rewrite
+        # the largest file, 600,000 bytes, plus that minimum: 2 MB.
+        setup = ("private const val EXTRACTION_SLACK_BYTES = 1_400_000L\n"
+                 "private const val EXTRACTION_WORKING_MARGIN_BYTES = 1L * 1_000_000L\n"
+                 "private const val EXTRACTION_BLOCK_BYTES = 1_000_000L\n")
 
-        def check(*, readme=readme, guide=guide, srs=srs, registry_text=None, apk=None):
+        def check(*, readme=readme, guide=guide, srs=srs, registry_text=None, apk=None, setup=setup):
             with tempfile.TemporaryDirectory() as raw:
                 root = Path(raw)
                 script = root / "scripts" / "check-size-claims.py"
@@ -1174,6 +1304,7 @@ esac
                 kotlin = root / "android/app/src/main/kotlin/com/vscodroid/setup"
                 write(kotlin / "ToolchainRegistry.kt", registry_text if registry_text is not None else registry())
                 write(kotlin / "ToolchainManager.kt", manager)
+                write(kotlin / "FirstRunSetup.kt", setup)
                 write(root / "README.md", readme)
                 write(root / "docs/USER_GUIDE.md", guide)
                 write(root / "docs/02-SRS.md", srs)
@@ -1181,7 +1312,8 @@ esac
                 if apk:
                     path = root / "app-release.apk"
                     with zipfile.ZipFile(path, "w") as archive:
-                        archive.writestr("assets/core.bin", b"x" * apk["assets"])
+                        archive.writestr("assets/core.bin", b"x" * (apk["assets"] - 600_000))
+                        archive.writestr("assets/usr/big.bin", b"x" * 600_000)
                         archive.writestr("assets/nls/messages.bin", b"x" * 1_000)
                         archive.writestr("classes.dex", b"")
                     command += ["--apk", str(path)]
@@ -1209,6 +1341,20 @@ esac
             registry_text=registry(extra='ToolchainInfo(\n    packName = "toolchain_lua",\n    estimatedSize = 1,\n    downloadSize = 1,\n)\n'),
         )
         refused("core extraction against the APK", "the APK holds", apk={"assets": 2_000_000})
+        refused("free space quoted twice, differently", "free space to install",
+                guide=guide.replace("you need about 6 MB free", "you need about 8 MB free"))
+        refused("free space in the requirements", "docs/02-SRS.md", srs=srs.replace("about 6 MB free", "about 5 MB free"))
+        refused("the storage sentence went away", "expected exactly one",
+                guide=guide.replace("which is why it needs about 6 MB free before it starts", "so it needs room"))
+        refused("the update sentence went away", "expected exactly one",
+                guide=guide.replace("roughly 2 MB for a complete tree", "less for a complete tree"))
+        # Documents that agree with each other and not with what setup asks of this APK.
+        refused("free space against the APK", "setup asks a fresh install for 6.0 MB", apk={"assets": 1_000_000},
+                readme=readme.replace("6 MB", "5 MB"), guide=guide.replace("6 MB", "5 MB"), srs=srs.replace("6 MB", "5 MB"))
+        refused("update against the APK", "setup asks an update for 2.0 MB", apk={"assets": 1_000_000},
+                guide=guide.replace("roughly 2 MB", "roughly 3 MB"))
+        refused("a setup figure that is not a number", "EXTRACTION_SLACK_BYTES",
+                setup=setup.replace("1_400_000L", "SLACK"))
 
     def test_site_live_data_holds_only_what_was_checked(self):
         source = SOURCE / "scripts/fetch-site-live.py"

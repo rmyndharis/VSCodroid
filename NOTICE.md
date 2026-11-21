@@ -192,7 +192,7 @@ Prebuilt Android wheels that VSCodroid re-hosts on its own releases, pinned in `
 
 | Software | License | Built by |
 |----------|---------|---------|
-| numpy | BSD 2-Clause, with OpenBLAS and LAPACK | Termux User Repository |
+| numpy | BSD 3-Clause, with parts under 0BSD, MIT, Zlib and CC0 1.0, and OpenBLAS and LAPACK (BSD 3-Clause) | Termux User Repository |
 | pandas | BSD 3-Clause, with vendored components | Termux User Repository |
 | pydantic-core | MIT, with statically linked Rust crates | Termux User Repository |
 | psutil | BSD 3-Clause | Termux, repacked into a wheel |

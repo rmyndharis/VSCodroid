@@ -3,8 +3,8 @@
 
     check-build-steps.py
 
-Seven assertions, all about scripts nobody notices are missing until an app is
-built without them, or shipped without them having run:
+Eight assertions, nearly all about scripts nobody notices are missing until an
+app is built without them, or shipped without them having run:
 
   * every shell script a workflow runs is mentioned in CONTRIBUTING.md, so
     following the documentation produces the tree CI produces;
@@ -26,6 +26,8 @@ built without them, or shipped without them having run:
   * build.yml and release.yml set up the same NDK, so the native pieces a
     release ships are built by the compiler every pull request was measured
     against;
+  * the user guide names the npm major download-npm.sh ships, so the version
+    its Bundled Tools list promises is the one the terminal has;
   * every scripts/check-*.py is invoked by something -- a workflow, a build
     script or the Gradle build. Not "by both workflows", which is right for the
     self-checks and wrong here: two of the no-argument checkers deliberately run
@@ -128,6 +130,17 @@ PINNED_NODE = re.compile(r'node-version:\s*"?(\d+)')
 # version written into `sdkmanager "ndk;..."` directly, so a second literal added
 # beside the pin is caught in the same file rather than only across the two.
 NDK_WORKFLOWS = ("build.yml", "release.yml")
+
+# The guide's Bundled Tools list tells a person which npm the terminal has, and
+# nothing held it to the npm that ships. npm is not a Termux package, so the
+# release's build manifest, which the other tools in that list are compared
+# with, does not record it: download-npm.sh declares it in NPM_VERSION and
+# asserts the Node tarball carries exactly that. The major only, as the guide
+# gives it.
+NPM_SOURCE = ROOT / "scripts/download-npm.sh"
+GUIDE = ROOT / "docs/USER_GUIDE.md"
+SHIPPED_NPM = re.compile(r'^NPM_VERSION="(\d+)\.', re.M)
+GUIDED_NPM = re.compile(r"^npm -v\s+# npm (\d+)\.x$", re.M)
 PINNED_NDK = re.compile(r'(?:NDK_VERSION:\s*"?|ndk[;/])(\d[\w.]*)')
 
 
@@ -386,6 +399,19 @@ def _main() -> int:
             failed = True
         else:
             print(f"  ok     {wf_name} sets up Node {shipped.group(1)}, the major that ships")
+
+    shipped_npm = SHIPPED_NPM.search(NPM_SOURCE.read_text())
+    guided_npm = GUIDED_NPM.findall(GUIDE.read_text())
+    if not shipped_npm or len(guided_npm) != 1:
+        print(f"  FAIL   could not read npm's major from {NPM_SOURCE.name} NPM_VERSION and from the "
+              "one `npm -v` line of the guide's Bundled Tools list; the pattern stopped matching")
+        return 1
+    if guided_npm[0] != shipped_npm.group(1):
+        print(f"  FAIL   docs/USER_GUIDE.md says npm {guided_npm[0]}.x, and the APK ships npm "
+              f"{shipped_npm.group(1)} ({NPM_SOURCE.name} NPM_VERSION). Correct the guide's Bundled Tools list.")
+        failed = True
+    else:
+        print(f"  ok     the user guide names npm {shipped_npm.group(1)}.x, the major that ships")
 
     pinned_ndk = {}
     for wf_name in NDK_WORKFLOWS:

@@ -407,7 +407,7 @@ python3 -m pip --version   # pip, bundled inside Python's site-packages
 git --version     # Git 2.x
 bash --version    # Bash 5.3.x
 tmux -V           # tmux 3.x
-make --version    # GNU Make 4.4.1
+make --version    # GNU Make 4.4.x
 ssh -V            # OpenSSH 10.x client
 rg --version      # ripgrep (powers VS Code search)
 ```
@@ -646,8 +646,8 @@ The Android build of that add-on is pointed at by `ZEROMQ_PREBUILD`, which every
 ### Google Antigravity
 
 The Google Antigravity extension (`Google.google-antigravity` on Open VSX) installs from the Extensions view
-like any other. When it first starts it downloads its engine, about 60 MB, which unpacks to about 200 MB
-under `~/.gemini`. Once you have turned its engine on (below), VSCodroid starts that engine for the
+like any other. When it first starts it downloads its engine into `~/.gemini`. Once you have turned its
+engine on (below), VSCodroid starts that engine for the
 extension and lets the extension's panel show the page the engine serves, so the panel opens on the
 Antigravity welcome screen with **Continue with Google**.
 
@@ -682,8 +682,8 @@ What to know before using it:
   editor does, which is why the engine stays off until you turn it on. Turn it on, and sign in, only on a
   phone whose installed apps you trust.
 - **Processes and memory.** The engine is one more process counted against Android's phantom process limit (see
-  [Android Phantom Process Limit](#android-phantom-process-limit)) while it runs, and on an emulator it held
-  between about 140 and 200 MB of memory, on top of the editor's own.
+  [Android Phantom Process Limit](#android-phantom-process-limit)) while it runs, and the memory it holds comes
+  on top of the editor's own.
 
 ### What Is Not Available
 
@@ -1061,7 +1061,7 @@ beyond that differs a great deal, and this is the whole of it, so you can pick w
 **Java here is for compiling and running programs, not an IDE.** The Language
 Support for Java extension from Open VSX installs, and whether it runs has not been measured: it
 starts its server by the JDK's full path, which VSCodroid now hands to the system loader when the
-extension uses `spawn` or `execFile`, but the server needs about 650 MB of memory on a phone, and
+extension uses `spawn` or `execFile`, but the server needs a great deal of memory on a phone, and
 the JDK cannot start its own helper programs outside a terminal (see [Toolchains Must Be Started by
 Name](#toolchains-must-be-started-by-name)). Do not count on error squiggles or
 completion for Java.
@@ -1571,7 +1571,7 @@ whose language servers **VSCodroid: Show Process Tree** marks idle.
 
 ### Memory Usage
 
-VSCodroid typically uses 400-700 MB of RAM. On devices with 4 GB or less, you may experience occasional restarts under memory pressure. Tips:
+How much memory VSCodroid uses depends mostly on what you open: each terminal and each language server is a process of its own. On devices with 4 GB or less, you may experience occasional restarts under memory pressure. Tips:
 
 - Close browser tabs and other apps to free RAM.
 - Limit concurrent terminals to 1-2.
@@ -1718,7 +1718,7 @@ A download saved over a file that already exists is copied in two steps, and And
 
 ### Storage
 
-Core installation extracts approximately 603 MB to internal storage. With Ruby and Java installed, expect around 840 MB, and about 1,120 MB with C/C++ as well. The Codex toolchain adds about 395 MB. Setup needs about 800 MB free before it starts, which is more than it ends up occupying because extraction needs room to work. If it refuses, it asks for the shortfall it measured rather than the whole figure, so a device part of the way through is asked only for what is missing. Beyond it, keep a few hundred MB free for node_modules, build artifacts and caches.
+Core installation extracts approximately 603 MB to internal storage. With Ruby and Java installed, expect around 840 MB, and about 1,120 MB with C/C++ as well. The Codex toolchain adds about 395 MB. The core figure, which the totals include, is the size of its files; on disk they take more, because the filesystem allocates every file and directory in whole blocks. Setup counts that allocation for each file it is about to write and adds a small working margin, which is why it needs about 800 MB free before it starts. If it refuses, it asks for the shortfall it measured rather than the whole figure, so a device part of the way through is asked only for what is missing. Beyond it, keep a few hundred MB free for node_modules, build artifacts and caches.
 
 ---
 

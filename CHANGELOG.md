@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `NOTICE.md` gives numpy's licence as BSD 3-Clause with parts under 0BSD, MIT, Zlib and CC0 1.0, where it said BSD 2-Clause, and `LEGAL_NOTICES.md` quotes the licence expression the wheel declares.
+- The user guide explains the 800 MB setup asks for as the files plus their allocation on disk and a small margin, where it called the excess working room, and the README says its core size is the files' own.
+- The README and the user guide no longer quote memory and download figures nothing measured: 400-700 MB for the app, and the Antigravity engine's download, unpacked and memory sizes.
+- CI refuses a user guide or `LEGAL_NOTICES.md` that names a mirrored Python wheel without its pinned version, a `NOTICE.md` with no table row for one, a guide naming another npm major than the one that ships, and a free-space figure that differs between the README, the guide and the requirements document.
+- The release build refuses a user guide whose tool versions differ from what the build resolved, and a documented free space that differs from what setup asks of the APK.
+
 ## [1.10.1] - 2026-11-21
 
 ### Fixed
