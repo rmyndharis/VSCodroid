@@ -47,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A save after a write the provider cut short no longer keeps the app's own half-written bytes as a `.device-` copy and says another app edited the file, while the file still starts with those bytes.
 - The user guide says where settings are kept: the User tab's in the editor's storage, the Remote tab's in `~/.vscodroid/data/Machine/settings.json`.
 - The user guide's troubleshooting section explains `Permission denied` from a terminal command on a file another app saved in shared storage, and how to bring the file in.
+- The user guide names two limits of device folders and downloads: a program that deletes or renames inside a device folder while it opens, and a download saved over an existing file that the storage fails to finish.
 - The privacy policy names both installer package names that mark an install as coming from the Play Store.
 - A file deleted from a device folder is no longer put back at a later open when the app's record of that folder was missing or written by an older version.
 - A file in a device folder that grew past 50 MB is no longer put back with its old content after it is deleted on the device. A copy whose row 1.9.0 dropped is covered once the folder has been opened on this version while the file is still there.
