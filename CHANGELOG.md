@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A keyboard put away after the screen is turned stays down when a text box other than the editor has the focus, such as Quick Open or the find box; the next touch used to bring it back.
 - A file another app deleted from a device folder is no longer put back there when the app's copy of it could not be read as the folder opened.
 - An edit that lands just as the app removes its copy of a file another app deleted from a device folder, or replaced there with a folder, is kept as `<name>.local-<time>` and a notice says so.
+- An edit that lands just as the app is killed while it removes its copy of a file another app deleted from a device folder is kept as `removed.local-<id>` and reaches the device, instead of staying in the app under a name that is never sent.
 - A file made in a device folder that is still empty, whose creation was cut short when the app was killed, is sent at the next open instead of waiting for another file to appear there.
 - A Backspace on a word of two letters from outside the Basic Multilingual Plane, such as Adlam or Osage, that a keyboard reopened is applied at once instead of being refused six times first.
 - The editor's limit of six refused keyboard writes starts again after half a minute without one, so refusals at separate moments no longer add up until a stale write is applied and doubles a word.

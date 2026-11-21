@@ -1426,9 +1426,14 @@ class SafSyncEngine(private val context: Context) {
                         val attributes = selected.attributes()
                         if (!attributes.isRegularFile) return@use
                         val sameLength = rows.filter { it.first == attributes.size() }
-                        if (sameLength.isEmpty()) return@use
-                        val digest = inboundEntry(selected)?.digest ?: return@use
-                        if (sameLength.none { it.second.contentEquals(digest) }) return@use
+                        // A copy that cannot be read shows nothing either way and stays as it is.
+                        val digest = if (sameLength.isEmpty()) null else (inboundEntry(selected)?.digest ?: return@use)
+                        if (digest == null || sameLength.none { it.second.contentEquals(digest) }) {
+                            // Bytes that are no deleted document's: a removal takes a copy only while it is the recorded
+                            // one, so these were written after, by the person, and exist nowhere else.
+                            if (name.endsWith(PARTIAL_SUFFIX)) keepCaptureAsLocalWork(selected, capture, mirrorDir)
+                            return@use
+                        }
                         // A last look: what was hashed must still be what is removed.
                         if (!sameInboundAttributes(attributes, selected.attributes())) return@use
                         requireCurrentParent(selected, capture, mirrorDir)
@@ -1441,6 +1446,24 @@ class SafSyncEngine(private val context: Context) {
             }
         }
         return removed
+    }
+
+    /**
+     * Gives a copy that a killed removal took from its name, and that holds bytes the person wrote
+     * since, the name builds up to 1.9.0 gave every such copy, `removed.local-<uuid>`. The
+     * machine-temporary name it was taken under is never sent, and the row that named the copy is
+     * dropped by this open, so the edit stayed in the mirror under a name nobody reads and went
+     * with the mirror when it was reclaimed. The new name is an ordinary one: the open creates the
+     * file on the device and a notice names it. A name that is taken leaves the copy where it is.
+     */
+    private fun keepCaptureAsLocalWork(selected: OutboundPath, capture: File, mirrorDir: File) {
+        val identifier = capture.name.removePrefix("removed-").removeSuffix(PARTIAL_SUFFIX)
+        val kept = selected.sibling("removed$LOCAL_COPY_SUFFIX$identifier")
+        requireCurrentParent(selected, capture, mirrorDir)
+        if (moveToFreeName(selected, capture, selected.leaf, kept)) {
+            notePreservedLocalCopy(File(capture.parentFile, kept.toString()))
+            Logger.w(tag, "Kept a changed copy a removal had taken as $kept")
+        }
     }
 
     private fun isStartOfSibling(

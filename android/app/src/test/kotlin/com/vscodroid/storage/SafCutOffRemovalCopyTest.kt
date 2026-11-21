@@ -108,8 +108,12 @@ class SafCutOffRemovalCopyTest : SafInitialSyncTestBase() {
         assertEquals(emptyList<String>(), names())
     }
 
+    /** The name a changed copy is given: the one builds up to 1.9.0 gave every copy a removal took. */
+    private fun keptName(capture: File) =
+        "removed${SafSyncEngine.LOCAL_COPY_SUFFIX}" + capture.name.removePrefix("removed-").removeSuffix(SafSyncEngine.PARTIAL_SUFFIX)
+
     @Test
-    fun `an entry of that name with other bytes of the same length is kept`() {
+    fun `an entry of that name with other bytes of the same length is kept under a name that is sent`() {
         firstOpen(Child("notes.txt", contents = "old"))
         val capture = cutOff("notes.txt", newName())
         capture.writeText("NEW")
@@ -117,7 +121,25 @@ class SafCutOffRemovalCopyTest : SafInitialSyncTestBase() {
 
         sync()
 
-        assertEquals("NEW", capture.readText(), "bytes that are not the deleted document's were removed")
+        val kept = File(mirror, keptName(capture))
+        assertFalse(capture.exists(), "the person's bytes stayed under a name that is never sent")
+        assertEquals("NEW", kept.readText(), "bytes that are not the deleted document's were removed")
+        assertEquals(listOf(kept.name), names(), "the person's edit never reached the device")
+    }
+
+    @Test
+    fun `an entry of that name that is not the length of any row is kept under a name that is sent`() {
+        firstOpen(Child("notes.txt", contents = "first draft"))
+        val capture = cutOff("notes.txt", newName())
+        capture.writeText("first draft, and more the person wrote")
+        deviceKeepsOnly()
+
+        sync()
+
+        val kept = File(mirror, keptName(capture))
+        assertFalse(capture.exists(), "the person's bytes stayed under a name that is never sent")
+        assertEquals("first draft, and more the person wrote", kept.readText())
+        assertEquals(listOf(kept.name), names(), "the person's edit never reached the device")
     }
 
     @Test
