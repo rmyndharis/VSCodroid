@@ -177,6 +177,29 @@ class WriteBackNoticeWiringTest {
     }
 
     /**
+     * A delete that gave up waiting for another write to the same storage has a sentence of its
+     * own. Unwired, it is silent and the file comes back at the next open with nothing said; worded
+     * as a refusal, it sends the person to delete in their file manager a file that nothing refused.
+     *
+     * Same ceiling and same anchoring as the cases above.
+     */
+    @Test
+    fun `MainActivity asks to be told when a delete waited out another write`() {
+        assertTrue(activity.isFile, "MainActivity.kt is not where this test expects it")
+        val source = activity.readText()
+
+        assertTrue(
+            Regex("""(?m)^\s*safManager\.onDeleteBusy\s*\{""").containsMatchIn(source),
+            "nothing wires the notice for a delete that waited out another write, so the " +
+                "file comes back at the next open with nothing said",
+        )
+        assertTrue(
+            Regex("""(?m)^\s*[^/\n]*saf_delete_busy\b""").containsMatchIn(source),
+            "the notice does not name the string that says the storage was busy",
+        )
+    }
+
+    /**
      * The throttle belongs to the manager, so one refusing provider is one notice.
      *
      * Asserted as a rule rather than as a constant: the number is a product decision and

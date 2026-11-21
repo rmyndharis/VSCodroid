@@ -267,6 +267,7 @@
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">%1$s wurde im Geräteordner behalten: Eine andere App hat möglicherweise eine Datei darin geändert, seit der Editor diese zuletzt gelesen oder gespeichert hat. Löschen Sie den Ordner dort, wenn Sie ihn nicht mehr brauchen.</string>
     <string name="saf_delete_refused">%1$s konnte nicht aus dem Geräteordner gelöscht werden und erscheint beim nächsten Öffnen des Ordners wieder. Löschen Sie den Eintrag in der Dateiverwaltung des Geräts.</string>
+    <string name="saf_delete_busy">%1$s wurde nicht aus dem Geräteordner gelöscht, weil noch ein anderer Schreibvorgang auf demselben Speicher lief. Der Eintrag erscheint beim nächsten Öffnen des Ordners wieder; löschen Sie ihn dann erneut.</string>
     <!-- Device and app edits kept beside their file instead of being overwritten -->
     <string name="saf_device_copy_preserved">Geräteänderung daneben: %1$s.</string>
     <plurals name="saf_device_copies_preserved">

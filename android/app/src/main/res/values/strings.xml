@@ -272,6 +272,11 @@
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">%1$s was kept in the device folder: another app may have changed a file in it since the editor last read or saved that file. Delete it there if you no longer need it.</string>
     <string name="saf_delete_refused">%1$s could not be deleted from the device folder, so it comes back the next time the folder is opened. Delete it in the file manager on your device.</string>
+    <!-- A delete that waited out another write to the same storage and gave up. Worded
+         apart from saf_delete_refused, which says the device folder refused and sends the
+         user to delete the file in their file manager: nothing refused here, and deleting
+         it again once the folder has been opened again works. -->
+    <string name="saf_delete_busy">%1$s was not deleted from the device folder because another write to the same storage was still running. It comes back the next time the folder is opened; delete it again then.</string>
     <!-- Device and app edits kept beside their file instead of being overwritten -->
     <string name="saf_device_copy_preserved">Device edit kept beside file: %1$s.</string>
     <plurals name="saf_device_copies_preserved">

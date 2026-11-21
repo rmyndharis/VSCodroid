@@ -269,6 +269,7 @@
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">%1$s se conservó en la carpeta del dispositivo: es posible que otra aplicación haya cambiado un archivo que contiene desde la última vez que el editor lo leyó o guardó. Elimínala ahí si ya no la necesitas.</string>
     <string name="saf_delete_refused">No se pudo eliminar %1$s de la carpeta del dispositivo, así que volverá a aparecer la próxima vez que se abra la carpeta. Elimínalo en el gestor de archivos del dispositivo.</string>
+    <string name="saf_delete_busy">%1$s no se eliminó de la carpeta del dispositivo porque otra escritura en el mismo almacenamiento seguía en curso. Volverá a aparecer la próxima vez que se abra la carpeta; elimínalo de nuevo entonces.</string>
     <!-- Device and app edits kept beside their file instead of being overwritten -->
     <string name="saf_device_copy_preserved">Copia del dispositivo junto al archivo: %1$s.</string>
     <plurals name="saf_device_copies_preserved">
