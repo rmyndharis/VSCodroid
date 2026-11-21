@@ -5,6 +5,7 @@ import android.content.Context
 import android.database.Cursor
 import android.net.Uri
 import android.os.FileObserver
+import android.os.SystemClock
 import android.provider.DocumentsContract
 import com.vscodroid.util.Logger
 import io.mockk.Runs
@@ -29,6 +30,8 @@ import java.io.File
 import java.io.FileNotFoundException
 import java.io.OutputStream
 import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.attribute.BasicFileAttributes
 
 /**
  * What the device folder ends up holding when changes are queued behind one another.
@@ -260,6 +263,45 @@ class SafQueuedWriteBackTest {
     private fun drain() = engine.runWriteBackLoop { false }
 
     private fun text(path: String) = device[path]?.toString(Charsets.UTF_8)
+
+    /** `mv from to` in the mirror: the folder leaves, both halves are seen, and it lands under the new name. */
+    private fun renameFolder(from: String, to: String) {
+        val held = File(filesDir, "renaming")
+        assertTrue(File(mirror, from).renameTo(held))
+        observe(FileObserver.MOVED_FROM or isDirFlag, from)
+        observe(FileObserver.MOVED_TO or isDirFlag, to)
+        assertTrue(held.renameTo(File(mirror, to)))
+    }
+
+    /** The identity the watch of a folder records for it. */
+    private fun identityOf(dir: File): Any = Files.readAttributes(
+        dir.toPath(), BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS,
+    ).fileKey()
+
+    private val companion = SafSyncEngine.Companion
+
+    /** Takes the device folder's write claim, as another folder's write in progress holds it. */
+    private fun holdProviderClaim(): Any = companion.javaClass
+        .getDeclaredMethod("claimProviderMutation", Uri::class.java)
+        .apply { isAccessible = true }
+        .invoke(companion, mockk<Uri>(relaxed = true)) ?: error("the claim was already held")
+
+    private fun releaseProviderClaim(claim: Any) {
+        companion.javaClass.getDeclaredMethod("releaseProviderMutation", claim.javaClass)
+            .apply { isAccessible = true }.invoke(companion, claim)
+    }
+
+    /** A save of [path] that meets another write's claim and is held back, as the drain leaves it. */
+    private fun holdBackSave(path: String) {
+        val claim = holdProviderClaim()
+        try {
+            observe(FileObserver.MODIFY, path)
+            drain()
+        } finally {
+            releaseProviderClaim(claim)
+        }
+        assertEquals(listOf(path), lost, "setup failed: the save was not held back")
+    }
 
     @Test
     fun `a queued save preserves a device edit reported by its document query`() {
@@ -737,5 +779,217 @@ class SafQueuedWriteBackTest {
         // again, where it can be removed once more.
         assertEquals(setOf("a", "a/fa.txt", "b", "b/fc.txt"), device.keys)
         assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /**
+     * A save held back because another write had the device folder's claim names its document by the
+     * URI it had, which a folder rename makes stale. The rename ended the hold and sent nothing, so the
+     * renamed document kept its older bytes until the file was saved again.
+     */
+    @Test
+    fun `a save held back before its folder is renamed reaches the renamed folder`() {
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } returns 0L
+        onDevice("old_dir")
+        onDevice("old_dir/existing.txt", "old")
+        inMirror("old_dir/existing.txt", "edited before rename")
+        holdBackSave("old_dir/existing.txt")
+
+        renameFolder("old_dir", "lib")
+        drain()
+
+        assertEquals(setOf("lib", "lib/existing.txt"), device.keys)
+        assertEquals("edited before rename", text("lib/existing.txt"))
+        assertEquals(listOf("old_dir/existing.txt"), lost, "a save that arrived was announced again")
+    }
+
+    /**
+     * The same hold, tried again while its folder is between the two halves of a rename: the file is
+     * not at its path, so the try ended the hold and nothing carried the save to the new name.
+     */
+    @Test
+    fun `a held save that comes due while its folder moves reaches the renamed folder`() {
+        var clock = 0L
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } answers { clock }
+        onDevice("old_dir")
+        onDevice("old_dir/existing.txt", "old")
+        inMirror("old_dir/existing.txt", "edited before rename")
+        holdBackSave("old_dir/existing.txt")
+        val held = File(filesDir, "renaming")
+        assertTrue(File(mirror, "old_dir").renameTo(held))
+        observe(FileObserver.MOVED_FROM or isDirFlag, "old_dir")
+
+        clock = SafSyncEngine.HELD_BACK_RETRY_FIRST_MS + 1
+        assertFalse(engine.retryHeldBack(WatchSession(mirror)), "a save was tried with its file gone")
+        observe(FileObserver.MOVED_TO or isDirFlag, "lib")
+        assertTrue(held.renameTo(File(mirror, "lib")))
+        drain()
+
+        assertEquals(setOf("lib", "lib/existing.txt"), device.keys)
+        assertEquals("edited before rename", text("lib/existing.txt"))
+    }
+
+    /**
+     * A folder's move lands on disk before the observer reports it, so the write-back thread can take a
+     * save of a file in it in between, with no departed folder known yet to note the dropped save with.
+     */
+    @Test
+    fun `a save taken after its folder moved and before the move is reported reaches the renamed folder`() {
+        onDevice("old_dir")
+        onDevice("old_dir/existing.txt", "old")
+        inMirror("old_dir/existing.txt", "edited before rename")
+        observe(FileObserver.MODIFY, "old_dir/existing.txt")
+        val held = File(filesDir, "renaming")
+        assertTrue(File(mirror, "old_dir").renameTo(held))
+        drain()
+        observe(FileObserver.MOVED_FROM or isDirFlag, "old_dir")
+        observe(FileObserver.MOVED_TO or isDirFlag, "lib")
+        assertTrue(held.renameTo(File(mirror, "lib")))
+
+        drain()
+
+        assertEquals(setOf("lib", "lib/existing.txt"), device.keys)
+        assertEquals("edited before rename", text("lib/existing.txt"))
+        assertEquals(emptyList<String>(), lost)
+    }
+
+    /** A save dropped well before its folder moves is not one the move explains, and is not sent with it. */
+    @Test
+    fun `a save dropped long before its folder moves is not sent with the move`() {
+        onDevice("old_dir")
+        onDevice("old_dir/existing.txt", "old")
+        inMirror("old_dir/existing.txt", "old")
+        val stale = File(mirror, "old_dir/existing.txt").absolutePath
+        engine.session.recentDrops += stale to System.currentTimeMillis() - SafSyncEngine.RENAME_PAIR_WINDOW_MS - 1
+
+        renameFolder("old_dir", "lib")
+        drain()
+
+        assertEquals(setOf("lib", "lib/existing.txt"), device.keys)
+        assertEquals(emptyList<String>(), writes, "a save nobody made for this folder was sent with its rename")
+    }
+
+    /**
+     * A folder renamed twice in quick succession, the second move landing while the first rename's job
+     * is sending the saves it carried: the file is no longer under the first new name, and that job
+     * skipped it without a word while the second rename's job had never heard of it.
+     */
+    @Test
+    fun `a save carried by a rename reaches the folder's last name when it moves again meanwhile`() {
+        onDevice("a")
+        onDevice("a/f", "old")
+        inMirror("a/f", "edited")
+        observe(FileObserver.MODIFY, "a/f")
+        renameFolder("a", "b")
+        var movedAgain = false
+        // The first provider answer after the first rename has landed on the device.
+        onProviderCall = {
+            if (!movedAgain && "b" in device) {
+                movedAgain = true
+                renameFolder("b", "c")
+            }
+        }
+
+        drain()
+        onProviderCall = null
+
+        assertTrue(movedAgain, "setup failed: the second move did not land inside the first rename's job")
+        assertEquals(setOf("c", "c/f"), device.keys)
+        assertEquals("edited", text("c/f"))
+        assertEquals(emptyList<String>(), lost)
+    }
+
+    /**
+     * A folder that leaves for good and an unrelated one arriving within the pairing window were joined
+     * as one rename: the device's copy of the departed folder took the arriving folder's name, and the
+     * departed folder's queued save then wrote the arriving folder's file over the device's copy of its own.
+     */
+    @Test
+    fun `a folder arriving as another leaves is not taken for its rename`() {
+        onDevice("gone")
+        onDevice("gone/f", "the departed folder's device copy")
+        inMirror("gone/f", "edited before it left")
+        engine.watchedDirectoryKeys[File(mirror, "gone").absolutePath] = identityOf(File(mirror, "gone"))
+        observe(FileObserver.MODIFY, "gone/f")
+        assertTrue(File(mirror, "gone").renameTo(File(filesDir, "elsewhere")))
+        observe(FileObserver.MOVED_FROM or isDirFlag, "gone")
+        val arriving = File(filesDir, "arriving").apply { mkdirs() }
+        File(arriving, "f").writeText("the arriving folder's own file")
+        assertTrue(arriving.renameTo(File(mirror, "lib")))
+        observe(FileObserver.MOVED_TO or isDirFlag, "lib")
+
+        drain()
+
+        assertEquals("the departed folder's device copy", text("gone/f"))
+        assertEquals("the arriving folder's own file", text("lib/f"))
+    }
+
+    @Test
+    fun `a folder renamed with its identity recorded is still renamed on the device`() {
+        onDevice("old_dir")
+        onDevice("old_dir/existing.txt", "old")
+        inMirror("old_dir/existing.txt", "old")
+        engine.watchedDirectoryKeys[File(mirror, "old_dir").absolutePath] = identityOf(File(mirror, "old_dir"))
+        assertTrue(File(mirror, "old_dir").renameTo(File(mirror, "lib")))
+        observe(FileObserver.MOVED_FROM or isDirFlag, "old_dir")
+        observe(FileObserver.MOVED_TO or isDirFlag, "lib")
+
+        drain()
+
+        verify(exactly = 1) { DocumentsContract.renameDocument(any(), any(), "lib") }
+        assertEquals(setOf("lib", "lib/existing.txt"), device.keys)
+        assertEquals(emptyList<String>(), writes)
+    }
+
+    /**
+     * A rename that gave way to a later rename onto the same name left the saves it had claimed with the
+     * session, and the next rename of the same old name sent them again.
+     */
+    @Test
+    fun `a rename given way to a later one leaves no save behind for the next rename of its old name`() {
+        onDevice("a")
+        onDevice("a/f", "old")
+        onDevice("c")
+        onDevice("c/g", "g")
+        inMirror("a/f", "edited")
+        inMirror("c/g", "g")
+        observe(FileObserver.MODIFY, "a/f")
+        // mv a b && rm -r b && mv c b, with the save of a/f taken after a left.
+        val held = File(filesDir, "renaming")
+        assertTrue(File(mirror, "a").renameTo(held))
+        observe(FileObserver.MOVED_FROM or isDirFlag, "a")
+        drain()
+        observe(FileObserver.MOVED_TO or isDirFlag, "b")
+        assertTrue(held.deleteRecursively())
+        Thread.sleep(3)
+        observe(FileObserver.DELETE or isDirFlag, "b")
+        Thread.sleep(3)
+        renameFolder("c", "b")
+        drain()
+        assertEquals("old", text("a/f"), "setup failed: the first rename was not the one given way")
+        // A new a, delivered, then renamed.
+        inMirror("a/f", "fresh")
+        observe(FileObserver.CREATE or isDirFlag, "a")
+        drain()
+        assertEquals("fresh", text("a/f"))
+        writes.clear()
+
+        renameFolder("a", "x")
+        drain()
+
+        assertEquals("fresh", text("x/f"))
+        assertEquals(emptyList<String>(), writes, "a save of the earlier a was sent again")
+    }
+
+    /** An event that finishes after the folder's drain has ended reaches no device, and the user is told. */
+    @Test
+    fun `a save observed after the folder's drain ended is announced`() {
+        engine.stopWatching()
+        inMirror("notes.txt", "late save")
+
+        observe(FileObserver.MODIFY, "notes.txt")
+
+        assertEquals(listOf("notes.txt"), lost)
     }
 }

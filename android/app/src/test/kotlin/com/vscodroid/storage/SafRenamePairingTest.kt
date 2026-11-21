@@ -8,7 +8,8 @@ import org.junit.jupiter.api.Test
  * Which vanished directory a newly arrived one is allowed to claim.
  *
  * inotify pairs the two halves of a rename with a cookie and `FileObserver` does not
- * expose it, so `renameSourceFor` is a heuristic: arrival time and how many are in flight
+ * expose it. The directories' identities answer it where both halves carry one; where one
+ * does not, `renameSourceFor` is a heuristic, and arrival time and how many are in flight
  * are all that is left. What it decides is which device document gets renamed, so the
  * interesting cases are the ones where it has to refuse. A wrong pair puts one directory's
  * subtree under another's name on the user's device.
@@ -29,11 +30,11 @@ class SafRenamePairingTest {
     // The mirror path is the record's other half, and it is not what is being decided
     // here: it names the upload records that follow the directory, while the pairing
     // reads the mirror-relative path and the clock.
-    private fun vanished(path: String, ago: Long) =
-        VanishedDirectory(path, now - ago, "/mirror/$path")
+    private fun vanished(path: String, ago: Long, identity: Any? = null) =
+        VanishedDirectory(path, now - ago, "/mirror/$path", identity)
 
-    private fun sourceFor(newPath: String, vararg vanished: VanishedDirectory): String? =
-        SafSyncEngine.renameSourceFor(vanished.toList(), newPath, now)
+    private fun sourceFor(newPath: String, vararg vanished: VanishedDirectory, arriving: Any? = null): String? =
+        SafSyncEngine.renameSourceFor(vanished.toList(), newPath, now, arriving)
 
     @Test
     fun `one directory that just left is the source`() {
@@ -110,5 +111,33 @@ class SafRenamePairingTest {
     @Test
     fun `a rename inside a subdirectory pairs on that subdirectory`() {
         assertEquals("src/util", sourceFor("src/helpers", vanished("src/util", ago = 5)))
+    }
+
+    @Test
+    fun `a directory known to be another one is never the source`() {
+        // The departure was watched and the arrival can be read, and they are two directories: a folder
+        // moved out of the mirror while an unrelated one came in.
+        assertNull(sourceFor("helpers", vanished("util", ago = 5, identity = "util"), arriving = "helpers"))
+    }
+
+    @Test
+    fun `the directory that is the arriving one is the source even among several`() {
+        assertEquals(
+            "c",
+            sourceFor("b", vanished("a", ago = 10, identity = "a"), vanished("c", ago = 5, identity = "c"), arriving = "c"),
+        )
+    }
+
+    @Test
+    fun `a half that carries no identity is judged by the window and the count`() {
+        // A directory past the watch limit has none recorded, and an arrival already moved on cannot be read.
+        assertEquals("util", sourceFor("helpers", vanished("util", ago = 5), arriving = "helpers"))
+        assertEquals("util", sourceFor("helpers", vanished("util", ago = 5, identity = "util")))
+        assertNull(sourceFor("b", vanished("a", ago = 10), vanished("c", ago = 5), arriving = "b"))
+    }
+
+    @Test
+    fun `an expired departure stays expired whatever its identity`() {
+        assertNull(sourceFor("helpers", vanished("util", ago = window + 1, identity = "util"), arriving = "util"))
     }
 }
