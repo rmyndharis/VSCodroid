@@ -350,14 +350,20 @@
          worded like saf_write_back_failed: most of the folder did arrive, so "the only
          copy is inside VSCodroid" would overstate. -->
     <plurals name="saf_upload_incomplete">
-        <item quantity="one">%2$s: un elemento no llegó a la carpeta del dispositivo. Se queda en VSCodroid; guárdalo de nuevo para enviarlo.</item>
-        <item quantity="many">%2$s: %1$d elementos no llegaron a la carpeta del dispositivo. Se quedan en VSCodroid; guarda cada uno de nuevo para enviarlo.</item>
-        <item quantity="other">%2$s: %1$d elementos no llegaron a la carpeta del dispositivo. Se quedan en VSCodroid; guarda cada uno de nuevo para enviarlo.</item>
+        <item quantity="one">%2$s: un elemento no llegó a la carpeta del dispositivo.</item>
+        <item quantity="many">%2$s: %1$d elementos no llegaron a la carpeta del dispositivo.</item>
+        <item quantity="other">%2$s: %1$d elementos no llegaron a la carpeta del dispositivo.</item>
     </plurals>
     <!-- The same folder stopped by the enumeration cap rather than by a refusal. Named
          separately because the cause is a limit this app chose, not the device saying
          no, and the user's next move is to copy the rest out by hand. -->
     <string name="saf_upload_capped">%1$s es demasiado grande para copiarla completa al dispositivo. El resto se quedó dentro de VSCodroid.</string>
+    <string name="saf_file_kept_in_app">%1$s: el archivo %2$s solo está en VSCodroid, porque puede haberse eliminado en la carpeta del dispositivo. Guárdalo de nuevo para enviarlo allí.</string>
+    <plurals name="saf_files_kept_in_app">
+        <item quantity="one">%2$s: %1$d archivo, %3$s, solo está en VSCodroid, porque puede haberse eliminado en la carpeta del dispositivo. Guárdalo de nuevo para enviarlo allí.</item>
+        <item quantity="many">%2$s: %1$d archivos, entre ellos %3$s, solo están en VSCodroid, porque pueden haberse eliminado en la carpeta del dispositivo. Guarda un archivo de nuevo para enviarlo allí.</item>
+        <item quantity="other">%2$s: %1$d archivos, entre ellos %3$s, solo están en VSCodroid, porque pueden haberse eliminado en la carpeta del dispositivo. Guarda un archivo de nuevo para enviarlo allí.</item>
+    </plurals>
 
     <!-- The Toolchains toolbar's only icon-only control, and the app's only visible
          way back out of that screen. Without it a screen reader announces an

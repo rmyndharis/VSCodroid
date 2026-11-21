@@ -29,7 +29,7 @@ class SafGrownDocumentRowTest : SafInitialSyncTestBase() {
         deviceTree(mapOf("root" to listOf(Child("keep.txt", contents = "k"), Child("big.bin", contents = "v1"))))
         sync()
         record.writeText(record.readLines().filterNot { it.startsWith("big.bin\t") }.joinToString("\n"))
-        updatedSinceLastOpen()
+        recordLeftByEarlierBuild()
         created.clear()
     }
 
@@ -66,12 +66,12 @@ class SafGrownDocumentRowTest : SafInitialSyncTestBase() {
 
         assertEquals(emptyList<String>(), names(), "the old copy of a document the device deleted was put back there")
         assertEquals("v1", mirrorFile("big.bin").readText(), "the copy was removed instead of kept")
-        assertEquals(listOf(1), didNotReach, "the copy kept inside the app was not told of")
+        assertEquals(listOf(1 to "big.bin"), keptInApp, "the copy kept inside the app was not told of")
 
         sync()
 
         assertEquals(emptyList<String>(), names(), "a later open put the old copy back")
-        assertEquals(emptyList<Int>(), didNotReach, "a later open told of the same copy again")
+        assertEquals(emptyList<Pair<Int, String>>(), keptInApp, "a later open told of the same copy again")
     }
 
     /**

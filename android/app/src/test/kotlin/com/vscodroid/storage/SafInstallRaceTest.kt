@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.File
+import java.io.FileOutputStream
 import java.nio.file.Files
 import java.nio.file.LinkOption
 
@@ -135,5 +136,127 @@ class SafInstallRaceTest : SafInitialSyncTestBase() {
 
         assertEquals("newer on the device", mirrorFile("notes.md").readText())
         assertEquals(emptyList<String>(), leftovers())
+    }
+
+    /**
+     * The editor saves by cutting the file and writing it again, and had written part of the save when the device's
+     * copy went in; the rest lands in the file the copy replaced. The save was kept as the first look at it found
+     * it, half a file, and the editor, reloading, showed the device's copy: the rest of the save was nowhere.
+     */
+    @Test
+    fun `a save still being written as the newer device copy replaces it is kept whole`() {
+        deviceHolds("notes.md", "first")
+        sync()
+        deviceHolds("notes.md", "newer on the device", modified = DEVICE_TIME + 60_000)
+        val save = "the first half of a save, and then the second half of it"
+        val half = save.length / 2
+        var writer: FileOutputStream? = null
+        val engine = engineCountingHelpers()
+        engine.replaceName = { dest, rename ->
+            if (dest.name == "notes.md" && writer == null) writer = FileOutputStream(dest).apply { write(save.take(half).toByteArray()) }
+            rename()
+        }
+        engine.heldSaveSettle = {
+            writer?.run {
+                write(save.drop(half).toByteArray())
+                close()
+            }
+            writer = null
+        }
+
+        try {
+            open(engine)
+        } finally {
+            writer?.close()
+        }
+
+        assertEquals("newer on the device", mirrorFile("notes.md").readText())
+        assertEquals(1, keptCopies().size, "the save was not kept beside the file: ${mirror.list()!!.toList()}")
+        assertEquals(save, mirrorFile(keptCopies().single()).readText(), "the kept save holds only what was written before it was copied")
+    }
+
+    /** A save that ends shorter than what the first look found leaves no tail of the longer state behind. */
+    @Test
+    fun `a save that shrinks while it is kept leaves no tail behind`() {
+        deviceHolds("notes.md", "first")
+        sync()
+        deviceHolds("notes.md", "newer on the device", modified = DEVICE_TIME + 60_000)
+        var writer: FileOutputStream? = null
+        val engine = engineCountingHelpers()
+        engine.replaceName = { dest, rename ->
+            if (dest.name == "notes.md" && writer == null) writer = FileOutputStream(dest).apply { write("a longer state of the save".toByteArray()) }
+            rename()
+        }
+        engine.heldSaveSettle = {
+            writer?.run {
+                channel.truncate(0)
+                channel.position(0)
+                write("the end".toByteArray())
+                close()
+            }
+            writer = null
+        }
+
+        try {
+            open(engine)
+        } finally {
+            writer?.close()
+        }
+
+        assertEquals("the end", mirrorFile(keptCopies().single()).readText())
+    }
+
+    /** A writer that never stops is not waited for without end: what it holds at the last look is kept. */
+    @Test
+    fun `a save that keeps changing is kept as the last look found it, within a bound`() {
+        deviceHolds("notes.md", "first")
+        sync()
+        deviceHolds("notes.md", "newer on the device", modified = DEVICE_TIME + 60_000)
+        var writer: FileOutputStream? = null
+        val engine = engineCountingHelpers()
+        engine.replaceName = { dest, rename ->
+            if (dest.name == "notes.md" && writer == null) writer = FileOutputStream(dest).apply { write("start".toByteArray()) }
+            rename()
+        }
+        engine.heldSaveSettle = { writer?.write('.'.code) }
+
+        val started = System.nanoTime()
+        try {
+            open(engine)
+        } finally {
+            writer?.close()
+        }
+        val tookMs = (System.nanoTime() - started) / 1_000_000
+
+        assertTrue(tookMs < 10_000, "the open waited ${tookMs}ms for a writer that never stops")
+        assertTrue(mirrorFile(keptCopies().single()).readText().startsWith("start."), "the kept copy lost what was written")
+    }
+
+    /**
+     * What a replaced copy costs in reads of the old one. Each read of a copy before it is replaced is a read of the
+     * whole file on the device's storage, and a checkout on the device that changes many files pays it per file.
+     */
+    @Test
+    fun `replacing a copy reads the old one in full no more than its checks need`() {
+        deviceHolds("notes.md", "first")
+        sync()
+        deviceHolds("notes.md", "newer on the device", modified = DEVICE_TIME + 60_000)
+        var reads = 0
+        afterReading("first") { reads++ }
+
+        open(engineCountingHelpers())
+
+        assertEquals("newer on the device", mirrorFile("notes.md").readText())
+        assertEquals(EXPECTED_OLD_COPY_READS, reads, "the old copy was read in full $reads times")
+    }
+
+    private companion object {
+        /**
+         * The look before the fetch, the look once it has landed, two by the check of the old copy against its row
+         * ([SafSyncEngine] `setAsideDivergedMirror`), the look after that check, and the look at the replaced file
+         * once the copy is in place. The open descriptor is no longer read through once more before the rename: the
+         * look a moment before had read it, and its attributes and length say it is the same file, unchanged.
+         */
+        const val EXPECTED_OLD_COPY_READS = 6
     }
 }

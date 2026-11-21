@@ -354,15 +354,22 @@
          worded like saf_write_back_failed: most of the folder did arrive, so "the only
          copy is inside VSCodroid" would overstate. -->
     <plurals name="saf_upload_incomplete">
-        <item quantity="one">%2$s: %1$d объект не попал в папку на устройстве. Неотправленное остаётся в VSCodroid; чтобы отправить файл, сохраните его снова.</item>
-        <item quantity="few">%2$s: %1$d объекта не попали в папку на устройстве. Неотправленное остаётся в VSCodroid; чтобы отправить файл, сохраните его снова.</item>
-        <item quantity="many">%2$s: %1$d объектов не попали в папку на устройстве. Неотправленное остаётся в VSCodroid; чтобы отправить файл, сохраните его снова.</item>
-        <item quantity="other">%2$s: %1$d объекта не попали в папку на устройстве. Неотправленное остаётся в VSCodroid; чтобы отправить файл, сохраните его снова.</item>
+        <item quantity="one">%2$s: %1$d объект не попал в папку на устройстве.</item>
+        <item quantity="few">%2$s: %1$d объекта не попали в папку на устройстве.</item>
+        <item quantity="many">%2$s: %1$d объектов не попали в папку на устройстве.</item>
+        <item quantity="other">%2$s: %1$d объекта не попали в папку на устройстве.</item>
     </plurals>
     <!-- The same folder stopped by the enumeration cap rather than by a refusal. Named
          separately because the cause is a limit this app chose, not the device saying
          no, and the user's next move is to copy the rest out by hand. -->
     <string name="saf_upload_capped">Папка %1$s слишком велика, чтобы скопировать её целиком. Остальное осталось внутри VSCodroid.</string>
+    <string name="saf_file_kept_in_app">%1$s: файл %2$s остаётся только в VSCodroid, потому что его могли удалить в папке на устройстве. Чтобы отправить его туда, сохраните его снова.</string>
+    <plurals name="saf_files_kept_in_app">
+        <item quantity="one">%2$s: %1$d файл, среди них %3$s, остаётся только в VSCodroid, потому что их могли удалить в папке на устройстве. Чтобы отправить файл туда, сохраните его снова.</item>
+        <item quantity="few">%2$s: %1$d файла, среди них %3$s, остаются только в VSCodroid, потому что их могли удалить в папке на устройстве. Чтобы отправить файл туда, сохраните его снова.</item>
+        <item quantity="many">%2$s: %1$d файлов, среди них %3$s, остаются только в VSCodroid, потому что их могли удалить в папке на устройстве. Чтобы отправить файл туда, сохраните его снова.</item>
+        <item quantity="other">%2$s: %1$d файла, среди них %3$s, остаются только в VSCodroid, потому что их могли удалить в папке на устройстве. Чтобы отправить файл туда, сохраните его снова.</item>
+    </plurals>
 
     <!-- The Toolchains toolbar's only icon-only control, and the app's only visible
          way back out of that screen. Without it a screen reader announces an

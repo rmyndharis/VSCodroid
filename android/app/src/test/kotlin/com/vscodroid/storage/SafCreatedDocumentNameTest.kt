@@ -172,6 +172,9 @@ class SafCreatedDocumentNameTest {
         File(workspace, "a:b/c:d/notes.txt").apply { parentFile!!.mkdirs() }.writeText("nested content")
         val record = File(workspace.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
         record.writeText(SafSyncEngine.RECORD_HEADER)
+        // A record this build wrote, which the mark beside it says; without it the record reads as an earlier
+        // build's, whose files older than it the open keeps inside the app.
+        val mark = File(workspace.path + SafSyncEngine.SORTED_RECORD_SUFFIX).apply { createNewFile() }
         every { DocumentsContract.getTreeDocumentId(treeUri) } returns "parent-doc"
         every { resolver.query(childrenUri, any(), any(), any(), any()) } answers {
             var row = -1
@@ -214,6 +217,7 @@ class SafCreatedDocumentNameTest {
             assertTrue(engine.holdsOnlyVouchedCopies(workspace), "the normalized upload lost its delivery receipt")
         } finally {
             record.delete()
+            mark.delete()
         }
     }
 
@@ -377,6 +381,7 @@ class SafCreatedDocumentNameTest {
             assertEquals("the only copy", device.toString())
         } finally {
             File(workspace.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).delete()
+            File(workspace.path + SafSyncEngine.SORTED_RECORD_SUFFIX).delete()
         }
     }
 

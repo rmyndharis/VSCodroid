@@ -12,6 +12,8 @@ class SafUndeliveredContentNoticeTest : SafInitialSyncTestBase() {
     fun `a reopened mirror counts content that the provider did not accept`() {
         deviceTree(mapOf("root" to listOf(Child("sentinel.md", contents = "present"))))
         record.writeText(SafSyncEngine.RECORD_HEADER + "\n")
+        // A record this build wrote: an earlier build's would keep a file older than it inside the app.
+        sortedMark.createNewFile()
         mirrorFile("notes.md").writeText("unique local content")
         every { resolver.openOutputStream(any(), "wt") } returns null
         val incomplete = mutableListOf<Int>()

@@ -216,6 +216,15 @@ class SafStorageManager(context: Context) {
         syncEngine.onUploadIncomplete = announce
     }
 
+    /**
+     * Told when an open keeps files only the copy holds inside the app, with how many and the
+     * first of them ([SafSyncEngine.onFilesKeptInApp]). Forwarded and unthrottled, like
+     * [onUploadIncomplete]: once per open or replay, with the whole count.
+     */
+    fun onFilesKeptInApp(announce: (File, Int, String) -> Unit) {
+        syncEngine.onFilesKeptInApp = announce
+    }
+
     private val lastFailureAnnouncedAt = AtomicLong(NEVER_ANNOUNCED)
     private val lastKeptAnnouncedAt = AtomicLong(NEVER_ANNOUNCED)
 
@@ -456,7 +465,8 @@ class SafStorageManager(context: Context) {
     }
 
     /**
-     * Finishes committed removals and removes records whose ordinary copy is gone.
+     * Finishes committed removals and removes records whose ordinary copy is gone, with
+     * the scratch file and the sorted mark beside each.
      *
      * Ordinary mirrors can receive direct writes from terminals and surviving server
      * processes without taking this process's locks. A matching sync snapshot cannot
@@ -483,12 +493,20 @@ class SafStorageManager(context: Context) {
             }
 
             val partial = MIRROR_RECORD_PARTIAL.matches(name)
+            // The record's sorted mark goes as its scratch file does, when neither a copy nor a grant is left. It
+            // holds nothing, so it is not counted.
+            val mark = MIRROR_RECORD_MARK.matches(name)
             val record = MIRROR_ENTRY.matches(name) &&
                 name.endsWith(SafSyncEngine.SYNCED_RECORD_SUFFIX)
-            if (!partial && !record) return@forEach
+            if (!partial && !mark && !record) return@forEach
             // A directory with a record's name is not a record this app writes.
             if (entry.isDirectory && !Files.isSymbolicLink(entry.toPath())) return@forEach
             val hash = name.substringBefore('.')
+            // A mark is decided with its record, in the one pass that reads the grants for the pair, so the order the
+            // directory lists them in changes nothing; a mark whose record has gone is decided on its own.
+            if (mark && Files.exists(File(root, hash + SafSyncEngine.SYNCED_RECORD_SUFFIX).toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                return@forEach
+            }
             val discarded = synchronized(grantLifecycleLock) {
                 // Regrant and sync use this same lock. A dangling symbolic link also
                 // keeps its record: do not infer ownership from its missing target.
@@ -499,8 +517,12 @@ class SafStorageManager(context: Context) {
                 } else if (partial) {
                     if (entry.delete()) removed++
                     null
+                } else if (mark) {
+                    entry.delete()
+                    null
                 } else {
-                    setAside(root, name)
+                    // The mark goes once the record is out of the way, so a record that could not be set aside keeps it.
+                    setAside(root, name)?.also { File(root, hash + SafSyncEngine.SORTED_RECORD_SUFFIX).delete() }
                 }
             }
             if (discarded != null && finishOff(discarded, entry)) removed++
@@ -762,9 +784,9 @@ class SafStorageManager(context: Context) {
      * asks the user before setting this flag. A mirror claimed in this process remains
      * protected even when [force] is true.
      *
-     * The ordinary directory rename commits the removal. Its sync record, upload
-     * records and permission are retired under the same grant lifecycle lock before a
-     * regrant can create a fresh copy. [sweepDiscardedMirrors] finishes deletion later.
+     * The ordinary directory rename commits the removal. Its sync record and the mark
+     * beside it, upload records and permission are retired under the same grant lifecycle
+     * lock before a regrant can create a fresh copy. [sweepDiscardedMirrors] finishes deletion later.
      * Sizing walks the copy, so this must not run on the main thread.
      */
     fun reclaimMirror(hash: String, force: Boolean): Long {
@@ -795,6 +817,8 @@ class SafStorageManager(context: Context) {
             try {
                 syncEngine.renameUploadsUnder(dir, discarded)
                 setAside(root, hash + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+                // The mark holds nothing; deleted rather than set aside, since nothing sweeps it under that name.
+                File(root, hash + SafSyncEngine.SORTED_RECORD_SUFFIX).delete()
                 releaseGrantFor(hash)
                 Logger.i(tag, "Set a device folder's local copy aside at the user's request")
                 bytes
@@ -1513,6 +1537,17 @@ class SafStorageManager(context: Context) {
             "^[0-9a-f]{12}" +
                 Regex.escape(SafSyncEngine.SYNCED_RECORD_SUFFIX + SafSyncEngine.PARTIAL_SUFFIX) +
                 "$"
+        )
+
+        /**
+         * The mark beside a record that an open of this build sorted it
+         * ([SafSyncEngine.SORTED_RECORD_SUFFIX]). Like [MIRROR_RECORD_PARTIAL], not half of a
+         * mirror, and cleared away once the mirror it belonged to has gone: left, it would stand
+         * beside the record a later grant of the same folder is given, which an earlier build may
+         * have written.
+         */
+        internal val MIRROR_RECORD_MARK = Regex(
+            "^[0-9a-f]{12}" + Regex.escape(SafSyncEngine.SORTED_RECORD_SUFFIX) + "$"
         )
 
         /**

@@ -184,6 +184,49 @@ class SafCutOffRemovalCopyTest : SafInitialSyncTestBase() {
     }
 
     /**
+     * A copy a removal of an earlier build left, in a folder whose other rows are all as recorded, after that
+     * build let the row of its document go: no row says a copy left its name there, so only a listing of every
+     * folder holding a row finds it. The first open over a record no open of this build has sorted lists them all,
+     * once.
+     */
+    @Test
+    fun `an edit left in a removal's copy whose row an earlier build let go is kept and sent`() {
+        firstOpen()
+        val capture = File(mirror, newName()).apply { writeText("an edit nobody sent") }
+        recordLeftByEarlierBuild()
+        deviceKeepsOnly()
+
+        sync()
+
+        assertFalse(capture.exists(), "the person's bytes stayed under a name that is never sent")
+        val kept = File(mirror, keptCopies().single())
+        assertEquals("an edit nobody sent", kept.readText())
+        assertEquals(listOf(kept.name), names(), "the person's edit never reached the device")
+    }
+
+    /**
+     * The same, where the path was made again before the open: the device lists the document, the mirror holds a
+     * file at its name, and only the row, which no longer names what stands there, says the copy left it. A folder
+     * holding rows is looked into only where a row's copy may have left its name, and this is one.
+     */
+    @Test
+    fun `an edit left in a removal's copy is kept and sent though its path was made again`() {
+        firstOpen(Child("notes.txt", contents = "old"))
+        val capture = cutOff("notes.txt", newName())
+        capture.writeText("NEW")
+        mirrorFile("notes.txt").writeText("made again")
+        deviceKeepsOnly(Child("notes.txt", contents = "old"))
+
+        sync()
+
+        assertFalse(capture.exists(), "the person's bytes stayed under a name that is never sent")
+        val kept = File(mirror, keptCopies().single())
+        assertEquals("NEW", kept.readText())
+        assertEquals(listOf(kept.name), names(), "the person's edit never reached the device")
+        assertEquals("made again", mirrorFile("notes.txt").readText())
+    }
+
+    /**
      * A copy that changed while a removal held it, where the move to a name of its own failed: it stays under the
      * removal's name, and the open let the row of its document go. In a folder with no other row, no later open
      * looked there, and the edit was never sent.

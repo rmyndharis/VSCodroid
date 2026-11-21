@@ -105,7 +105,7 @@ class SafNamedRegrantCleanupTest : SafInitialSyncTestBase() {
         assertTrue(record.isFile)
         resolver.releasePersistableUriPermission(folder, 3)
         assertFalse(manager.hasPersistedPermission(folder))
-        assertEquals(setOf(mirror.name, record.name), mirror.parentFile.list()!!.toSet())
+        assertEquals(setOf(mirror.name, record.name, sortedMark.name), mirror.parentFile.list()!!.toSet())
     }
 
     private fun worker(name: String, work: () -> Unit) = Worker(name, work).also { workers.add(it) }

@@ -61,7 +61,13 @@ abstract class SafInitialSyncTestBase {
     /** The counts of files an open said did not reach the device folder, one entry per notice. */
     protected val didNotReach = mutableListOf<Int>()
 
+    /** The files an open said it keeps inside the app, as (count, first file) per notice. */
+    protected val keptInApp = mutableListOf<Pair<Int, String>>()
+
     protected val record: File get() = File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+
+    /** The mark beside [record] that an open of this build sorted the files only the app holds. */
+    protected val sortedMark: File get() = File(mirror.path + SafSyncEngine.SORTED_RECORD_SUFFIX)
 
     protected data class Child(
         val name: String,
@@ -113,6 +119,7 @@ abstract class SafInitialSyncTestBase {
     @AfterEach
     fun tearDownDevice() {
         record.delete()
+        sortedMark.delete()
         unmockkAll()
     }
 
@@ -184,10 +191,12 @@ abstract class SafInitialSyncTestBase {
         lost.clear()
         notCopied = 0
         didNotReach.clear()
+        keptInApp.clear()
         val engine = SafSyncEngine(context)
         engine.onWriteBackFailed = { lost += it.name }
         engine.onDocumentsNotCopied = { count, _ -> notCopied = count }
         engine.onUploadIncomplete = { _, count, _ -> didNotReach += count }
+        engine.onFilesKeptInApp = { _, count, first -> keptInApp += count to first }
         engine.initialSync(named("tree"), mirror) { _, _ -> }
         engine
     }
@@ -196,17 +205,27 @@ abstract class SafInitialSyncTestBase {
 
     /**
      * The app was updated after the last open wrote [record]: the package's update time is later than the
-     * record's, which is how an open tells a record an earlier build wrote from one this build wrote. The record
-     * is dated a minute before an update a second ago, so a record an open writes from here on is this build's;
-     * a case that times files against the record does so after this.
+     * record's. With [redateRecord] the record is dated a minute before an update a second ago, so a case that
+     * times files against the record does so after this; without it the update is put a second after the record
+     * as it stands. An update alone says nothing of which build wrote the record: [recordLeftByEarlierBuild].
      */
-    protected fun updatedSinceLastOpen() {
-        val updatedAt = System.currentTimeMillis() - 1_000
-        check(record.setLastModified(updatedAt - 60_000)) { "could not date the record before the update" }
+    protected fun updatedSinceLastOpen(redateRecord: Boolean = true) {
+        val updatedAt = if (redateRecord) System.currentTimeMillis() - 1_000 else record.lastModified() + 1_000
+        if (redateRecord) check(record.setLastModified(updatedAt - 60_000)) { "could not date the record before the update" }
         val info = PackageInfo().apply { lastUpdateTime = updatedAt }
         val packages = mockk<PackageManager>(relaxed = true)
         every { packages.getPackageInfo(any<String>(), any<Int>()) } returns info
         every { context.packageManager } returns packages
+    }
+
+    /**
+     * [record] is one an earlier build wrote, 1.10.1 or older, and the app has been updated since: it carries no
+     * [sortedMark], which only an open of this build that sorted the files only the app holds leaves.
+     */
+    protected fun recordLeftByEarlierBuild() {
+        check(record.isFile) { "there is no record to have been written by an earlier build" }
+        sortedMark.delete()
+        updatedSinceLastOpen()
     }
 
     /** Runs [then] each time the engine has read a file holding [contents] through to its digest. */

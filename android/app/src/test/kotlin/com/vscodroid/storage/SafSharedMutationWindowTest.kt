@@ -27,6 +27,7 @@ class SafSharedMutationWindowTest : SafInitialSyncTestBase() {
     @AfterEach
     fun removeSecondRecord() {
         File(secondMirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).delete()
+        File(secondMirror.path + SafSyncEngine.SORTED_RECORD_SUFFIX).delete()
     }
 
     private fun document(identity: String): Uri = mockk<Uri>(relaxed = true).also { uri ->

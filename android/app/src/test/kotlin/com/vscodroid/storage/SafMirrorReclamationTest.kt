@@ -438,6 +438,29 @@ class SafMirrorReclamationTest {
         assertEquals(1, removed)
     }
 
+    /**
+     * The mark that an open of this build sorted a record goes where the record goes. Left behind, it outlived the
+     * record it vouched for, in a directory every terminal is handed as SAF_MIRRORS_DIR, and stood beside whatever
+     * record a later grant of the same folder was given.
+     */
+    @Test
+    fun `a record's sorted mark goes with its orphan record and stays beside a retained copy`() {
+        val (staleDir, _) = mirrorFor(revokedUri)
+        val retained = File(mirrorsDir, staleDir.name + SafSyncEngine.SORTED_RECORD_SUFFIX).apply { createNewFile() }
+        val orphanRecord = File(mirrorsDir, "0123456789ab" + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+            .apply { writeText(SafSyncEngine.RECORD_HEADER) }
+        val orphanMark = File(mirrorsDir, "0123456789ab" + SafSyncEngine.SORTED_RECORD_SUFFIX).apply { createNewFile() }
+        val lone = File(mirrorsDir, "ba9876543210" + SafSyncEngine.SORTED_RECORD_SUFFIX).apply { createNewFile() }
+        every { resolver.persistedUriPermissions } returns emptyList()
+
+        manager.reclaimRevokedMirrorsSync()
+
+        assertFalse(orphanRecord.exists(), "precondition: the orphan record was not removed")
+        assertFalse(orphanMark.exists(), "the mark outlived the record it was beside")
+        assertFalse(lone.exists(), "a mark with neither a record nor a copy was left behind")
+        assertTrue(retained.isFile, "a retained copy's record lost its mark")
+    }
+
     @Test
     fun `nothing is reclaimed while every mirror is still granted`() {
         val (dir, record) = mirrorFor(liveUri)

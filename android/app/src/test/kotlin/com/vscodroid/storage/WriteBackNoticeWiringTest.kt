@@ -104,6 +104,34 @@ class WriteBackNoticeWiringTest {
     }
 
     /**
+     * The files an open keeps inside the app because it cannot tell them from documents deleted on the device. Told
+     * of in the sentence for files the device did not get, they read as a failure to send, and saving one again,
+     * which is what sends it, was not said; told of in a sentence that says to save again, a folder the device
+     * refused, which no save sends, read the same. So it has its own wording, which names a file: one for a single
+     * file and a plural for more.
+     *
+     * Same ceiling and same anchoring as the cases above.
+     */
+    @Test
+    fun `MainActivity names a file an open keeps inside the app`() {
+        assertTrue(activity.isFile, "MainActivity.kt is not where this test expects it")
+        val source = activity.readText()
+
+        assertTrue(
+            Regex("""(?m)^\s*safManager\.onFilesKeptInApp\s*\{""").containsMatchIn(source),
+            "nothing wires the notice for files kept inside the app, so they are told of as files the device refused",
+        )
+        assertTrue(
+            Regex("""(?m)^\s*[^/\n]*saf_file_kept_in_app\b""").containsMatchIn(source),
+            "a single kept file is not named in its own wording",
+        )
+        assertTrue(
+            Regex("""(?m)^\s*[^/\n]*saf_files_kept_in_app\b""").containsMatchIn(source),
+            "more than one kept file has no wording of its own",
+        )
+    }
+
+    /**
      * The inbound direction, which is the one where the wording matters most and the
      * one a shared seam would have got wrong: these documents are on the device and did
      * not reach the editor, so "the only copy is inside VSCodroid" is the opposite of

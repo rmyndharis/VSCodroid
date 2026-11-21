@@ -346,13 +346,18 @@
          worded like saf_write_back_failed: most of the folder did arrive, so "the only
          copy is inside VSCodroid" would overstate. -->
     <plurals name="saf_upload_incomplete">
-        <item quantity="one">%2$s: Ein Element hat den Geräteordner nicht erreicht. Es bleibt in VSCodroid; speichern Sie es erneut, um es zu senden.</item>
-        <item quantity="other">%2$s: %1$d Elemente haben den Geräteordner nicht erreicht. Sie bleiben in VSCodroid; speichern Sie jedes erneut, um es zu senden.</item>
+        <item quantity="one">%2$s: Ein Element hat den Geräteordner nicht erreicht.</item>
+        <item quantity="other">%2$s: %1$d Elemente haben den Geräteordner nicht erreicht.</item>
     </plurals>
     <!-- The same folder stopped by the enumeration cap rather than by a refusal. Named
          separately because the cause is a limit this app chose, not the device saying
          no, and the user's next move is to copy the rest out by hand. -->
     <string name="saf_upload_capped">%1$s ist zu groß, um vollständig in den Geräteordner kopiert zu werden. Der Rest ist in VSCodroid geblieben.</string>
+    <string name="saf_file_kept_in_app">%1$s: Die Datei %2$s bleibt nur in VSCodroid, da sie im Geräteordner gelöscht worden sein kann. Speichern Sie sie erneut, um sie dorthin zu senden.</string>
+    <plurals name="saf_files_kept_in_app">
+        <item quantity="one">%2$s: %1$d Datei, %3$s, bleibt nur in VSCodroid, da sie im Geräteordner gelöscht worden sein kann. Speichern Sie sie erneut, um sie dorthin zu senden.</item>
+        <item quantity="other">%2$s: %1$d Dateien, darunter %3$s, bleiben nur in VSCodroid, da sie im Geräteordner gelöscht worden sein können. Speichern Sie eine Datei erneut, um sie dorthin zu senden.</item>
+    </plurals>
 
     <!-- The Toolchains toolbar's only icon-only control, and the app's only visible
          way back out of that screen. Without it a screen reader announces an

@@ -111,6 +111,7 @@ class SafReconcileDeletionsTest {
     @AfterEach
     fun tearDown() {
         record.delete()
+        File(record.path.removeSuffix(SafSyncEngine.SYNCED_RECORD_SUFFIX) + SafSyncEngine.SORTED_RECORD_SUFFIX).delete()
         unmockkAll()
     }
 
@@ -677,8 +678,8 @@ class SafReconcileDeletionsTest {
         record.writeText("a.txt\nb.txt")
 
         deviceFolderHolding("a.txt" to "kept")
-        val told = mutableListOf<Int>()
-        sync { it.onUploadIncomplete = { _, count, _ -> told += count } }
+        val told = mutableListOf<Pair<Int, String>>()
+        sync { it.onFilesKeptInApp = { _, count, first -> told += count to first } }
 
         assertTrue(
             mirrored("b.txt").isFile,
@@ -686,10 +687,10 @@ class SafReconcileDeletionsTest {
         )
         // It stays inside the app, neither sent nor removed, and this is the one open that says so: the
         // rows just written are what make the next open quiet.
-        assertEquals(listOf(1), told, "a file kept unsent was not told of")
-        val toldAgain = mutableListOf<Int>()
-        sync { it.onUploadIncomplete = { _, count, _ -> toldAgain += count } }
-        assertEquals(emptyList<Int>(), toldAgain, "the next open told of the same file again")
+        assertEquals(listOf(1 to "b.txt"), told, "a file kept unsent was not told of by name")
+        val toldAgain = mutableListOf<Pair<Int, String>>()
+        sync { it.onFilesKeptInApp = { _, count, first -> toldAgain += count to first } }
+        assertEquals(emptyList<Pair<Int, String>>(), toldAgain, "the next open told of the same file again")
         // b.txt is named too, without a digest: nothing proves it is the device's old copy, and
         // with no row the next open would read it as a save the device never got and put a
         // document the device deleted back there.
@@ -957,7 +958,7 @@ class SafReconcileDeletionsTest {
         val reconcile = SafSyncEngine::class.java.getDeclaredMethod(
             "reconcileDeletions", File::class.java, List::class.java,
             Boolean::class.javaPrimitiveType, List::class.java, List::class.java,
-            Boolean::class.javaPrimitiveType, Function1::class.java,
+            Boolean::class.javaPrimitiveType, Function0::class.java, Function1::class.java,
         ).apply { isAccessible = true }
 
         val engine = SafSyncEngine(context)
@@ -965,7 +966,7 @@ class SafReconcileDeletionsTest {
         engine.onLocalCopiesPreserved = { announced += it }
         reconcile.invoke(engine, mirror,
             listOf(DocumentInfo(uriFor("keep"), "keep", "keep.txt", false, 1, DEVICE_TIME)), true, emptyList<String>(),
-            emptyList<String>(), false, { _: Int -> })
+            emptyList<String>(), false, {}, { _: List<String> -> })
 
         assertTrue(changed.get(), "the deletion never verified the recorded copy")
         if (shape == "redirect") {

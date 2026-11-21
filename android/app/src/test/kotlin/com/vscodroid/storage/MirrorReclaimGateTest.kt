@@ -42,7 +42,7 @@ class MirrorReclaimGateTest : SafMirrorPairEnumerationFixture() {
         var enumerated = false
         val removed = manager.reclaimRevokedMirrorsSync { root ->
             val entries = root.listFiles() ?: error("the mirrors directory was unreadable")
-            assertEquals(setOf(mirror.absolutePath, record.absolutePath), entries.map { it.absolutePath }.toSet())
+            assertEquals(setOf(mirror.absolutePath, record.absolutePath, sortedMark.absolutePath), entries.map { it.absolutePath }.toSet())
             unique.writeText("UNIQUE TERMINAL BYTES")
             assertFalse(SafSyncEngine(context).holdsOnlyVouchedCopies(mirror))
             enumerated = true

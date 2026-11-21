@@ -912,6 +912,24 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
             }
         }
 
+        // Files only the copy holds that an open keeps inside the app because it cannot tell them
+        // from documents deleted on the device. Named, because the person decides about each, and
+        // in a sentence of its own: saving such a file again sends it, which is not true of what
+        // the upload notice above counts. One file has its own wording, as a kept edit does.
+        safManager.onFilesKeptInApp { dir, count, first ->
+            val folder = mirrorDisplayName(storage.getPersistedFolders(), dir)
+            val message = if (count == 1) {
+                appContext.getString(R.string.saf_file_kept_in_app, folder, first)
+            } else {
+                appContext.resources.getQuantityString(
+                    R.plurals.saf_files_kept_in_app, count, count, folder, first
+                )
+            }
+            toMainThread.post {
+                AppNotices.showNotice(appContext, message, Toast.LENGTH_LONG, screen.get())
+            }
+        }
+
         // The other direction: documents the device holds that did not reach the editor.
         // Its own wording, because "the only copy is inside VSCodroid" is the opposite of
         // true for these, and would send the user looking for a file that is safe.

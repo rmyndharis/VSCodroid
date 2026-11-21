@@ -350,14 +350,20 @@
          worded like saf_write_back_failed: most of the folder did arrive, so "the only
          copy is inside VSCodroid" would overstate. -->
     <plurals name="saf_upload_incomplete">
-        <item quantity="one">%2$s : %1$d élément n\'est pas arrivé dans le dossier de l\'appareil. Il reste dans VSCodroid ; enregistrez-le de nouveau pour l\'envoyer.</item>
-        <item quantity="many">%2$s : %1$d éléments ne sont pas arrivés dans le dossier de l\'appareil. Ils restent dans VSCodroid ; enregistrez chacun de nouveau pour l\'envoyer.</item>
-        <item quantity="other">%2$s : %1$d éléments ne sont pas arrivés dans le dossier de l\'appareil. Ils restent dans VSCodroid ; enregistrez chacun de nouveau pour l\'envoyer.</item>
+        <item quantity="one">%2$s : %1$d élément n\'est pas arrivé dans le dossier de l\'appareil.</item>
+        <item quantity="many">%2$s : %1$d éléments ne sont pas arrivés dans le dossier de l\'appareil.</item>
+        <item quantity="other">%2$s : %1$d éléments ne sont pas arrivés dans le dossier de l\'appareil.</item>
     </plurals>
     <!-- The same folder stopped by the enumeration cap rather than by a refusal. Named
          separately because the cause is a limit this app chose, not the device saying
          no, and the user's next move is to copy the rest out by hand. -->
     <string name="saf_upload_capped">%1$s est trop volumineux pour être copié en entier. Le reste est resté dans VSCodroid.</string>
+    <string name="saf_file_kept_in_app">%1$s : le fichier %2$s reste uniquement dans VSCodroid, car il a peut-être été supprimé dans le dossier de l\'appareil. Enregistrez-le de nouveau pour l\'y envoyer.</string>
+    <plurals name="saf_files_kept_in_app">
+        <item quantity="one">%2$s : %1$d fichier, %3$s, reste uniquement dans VSCodroid, car il a peut-être été supprimé dans le dossier de l\'appareil. Enregistrez-le de nouveau pour l\'y envoyer.</item>
+        <item quantity="many">%2$s : %1$d fichiers, dont %3$s, restent uniquement dans VSCodroid, car ils ont peut-être été supprimés dans le dossier de l\'appareil. Enregistrez un fichier de nouveau pour l\'y envoyer.</item>
+        <item quantity="other">%2$s : %1$d fichiers, dont %3$s, restent uniquement dans VSCodroid, car ils ont peut-être été supprimés dans le dossier de l\'appareil. Enregistrez un fichier de nouveau pour l\'y envoyer.</item>
+    </plurals>
 
     <!-- The Toolchains toolbar's only icon-only control, and the app's only visible
          way back out of that screen. Without it a screen reader announces an

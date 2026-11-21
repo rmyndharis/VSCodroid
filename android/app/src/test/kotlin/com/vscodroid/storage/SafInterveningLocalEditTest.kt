@@ -81,6 +81,7 @@ class SafInterveningLocalEditTest {
     @AfterEach
     fun tearDown() {
         record.delete()
+        File(record.path.removeSuffix(SafSyncEngine.SYNCED_RECORD_SUFFIX) + SafSyncEngine.SORTED_RECORD_SUFFIX).delete()
         unmockkAll()
     }
 

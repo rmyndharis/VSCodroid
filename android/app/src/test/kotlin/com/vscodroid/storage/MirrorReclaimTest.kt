@@ -186,6 +186,22 @@ class MirrorReclaimTest {
     }
 
     /**
+     * The mark that an open of this build sorted the copy's record goes with the record. Left behind, a later grant
+     * of the same folder, which is given the same name, met a record an earlier build wrote standing beside a mark
+     * that said this build had sorted it.
+     */
+    @Test
+    fun `removing a copy removes the mark beside its record`() {
+        val (dir, _) = vouchedMirror()
+        val mark = File(dir.path + SafSyncEngine.SORTED_RECORD_SUFFIX).apply { createNewFile() }
+
+        assertTrue(manager.reclaimMirror(dir.name, force = true) > 0)
+        sweep()
+
+        assertFalse(mark.exists(), "the mark outlived the record it was beside")
+    }
+
+    /**
      * The rename is the commit point of the removal, and the reason is in
      * [SafStorageManager.reclaimRevokedMirrorsSync]: a delete in place rests on nothing
      * else touching the directory while the walk is inside it, and a re-grant during the

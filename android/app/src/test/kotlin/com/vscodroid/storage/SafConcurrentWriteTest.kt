@@ -152,7 +152,9 @@ class SafConcurrentWriteTest {
         releaseFirstWriter.countDown()
         releaseFirstFetch.countDown()
         File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).delete()
+        File(mirror.path + SafSyncEngine.SORTED_RECORD_SUFFIX).delete()
         File(otherMirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).delete()
+        File(otherMirror.path + SafSyncEngine.SORTED_RECORD_SUFFIX).delete()
         File(filesDir, SafSyncEngine.UPLOADS_IN_FLIGHT_FILE).delete()
         unmockkAll()
     }
