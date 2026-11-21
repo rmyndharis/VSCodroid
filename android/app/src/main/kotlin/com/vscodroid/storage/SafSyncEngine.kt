@@ -1973,6 +1973,10 @@ class SafSyncEngine(private val context: Context) {
             ) {
                 deviceStamp(docUri) ?: (0L to UNANSWERED_SIZE)
             } else return false
+            // A write of this app's own that was cut short left its journal line standing, and the device document holds the leading bytes of the mirror file and nothing
+            // else. Nothing is kept by setting those aside: every byte of them is in the file about to be written. The line alone proves nothing about what touched the document
+            // since, so the bytes are read, as the first open does it for the same line (deviceIsTruncatedMirror).
+            if (localFile.absolutePath in uploadsInFlight() && deviceIsTruncatedMirror(docUri, localFile, mirrorRoot)) return false
             setAsideDeviceCopy(
                 DocumentInfo(docUri, "", localFile.name, false, now.second, now.first),
                 localFile,
