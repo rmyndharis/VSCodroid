@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- After the screen is turned, a letter such as é or a Cyrillic letter that a keyboard that underlines words writes over the last letter of a word is typed at the caret instead of replacing that letter.
+- After the screen is turned, the next letter that a keyboard that underlines words sends over the same word as the letter before it is typed at the caret too, instead of replacing the word.
+- A keyboard that sends the same stale letter after every restart of input has the seventh typed at the caret like the six before it, instead of written over the word.
+- A word before a single space that a keyboard that underlines words grows by a letter, such as `the` to `then`, takes the letter instead of having it typed after the space.
+- A correction that a keyboard that underlines words takes back, such as `you` back to `u` after its space is deleted, is applied instead of typing the letter after the word.
+
 ## [1.10.1] - 2026-11-21
 
 ### Fixed
@@ -51,7 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A file made in a device folder that is still empty, whose creation was cut short when the app was killed, is sent at the next open instead of waiting for another file to appear there.
 - A Backspace on a word of two letters from outside the Basic Multilingual Plane, such as Adlam or Osage, that a keyboard reopened is applied at once instead of being refused six times first.
 - The editor's limit of six refused keyboard writes starts again after half a minute without one, so refusals at separate moments no longer add up until a stale write is applied and doubles a word.
-- After the screen is turned, the first letter typed on a keyboard that underlines words, such as Gboard 10.8, is typed at the caret instead of being lost, replacing the last letter of the word, or going into an earlier word with the same text.
+- After the screen is turned, the first letter typed on a keyboard that underlines words, such as Gboard 10.8, is typed at the caret instead of being lost, replacing the last letter of the word when both are letters of the basic Latin alphabet, or going into an earlier word with the same text.
 - Suggestions appear while a word is typed on a keyboard that underlines it, such as Gboard; they used to wait until the keyboard was put away or the editor was tapped.
 - Suggestions open after the key of a Thai tone mark, a vowel sign or a combining accent on a keyboard that underlines words, as they do after a letter; they used to wait for the next letter.
 - Clear Caches no longer unlinks the sockets in the editor's temporary directory, so git sign-in prompts and the `vscodroid` command keep working until the next restart.
