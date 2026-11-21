@@ -130,6 +130,13 @@ class SafLiveDeviceEditTest {
     /** How many of the next `"wt"` streams fail at their first byte, before anything lands. */
     private var failWriteStreams = 0
 
+    /**
+     * How many of the next write streams truncate the document as `"wt"` does at open and then fail after [cutShortBytes]
+     * bytes, leaving the document holding the leading bytes of what was being written.
+     */
+    private var cutShortStreams = 0
+    private var cutShortBytes = 0
+
     /** How the provider reports a write; null for one whose stamp is final at close(). */
     private var lateStamp: LateStamp? = null
 
@@ -226,7 +233,19 @@ class SafLiveDeviceEditTest {
         }
         every { resolver.openOutputStream(any(), "wt") } answers {
             if (firstArg<Uri>() in gone) throw FileNotFoundException("deleted by another app")
-            if (failWriteStreams > 0) {
+            if (cutShortStreams > 0) {
+                cutShortStreams--
+                land(ByteArray(0))
+                object : OutputStream() {
+                    private val written = ByteArrayOutputStream()
+
+                    override fun write(b: Int) {
+                        if (written.size() >= cutShortBytes) throw IOException("cut short")
+                        written.write(b)
+                        land(written.toByteArray())
+                    }
+                }
+            } else if (failWriteStreams > 0) {
                 failWriteStreams--
                 object : OutputStream() {
                     override fun write(b: Int) = throw IOException("cut short")
@@ -2048,6 +2067,48 @@ class SafLiveDeviceEditTest {
         )
         assertEquals("second save", deviceText)
         assertEquals(2, writes)
+    }
+
+    /**
+     * A write cut short by the provider leaves the leading bytes of the mirror file on the
+     * device, and the journal line of the write stands. The next save of the file meets a
+     * document that changed since this engine wrote it, and those bytes are this app's own:
+     * keeping them as a `.device-` copy put a half-written file in the person's folder and
+     * told them another app had edited it.
+     */
+    @Test
+    fun `a save after this app's own write was cut short keeps no device copy`() {
+        open()
+        cutShortBytes = 4
+        cutShortStreams = 2
+        save("first save, long enough to be cut")
+        assertEquals("firs", deviceText)
+
+        save("first save, long enough to be cut, and more")
+
+        assertEquals(
+            emptyMap<String, String>(), deviceCopies(),
+            "this app's own cut-short bytes were kept as if another app had written them",
+        )
+        assertEquals("first save, long enough to be cut, and more", deviceText)
+        assertEquals(emptyList<List<File>>(), preservedNotices, "the person was told another app had edited the file")
+    }
+
+    /**
+     * The journal line is what makes the leading bytes this app's own. Without one, a document
+     * that is a prefix of the mirror file is what another app leaves when it deletes the end of
+     * the text, and it is kept.
+     */
+    @Test
+    fun `a prefix of the mirror file that another app left is still kept`() {
+        open()
+        save("first save, long enough")
+        editOnDevice("first save")
+
+        save("first save, long enough, and more")
+
+        assertEquals(setOf("first save"), deviceCopies().values.toSet(), "another app's edit was not kept")
+        assertEquals("first save, long enough, and more", deviceText)
     }
 
     /**
