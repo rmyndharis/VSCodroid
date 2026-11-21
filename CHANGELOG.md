@@ -44,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The user guide's troubleshooting section explains `Permission denied` from a terminal command on a file another app saved in shared storage, and how to bring the file in.
 - The privacy policy names both installer package names that mark an install as coming from the Play Store.
 - A file deleted from a device folder is no longer put back at a later open when the app's record of that folder was missing or written by an older version.
-- A file in a device folder that grew past 50 MB is no longer put back with its old content after it is deleted on the device, except where 1.9.0 had already dropped its row from the record.
+- A file in a device folder that grew past 50 MB is no longer put back with its old content after it is deleted on the device. A copy whose row 1.9.0 dropped is covered once the folder has been opened on this version while the file is still there.
 - For a file in a device folder whose name is too long to take `.local-<time>` whole, the app's copy is kept beside it under a shortened `.local-` name, so the device's newer copy comes in again.
 - For a file in a device folder whose name is too long to take `.device-<time>` whole, another app's edit is kept beside it under a shortened `.device-` name, so the app's newer copy reaches the device.
 - A device folder picked while the app was being restarted opens once the editor is up, instead of the folder open before it.

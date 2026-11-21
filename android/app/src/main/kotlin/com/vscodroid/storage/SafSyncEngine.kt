@@ -819,6 +819,7 @@ class SafSyncEngine(private val context: Context) {
                     unfetched.add(localPath.absolutePath)
                     val line = identityLine(doc.relativePath, localPath)
                     if (localPath.isFile && previouslyRecorded?.contains(line) != false) recorded += line
+                    else if (isOlderCopyOfGrownDocument(doc, localPath, previousLineFor)) recorded += line
                     // At Logger.i, not d, for the reason the no-clock line below gives:
                     // Logger.d is gated on a debuggable build, so on a release build
                     // the only trace of this document was the count in the summary. The
@@ -2549,6 +2550,27 @@ class SafSyncEngine(private val context: Context) {
         val unproven = if (usable) emptyList() else unprovenRows(mirrorDir, present)
         writeSyncedRecord(record, recorded + carried + unproven.filterNot { it.substringBefore('\t') in settled })
         return removed
+    }
+
+    /**
+     * Whether the mirror copy of a document that has grown past the size limit is the copy an earlier open
+     * made, with no row for it in a record that can be read. Builds up to 1.9.0 dropped the row of such a
+     * file at the open that found it too large, and a later deletion of the document on the device put the
+     * old copy back there as work only this app had. The copy's time is the time the device reported when
+     * the copy was made, so a copy older than the document is that earlier copy. One made or saved after the
+     * document last changed is the person's, and has to go to the device when the document is dropped. A
+     * record that names the path in another shape (a copy a save has changed since), a link, a file whose
+     * upload is still owed and a document that reports no time are none of this: they get no row.
+     */
+    private fun isOlderCopyOfGrownDocument(doc: DocumentInfo, localPath: File, lines: Map<String, String>?): Boolean {
+        if (lines == null || escapeRecordPath(doc.relativePath) in lines || doc.lastModified <= 0L) return false
+        return try {
+            Files.isRegularFile(localPath.toPath(), LinkOption.NOFOLLOW_LINKS) &&
+                localPath.lastModified() < doc.lastModified &&
+                localPath.absolutePath !in uploadsInFlight()
+        } catch (_: Exception) {
+            false
+        }
     }
 
     /**

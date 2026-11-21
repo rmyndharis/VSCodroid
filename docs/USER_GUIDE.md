@@ -141,7 +141,9 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   the provider file. Such a file is kept in the device folder, and so is a folder holding
   it, or holding a file another app added since you opened the folder, that you
   delete from the terminal; a notice says so, and the file comes
-  back into the editor the next time you open the folder.
+  back into the editor the next time you open the folder. A file you delete in the
+  copy while the folder is closed is not deleted in the device folder: it is
+  copied in again the next time you open the folder.
 - If opening a folder cannot list it or one of its subdirectories, saves and
   deletes of existing device documents under that directory are held back.
   Your edits stay inside VSCodroid until you reopen the folder successfully
