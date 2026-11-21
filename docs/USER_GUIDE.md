@@ -1037,7 +1037,7 @@ Beyond the bundled tools (Node.js, Python, Git, Bash), VSCodroid offers addition
 | Ruby | 11 MB | 41 MB | ruby, gem, irb, bundler, rake, and the headers native gems build against |
 | Java 25 (OpenJDK) | 69 MB | 192 MB | java, javac, jar, jshell |
 | C/C++ (clang) | 80 MB | 280 MB | cc, c++, gcc, g++, clang, clang++, ld, ar, ranlib, nm, strip, objdump, objcopy, readelf, size, clangd (the language server), and the C and C++ headers |
-| Codex | 134 MB | 375 MB | codex, OpenAI's coding agent (see [Codex](#codex)); not a language, so the first-run picker does not offer it |
+| Codex | 146 MB | 375 MB | codex, OpenAI's coding agent (see [Codex](#codex)); not a language, so the first-run picker does not offer it |
 
 Codex is the largest. Installing a toolchain holds the unpacked copy and the
 installed copy at once, so the install asks for roughly twice the installed size free while

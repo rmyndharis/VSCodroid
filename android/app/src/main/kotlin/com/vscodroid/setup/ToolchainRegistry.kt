@@ -165,7 +165,7 @@ object ToolchainRegistry {
             // day the pack is built, and package-toolchains.sh refuses a tree above
             // this. Measure the pack again before a release.
             estimatedSize = 375_000_000,
-            downloadSize = 134_000_000,
+            downloadSize = 146_000_000,
             downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_codex.zip",
             offeredInPicker = false,
         ),
