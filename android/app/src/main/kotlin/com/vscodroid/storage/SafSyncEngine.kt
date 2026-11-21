@@ -396,8 +396,8 @@ class SafSyncEngine(private val context: Context) {
      * The saves and creates the write-back thread took, after a directory left the mirror, for a
      * file that was under it, by that directory's absolute path. The file is gone from its path
      * and the job is dropped, so the rename that claims the directory no longer finds the save
-     * among the queued ones: this is what it adds. Guarded by [vanishedLock], and forgotten
-     * with the directory's entry when nothing claims it.
+     * among the queued ones: this is what it adds. Guarded by [vanishedLock], forgotten
+     * with the directory's entry when nothing claims it, and handed to the session by a claim.
      */
     private val droppedSaves = HashMap<String, MutableList<String>>()
     private val vanishedLock = Any()
@@ -607,6 +607,9 @@ class SafSyncEngine(private val context: Context) {
             }
         }
         val previouslyRecorded: Set<String>? by lazy { previousRecord?.keys }
+        // When the record was last written, read before this open writes it again: a file older than that
+        // was not made in a folder the listing calls empty since then.
+        val recordWrittenAt = File(mirrorDir.path + SYNCED_RECORD_SUFFIX).lastModified()
         // The previous record's line for a path, whatever copy it names, by the path as the
         // record spells it. Built only once a no-clock open finds the two sides apart.
         val previousLineFor: Map<String, String>? by lazy {
@@ -1273,7 +1276,8 @@ class SafSyncEngine(private val context: Context) {
                 safUri,
                 mirrorDir,
                 documents.mapTo(HashSet()) { it.relativePath },
-                { previousRecord?.map { (identity, digest) -> recordLine(identity, digest) }?.toSet() }
+                { previousRecord?.map { (identity, digest) -> recordLine(identity, digest) }?.toSet() },
+                if (documents.isEmpty()) recordWrittenAt else null,
             ) { done, total -> onProgress(filesDone + done, totalFiles + total) }
         } else {
             0
@@ -1399,14 +1403,22 @@ class SafSyncEngine(private val context: Context) {
     ): Int {
         val onDevice = documents.mapTo(HashSet()) { it.relativePath }
         val filesOnDevice = documents.filterNot { it.isDirectory }.mapTo(HashSet()) { it.relativePath }
+        // Every row that has a digest, by its directory, and among them the rows of documents the device
+        // no longer lists. The second decide which folders the pass looks into and what a copy is removed
+        // for; the first, what a copy that is not removed may be: the recorded bytes of a document, which
+        // are no work of the person's.
+        val recordedRows = HashMap<File, MutableList<Pair<Long, ByteArray>>>()
         val goneRows = HashMap<File, MutableList<Pair<Long, ByteArray>>>()
         for ((identity, digest) in previous) {
             if (digest == null) continue
             val fields = identity.split('\t')
             val length = fields.getOrNull(2)?.toLongOrNull() ?: continue
             val path = unescapeRecordPath(fields[0])
-            if (path.isEmpty() || path in filesOnDevice) continue
+            if (path.isEmpty()) continue
             val file = File(mirrorDir, path)
+            val parent = file.parentFile ?: continue
+            recordedRows.getOrPut(parent) { ArrayList() } += length to digest
+            if (path in filesOnDevice) continue
             // A row this build cannot make a path of is left to phase 3, which reads rows the same way.
             // Held only by the copy the row names: a file at its path with that time and length. A
             // folder, a link or a file made since is not that copy, and the entry beside it is no less
@@ -1423,7 +1435,7 @@ class SafSyncEngine(private val context: Context) {
                 continue
             }
             if (held) continue
-            goneRows.getOrPut(file.parentFile ?: continue) { ArrayList() } += length to digest
+            goneRows.getOrPut(parent) { ArrayList() } += length to digest
         }
         var removed = 0
         for ((directory, rows) in goneRows) {
@@ -1440,8 +1452,16 @@ class SafSyncEngine(private val context: Context) {
                         val digest = if (sameLength.isEmpty()) null else (inboundEntry(selected)?.digest ?: return@use)
                         if (digest == null || sameLength.none { it.second.contentEquals(digest) }) {
                             // Bytes that are no deleted document's: a removal takes a copy only while it is the recorded
-                            // one, so these were written after, by the person, and exist nowhere else.
-                            if (name.endsWith(PARTIAL_SUFFIX)) keepCaptureAsLocalWork(selected, capture, mirrorDir)
+                            // one, so these were written after, by the person, and exist nowhere else. Unless they are
+                            // the recorded bytes of a document the device lists again, which a removal took before the
+                            // device undid the deletion: that copy is no work, and stays where it is.
+                            if (name.endsWith(PARTIAL_SUFFIX)) {
+                                val recordedAlike = recordedRows[directory].orEmpty().filter { it.first == attributes.size() }
+                                val seen = digest ?: if (recordedAlike.isEmpty()) null else (inboundEntry(selected)?.digest ?: return@use)
+                                if (seen == null || recordedAlike.none { it.second.contentEquals(seen) }) {
+                                    keepCaptureAsLocalWork(selected, capture, mirrorDir)
+                                }
+                            }
                             return@use
                         }
                         // A last look: what was hashed must still be what is removed.
@@ -1460,20 +1480,24 @@ class SafSyncEngine(private val context: Context) {
 
     /**
      * Gives a copy that a killed removal took from its name, and that holds bytes the person wrote
-     * since, the name builds up to 1.9.0 gave every such copy, `removed.local-<uuid>`. The
-     * machine-temporary name it was taken under is never sent, and the row that named the copy is
-     * dropped by this open, so the edit stayed in the mirror under a name nobody reads and went
-     * with the mirror when it was reclaimed. The new name is an ordinary one: the open creates the
-     * file on the device and a notice names it. A name that is taken leaves the copy where it is.
+     * since, a name of its own: `removed.local-<time>`, the shape of every other copy kept beside
+     * a file, with the copy's own time. The copy lost the name of its file when the removal took
+     * it, so the base is a fixed word. The machine-temporary name it was taken under is never
+     * sent, and the row that named the copy is dropped by this open, so the edit stayed in the
+     * mirror under a name nobody reads and went with the mirror when it was reclaimed. The new
+     * name is an ordinary one: the open creates the file on the device and a notice names it.
+     * A time that is taken goes on to the next.
      */
     private fun keepCaptureAsLocalWork(selected: OutboundPath, capture: File, mirrorDir: File) {
-        val identifier = capture.name.removePrefix("removed-").removeSuffix(PARTIAL_SUFFIX)
-        val kept = selected.sibling("removed$LOCAL_COPY_SUFFIX$identifier")
+        var time = selected.attributes().lastModifiedTime().toMillis()
+        var kept = selected.sibling(localCopyName("removed", time))
         requireCurrentParent(selected, capture, mirrorDir)
-        if (moveToFreeName(selected, capture, selected.leaf, kept)) {
-            notePreservedLocalCopy(File(capture.parentFile, kept.toString()))
-            Logger.w(tag, "Kept a changed copy a removal had taken as $kept")
+        while (!moveToFreeName(selected, capture, selected.leaf, kept)) {
+            time++
+            kept = selected.sibling(localCopyName("removed", time))
         }
+        notePreservedLocalCopy(File(capture.parentFile, kept.toString()))
+        Logger.w(tag, "Kept a changed copy a removal had taken as $kept")
     }
 
     private fun isStartOfSibling(
@@ -2328,6 +2352,7 @@ class SafSyncEngine(private val context: Context) {
         mirrorDir: File,
         onDevice: Set<String>,
         previouslyRecorded: () -> Set<String>?,
+        madeAfter: Long?,
         onCandidateDone: (Int, Int) -> Unit,
     ): Int {
         // Filtered inside the walk rather than after it, so that an entry the device
@@ -2375,6 +2400,9 @@ class SafSyncEngine(private val context: Context) {
         // it undoes a deletion with the bytes the device dropped. It waits for an open that reads it.
         val recordedLines = recorded.associateBy { unescapeRecordPath(it.substringBefore('\t')) }
         val candidates = missing.filter { (original, relativePath) ->
+            // Over an empty listing only what was made after the record was written: a copy of a document
+            // the device deleted, whose row an older build dropped, is not told apart from it any other way.
+            if (madeAfter != null && original.lastModified() <= madeAfter) return@filter false
             val line = recordedLines[relativePath] ?: return@filter true
             matchesRecordedCopy(original, relativePath, line) == false &&
                 !isUnprovenCopyOfRecord(mirrorDir, relativePath, line)
@@ -5508,7 +5536,7 @@ class SafSyncEngine(private val context: Context) {
             SyncType.MODIFY -> {
                 val localFile = File(job.localPath)
                 if (!localFile.exists()) {
-                    rememberDroppedSave(job.localPath)
+                    rememberDroppedSave(session, job.localPath)
                     return
                 }
                 if (job.safDocUri != null) {
@@ -5568,7 +5596,7 @@ class SafSyncEngine(private val context: Context) {
             SyncType.CREATE -> {
                 val localFile = File(job.localPath)
                 if (localFile.exists()) createInQueuedParent(job, localFile, access, mirrorRoot)
-                else rememberDroppedSave(job.localPath)
+                else rememberDroppedSave(session, job.localPath)
             }
             SyncType.DELETE -> {
                 // A null uri is NOT the same outcome as a refusal, though it used to
@@ -5701,9 +5729,17 @@ class SafSyncEngine(private val context: Context) {
                 // `mkdir lib && mv util lib/` delivers the MOVED_TO while lib's own
                 // create job is still ahead of this one in the queue, and the answer
                 // from event time cannot see a document that lands a tick later.
+                // Every save this thread took off the queue before it came to this job is noted by now, so the
+                // ones it dropped for the old directory are added to the ones queued when the job was offered:
+                // their files moved with the directory, and the replay writes whatever the mirror holds at the
+                // new path.
+                val lateSaves = job.previousPath?.let { previous ->
+                    takeClaimedDrops(session, previous).map { job.relativePath + "/" + it.removePrefix(previous + File.separator) }
+                }.orEmpty()
+                val renamedSaves = (job.renamedSaves + lateSaves).distinct()
                 val localFile = File(job.localPath)
                 if (withCurrent(access) { true } == null) {
-                    announceDroppedRename(localFile, job.renamedSaves, mirrorRoot)
+                    announceDroppedRename(localFile, renamedSaves, mirrorRoot)
                 } else {
                     val targetParentUri = job.safParentUri
                         ?: if (job.safSourceParentUri != null && job.relativePath.isNotEmpty()) {
@@ -5723,7 +5759,7 @@ class SafSyncEngine(private val context: Context) {
                     // against queued file saves.
                     val mutation = job.safDocUri?.let { claimProviderMutationWithin(it, providerClaimWaitMs) }
                     if (mutation == null) {
-                        announceDroppedRename(localFile, job.renamedSaves, mirrorRoot)
+                        announceDroppedRename(localFile, renamedSaves, mirrorRoot)
                     } else try {
                         // The claim goes back before the turn does; see [withCurrent].
                         if (withCurrent(access, { releaseProviderMutation(mutation) }) {
@@ -5780,20 +5816,20 @@ class SafSyncEngine(private val context: Context) {
                                                         it.localPath.startsWith(localFile.absolutePath + File.separator)
                                                 }.map { it.relativePath }
                                             } else emptyList()
-                                            replayRenamedWrites(job, actualMirror, job.renamedSaves + following, mutation)
+                                            replayRenamedWrites(job, actualMirror, renamedSaves + following, mutation)
                                         }
                                     }
                                 } else {
                                     // The provider moved, but its new path cannot be verified yet.
                                     unfetched.add(localFile.parentFile.absolutePath)
-                                    announceDroppedRename(localFile, job.renamedSaves, mirrorRoot)
+                                    announceDroppedRename(localFile, renamedSaves, mirrorRoot)
                                 }
                             }
                             if (renamed == null && !relocated && localFile.exists()) {
                                 if (targetParentUri != null && job.safTreeUri != null && mirrorRoot != null) {
                                     createInSaf(localFile, targetParentUri, job.safTreeUri, mirrorRoot, mutation = mutation)
                                 } else {
-                                    announceDroppedRename(localFile, job.renamedSaves, mirrorRoot)
+                                    announceDroppedRename(localFile, renamedSaves, mirrorRoot)
                                 }
                             } else if (renamed == null && relocated) {
                                 // The move landed and the rename did not, which a provider carrying
@@ -5813,7 +5849,7 @@ class SafSyncEngine(private val context: Context) {
                                         "it is in the right folder under its previous name",
                                 )
                             }
-                        } == null) announceDroppedRename(localFile, job.renamedSaves, mirrorRoot)
+                        } == null) announceDroppedRename(localFile, renamedSaves, mirrorRoot)
                     } finally {
                         releaseProviderMutation(mutation)
                     }
@@ -6180,7 +6216,7 @@ class SafSyncEngine(private val context: Context) {
                 (event and FileObserver.ALL_EVENTS) == FileObserver.MOVED_TO &&
                 hasVanishedCandidate(now) &&
                 (safDocUri == null || !providerHoldsDocument(safTreeUri, relativePath))
-            ) claimVanishedDirectory(relativePath, now) else null
+            ) claimVanishedDirectory(relativePath, now, target) else null
         // The upload records follow the directory, and the claim is the only point that
         // can move them: it is the one place holding both names. The job carries only
         // the old base name, and a RENAME job can be superseded by a newer one, cleared
@@ -6265,16 +6301,15 @@ class SafSyncEngine(private val context: Context) {
             )
         }
 
-        // Taken whether or not the pair is made, so that nothing is kept for a directory that was claimed.
-        val droppedUnderOld = if (renamedFrom != null) takeDroppedSaves(File(rootDir, renamedFrom).absolutePath) else emptyList()
+        // The saves the write-back thread dropped for this directory are added by the rename's job when it
+        // runs, because that thread can still take one between here and there. A claim that is not paired
+        // has no such job, so nothing is kept for it.
+        if (renamedFrom != null && !pairedRename) takeClaimedDrops(target, File(rootDir, renamedFrom).absolutePath)
         val renamedSaves = if (pairedRename) {
             val prefix = File(rootDir, renamedFrom).absolutePath + File.separator
-            val queued = target.queue.filter {
+            target.queue.filter {
                 (it.type == SyncType.MODIFY || it.type == SyncType.CREATE) && it.localPath.startsWith(prefix)
-            }.map { it.localPath }
-            // The saves already taken stand in the same list: their files moved with the directory, and the
-            // replay writes whatever the mirror holds at the new path.
-            (queued + droppedUnderOld).map { relativePath + "/" + it.removePrefix(prefix) }.distinct()
+            }.map { relativePath + "/" + it.localPath.removePrefix(prefix) }.distinct()
         } else emptyList()
         target.queue.offer(
             SyncJob(
@@ -6423,28 +6458,41 @@ class SafSyncEngine(private val context: Context) {
     }
 
     /**
-     * Takes the vanished directory a MOVED_TO on [newRelativePath] may be the other half
-     * of, or null when none of them can be claimed. A claimed entry is consumed.
+     * Notes a save or a create dropped for a file that is not at its path, if a directory that left the
+     * mirror held it, or a rename has claimed that directory and its job has not run yet.
      */
-    /** Notes a save or a create dropped for a file that is not at its path, if a directory that left the mirror held it. */
-    private fun rememberDroppedSave(absolutePath: String) {
+    private fun rememberDroppedSave(session: WatchSession, absolutePath: String) {
         synchronized(vanishedLock) {
             for (entry in vanishedDirectories) {
                 if (absolutePath.startsWith(entry.localPath + File.separator)) {
                     droppedSaves.getOrPut(entry.localPath) { ArrayList() } += absolutePath
                 }
             }
+            for ((directory, saves) in session.claimedDrops) {
+                if (absolutePath.startsWith(directory + File.separator)) saves += absolutePath
+            }
         }
     }
 
-    /** The saves dropped for files under [directory], which leaves the record. */
-    private fun takeDroppedSaves(directory: String): List<String> =
-        synchronized(vanishedLock) { droppedSaves.remove(directory).orEmpty() }
+    /** The saves dropped for files under the claimed [directory], which leave the session. */
+    private fun takeClaimedDrops(session: WatchSession, directory: String): List<String> =
+        synchronized(vanishedLock) { session.claimedDrops.remove(directory).orEmpty() }
 
-    private fun claimVanishedDirectory(newRelativePath: String, now: Long): String? =
+    /**
+     * Takes the vanished directory a MOVED_TO on [newRelativePath] may be the other half
+     * of, or null when none of them can be claimed. A claimed entry is consumed, and the saves noted
+     * for it pass to [session] in the same step, so a save the write-back thread drops at any later
+     * moment is noted too.
+     */
+    private fun claimVanishedDirectory(newRelativePath: String, now: Long, session: WatchSession): String? =
         synchronized(vanishedLock) {
             val source = renameSourceFor(vanishedDirectories, newRelativePath, now)
-            if (source != null) vanishedDirectories.removeAll { it.relativePath == source }
+            if (source != null) {
+                for (entry in vanishedDirectories.filter { it.relativePath == source }) {
+                    session.claimedDrops.getOrPut(entry.localPath) { ArrayList() } += droppedSaves.remove(entry.localPath).orEmpty()
+                }
+                vanishedDirectories.removeAll { it.relativePath == source }
+            }
             source
         }
 
@@ -8021,6 +8069,14 @@ internal class WatchSession(
     val queue = ConcurrentLinkedQueue<SyncJob>()
     /** One-shot inode checks for directory names already followed after provider creation or rename. */
     val normalizedDirectories = ConcurrentHashMap<String, Pair<String, Any>>()
+
+    /**
+     * The saves and creates the write-back thread dropped for a file under a directory that a rename
+     * has claimed, by the directory's old absolute path, until the rename's job takes them. Guarded by
+     * the engine's vanished lock. Per session because the job that takes them runs on this session's
+     * thread, and what no job takes goes with the session.
+     */
+    val claimedDrops = HashMap<String, MutableList<String>>()
 
     /** Cleared by [SafSyncEngine.stopWatching]; the loop's own termination condition. */
     @Volatile var running = true
