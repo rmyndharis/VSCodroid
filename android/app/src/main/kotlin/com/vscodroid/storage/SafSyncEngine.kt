@@ -17,7 +17,9 @@ import java.io.InputStream
 import java.io.InterruptedIOException
 import java.io.OutputStream
 import java.io.PushbackInputStream
+import java.nio.ByteBuffer
 import java.nio.channels.Channels
+import java.nio.channels.SeekableByteChannel
 import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -132,6 +134,30 @@ class SafSyncEngine(private val context: Context) {
      */
     private val watchers = mutableMapOf<File, DirectoryObserver>()
     private val watchersLock = Any()
+
+    /** What each mirror's open recorded, kept until [startWatching] takes it; see [ChangesDuringOpen]. */
+    private val changesDuringOpen = ConcurrentHashMap<String, ChangesDuringOpen>()
+
+    /** The recording [startWatching] is taking over, read by [watchTree] under [lifecycleLock]. */
+    private var handingOver: ChangesDuringOpen? = null
+
+    /**
+     * How one directory is watched, by the watcher ([DirectoryObserver]) and while an open
+     * fills the mirror ([ChangesDuringOpen]). A `var` so a JVM test, where no [FileObserver]
+     * can be built, can stand in for it.
+     */
+    internal var directoryWatchFactory: (dir: File, deliver: (event: Int, name: String?) -> Unit) -> OpenWatch =
+        { dir, deliver ->
+            object : FileObserver(
+                dir,
+                FileObserver.MODIFY or FileObserver.CREATE or FileObserver.DELETE or
+                    FileObserver.MOVED_FROM or FileObserver.MOVED_TO,
+            ), OpenWatch {
+                override fun onEvent(event: Int, path: String?) = deliver(event, path)
+                override fun start() = this.startWatching()
+                override fun stop() = this.stopWatching()
+            }
+        }
 
     /**
      * Cache: relativePath → document ID. Built during [initialSync] and used for
@@ -258,7 +284,7 @@ class SafSyncEngine(private val context: Context) {
      * save asks for it without waiting, and a write waiting for the turn is handed it the moment
      * it is freed and asks for the claim next: a claim given back after the turn was found still
      * held in that gap, and the save that had only waited was held back instead of sent. A
-     * delete and a create take and give back their claim inside the turn, which is the same.
+     * delete and a create take theirs before the turn too, and give it back the same way.
      */
     private fun <T> withCurrent(access: OutboundAccess?, giveBack: (() -> Unit)? = null, action: () -> T): T? =
         if (access == null) action() else access.run(giveBack, action)
@@ -430,6 +456,18 @@ class SafSyncEngine(private val context: Context) {
         safUri: Uri,
         mirrorDir: File,
         onProgress: (Int, Int) -> Unit
+    ) = initialSync(safUri, mirrorDir, recordChanges = false, onProgress = onProgress)
+
+    /**
+     * [initialSync], and with [recordChanges] what the person changes in the mirror while it
+     * runs, kept for [startWatching] to send; see [ChangesDuringOpen]. Only the folder open
+     * the editor waits on asks for it ([SafStorageManager.syncToLocal]).
+     */
+    suspend fun initialSync(
+        safUri: Uri,
+        mirrorDir: File,
+        recordChanges: Boolean,
+        onProgress: (Int, Int) -> Unit,
     ) = withContext(Dispatchers.IO) {
         val access = mirrorAccess.computeIfAbsent(mirrorDir.absolutePath) { MirrorAccess() }
         if (access.lock.isHeldByCurrentThread || !access.lock.tryLock()) {
@@ -442,6 +480,7 @@ class SafSyncEngine(private val context: Context) {
         }
         val preserved = mutableListOf<File>()
         val localPreserved = mutableListOf<File>()
+        var changes: ChangesDuringOpen? = null
         try {
             preservedDuringSync.set(preserved)
             localPreservedDuringSync.set(localPreserved)
@@ -450,7 +489,21 @@ class SafSyncEngine(private val context: Context) {
                 access.generation = Any()
                 mirrorGenerations[mirrorDir.absolutePath] = access.generation
             }
-            initialSyncHoldingMirror(safUri, mirrorDir, onProgress)
+            dropChangesDuringOpen()
+            // Kept where a stop or a shutdown arriving during the open finds it and ends its watches.
+            if (recordChanges) changes = watchChangesDuringOpen(mirrorDir).also { recording ->
+                synchronized(lifecycleLock) {
+                    if (shutDown) recording.close() else changesDuringOpen[mirrorDir.absolutePath] = recording
+                }
+            }
+            initialSyncHoldingMirror(safUri, mirrorDir, onProgress, changes)
+        } catch (failure: Throwable) {
+            // A folder that did not open gets no watcher, so nothing would send what was recorded.
+            changes?.let {
+                changesDuringOpen.remove(mirrorDir.absolutePath, it)
+                it.close()
+            }
+            throw failure
         } finally {
             preservedDuringSync.remove()
             localPreservedDuringSync.remove()
@@ -465,6 +518,7 @@ class SafSyncEngine(private val context: Context) {
         safUri: Uri,
         mirrorDir: File,
         onProgress: (Int, Int) -> Unit,
+        changes: ChangesDuringOpen? = null,
     ) {
         reclaimInboundScratch()
         // By mirror name rather than by tree URI: the URI spells the user's own
@@ -654,6 +708,24 @@ class SafSyncEngine(private val context: Context) {
         // Phase 2: Create directories and copy files
         for (doc in documents) {
             val localPath = File(mirrorDir, doc.relativePath)
+
+            // Deleted or moved away while this open ran, before it reached the path: fetched
+            // back, it undid the person's deletion, and [startWatching] now sends that
+            // deletion instead. Asked first, because what this loop sets aside itself raises
+            // the same events for the path it is on. The document is left as the device
+            // holds it, unread, with no stamp, as a copy an open could not place: only its
+            // bytes may let the delete through, compared by [keepsDeviceDocument] with the
+            // previous record's digest, and with none the device keeps it and says so.
+            if (changes != null && !localPath.exists() && !isLink(localPath) && changes.removed(localPath)) {
+                if (!doc.isDirectory) {
+                    val line = previousLineFor?.get(escapeRecordPath(doc.relativePath))
+                    val length = line?.split('\t')?.getOrNull(2)?.toLongOrNull() ?: 0
+                    deviceSeen[localPath.absolutePath] = DeviceState(null, line?.let { previousRecord?.get(it) }, length)
+                    filesDone++
+                    onProgress(filesDone, totalFiles)
+                }
+                continue
+            }
 
             // The DIRECTORY the copy will work in, not the entry itself, and the
             // difference is what keeps this from refusing a case that is already safe:
@@ -966,21 +1038,21 @@ class SafSyncEngine(private val context: Context) {
                             // the last sync, so a device document that no longer matches it
                             // was written since by something other than this app's sync,
                             // and the write below opens it with "wt". What wrote it is not
-                            // knowable from here: another app is the case that matters,
-                            // and this app's own delivered write-back is the common one,
-                            // since the record never learns the time that write left
-                            // behind. [setAsideDeviceCopy] tells the two apart by bytes
-                            // and keeps a copy only where they differ. The mirror-side
-                            // guard for the symmetric case already exists
+                            // knowable from the time alone: another app is the case that
+                            // matters, and this app's own delivered write-back is the common
+                            // one, since the record never learns the time that write left
+                            // behind. Its line carries the digest of the delivered bytes,
+                            // which [deviceChangedSinceRecord] compares wherever the sizes
+                            // agree, so such a file costs that read and no copy. The
+                            // mirror-side guard for the symmetric case already exists
                             // ([setAsideDivergedMirror]); this is the same guard facing
-                            // the other way, and the one provider read it costs is paid
-                            // wherever the record cannot vouch for the path: where it
-                            // shows the device moved, and where it says nothing at all.
-                            // Silence is the arm below's own leavings, so a file written
-                            // back once pays that read on every open after it, and a
-                            // second mirror edit before the next open fetches this app's
-                            // own older bytes, which differ, and keeps them beside the
-                            // file. That is the known false positive [setAsideDivergedMirror]
+                            // the other way, and the copy it fetches is paid wherever the
+                            // record cannot vouch for the path: where its bytes show the
+                            // device moved, and where it says nothing at all, which a line
+                            // with no digest, as builds up to 1.9.0 wrote, also is. There a
+                            // second mirror edit before the next open fetches this app's own
+                            // older bytes, which differ, and keeps them beside the file.
+                            // That is the known false positive [setAsideDivergedMirror]
                             // already names for the two other producers of silence.
                             //
                             // A copy that fails leaves both sides as they are: the mirror
@@ -1829,11 +1901,18 @@ class SafSyncEngine(private val context: Context) {
      *
      * The record's line for a path carries the mirror copy's modification time, and
      * [copyDocumentToLocal] stamps that copy with the provider's own time, so for a copy
-     * that landed the line holds the device time as of the last sync. A device document
-     * reporting any other time has been written since by something other than this
-     * app's own sync. The one false positive is a filesystem that cannot hold the stamp
-     * exactly, which `filesDir` never is; it would cost a spare `.device-` copy per
-     * reopen, not a byte.
+     * that landed the line holds the device time as of the last sync. A save the watcher
+     * delivered is recorded with the mirror copy's time instead, which the provider's stamp
+     * on that write never equals, so where the device reports a size that agrees with the
+     * line and the line carries the digest of the bytes delivered or fetched, the bytes
+     * decide and the time is not asked. Read by time, the next open took this app's own
+     * delivered save for another app's edit whenever the mirror had been edited again
+     * since, and kept it beside the file as a `.device-` copy with a notice. A line with no
+     * digest, as builds up to 1.9.0 wrote, or a provider that reports no size, still goes
+     * by the time: a device document reporting any other time has been written since by
+     * something other than this app's own sync. The one false positive there is a
+     * filesystem that cannot hold the stamp exactly, which `filesDir` never is; it would
+     * cost a spare `.device-` copy per reopen, not a byte.
      *
      * A record that parses but does not name the path answers **true**, and so does a
      * line whose time field will not parse. Silence here is not evidence that the device
@@ -1865,8 +1944,12 @@ class SafSyncEngine(private val context: Context) {
         val parts = line.split('\t')
         val recordedModified = parts.getOrNull(1)?.toLongOrNull() ?: return true
         val recordedSize = parts.getOrNull(2)?.toLongOrNull() ?: return true
-        if (recordedModified != doc.lastModified || (doc.size > 0 && recordedSize != doc.size)) return true
+        if (doc.size > 0 && recordedSize != doc.size) return true
         val digest = recorded[line] ?: return true
+        // A known size that agrees lets the digest decide whatever the time says: a save the
+        // watcher delivered records the mirror copy's time, and the provider stamps the write
+        // with its own, so the two never agree after one.
+        if (doc.size <= 0 && recordedModified != doc.lastModified) return true
         return !digest.contentEquals(deviceSha256(doc.uri, recordedSize))
     }
 
@@ -2859,6 +2942,31 @@ class SafSyncEngine(private val context: Context) {
     }
 
     /**
+     * Moves the record's rows under the mirror path [old] to [new], as a directory rename that
+     * landed on the device moved the files they name. Left under the old name, a save the
+     * watcher had delivered lost the row that vouches for it, and the next open took the
+     * device copy for another app's edit and kept it beside the file as a `.device-` copy.
+     * A row already standing under the new name describes a file that is no longer there.
+     */
+    private fun renameRecordRowsUnder(old: String, new: String) {
+        val root = mirrorGenerations.keys.firstOrNull { old.startsWith(it + File.separator) } ?: return
+        if (!new.startsWith(root + File.separator)) return
+        val from = escapeRecordPath(old.removePrefix(root + File.separator))
+        val to = escapeRecordPath(new.removePrefix(root + File.separator))
+        fun under(line: String, path: String) =
+            line.substringBefore('\t').let { it == path || it.startsWith("$path/") }
+        val record = File(root + SYNCED_RECORD_SUFFIX)
+        val lines = readSyncedRecord(record)
+        if (lines.firstOrNull() != RECORD_HEADER) return
+        val rows = lines.drop(1)
+        if (rows.none { under(it, from) }) return
+        writeSyncedRecord(
+            record,
+            rows.filterNot { under(it, to) }.map { if (under(it, from)) to + it.removePrefix(from) else it },
+        )
+    }
+
+    /**
      * Appends [path]'s identity as it stands on disk, or nothing when there is no file
      * there.
      *
@@ -3035,6 +3143,13 @@ class SafSyncEngine(private val context: Context) {
      * Starts watching the mirror directory for changes and syncing them back to SAF.
      * Must be called after [initialSync] completes.
      *
+     * What the open recorded the person doing meanwhile ([ChangesDuringOpen]) is handed
+     * over directory by directory: this watcher's watch of each starts first, and from
+     * then on the kernel reports to it alone, so each event reaches one of the two; see
+     * [ChangesDuringOpen.handOver]. A folder the open made itself had no watch until this
+     * one. The record is then sent by the write-back thread before anything else, through
+     * the same guards as an event this watcher sees; see [replayChangesDuringOpen].
+     *
      * A no-op once [shutdown] has run; see [shutDown] for why that is a refusal rather
      * than a start that happens to be late.
      */
@@ -3048,18 +3163,28 @@ class SafSyncEngine(private val context: Context) {
                 )
                 return
             }
+            // Taken before the stop, which drops what no watcher is about to take.
+            val changes = takeChangesDuringOpen(mirrorDir)
             stopWatching()
 
             // Published before any observer exists so each captures its owning session.
             val opening = WatchSession(mirrorDir, mirrorGenerations[mirrorDir.absolutePath])
             session = opening
             isWatching = true
-            watchTree(mirrorDir, mirrorDir, safUri, opening)
+            handingOver = changes
+            try {
+                watchTree(mirrorDir, mirrorDir, safUri, opening)
+            } finally {
+                handingOver = null
+                changes?.close()
+            }
 
             // Background thread to process this session's write-back queue. Handed over
             // before it starts, so a stop arriving at once cannot find a null worker for a
-            // thread that is already running.
+            // thread that is already running. What the open recorded goes first, off this
+            // lock, because turning it into jobs asks the provider.
             val worker = thread(start = false, name = "saf-writeback", isDaemon = true) {
+                changes?.let { replayChangesDuringOpen(it, mirrorDir, safUri, opening) }
                 runWriteBackLoop(opening) { opening.running }
             }
             opening.worker = worker
@@ -3144,6 +3269,7 @@ class SafSyncEngine(private val context: Context) {
     fun stopWatching() {
         synchronized(lifecycleLock) {
             isWatching = false
+            dropChangesDuringOpen()
             synchronized(watchersLock) {
                 watchers.values.forEach { it.stopWatching() }
                 watchers.clear()
@@ -3270,8 +3396,13 @@ class SafSyncEngine(private val context: Context) {
                     started += observer
                 }
             }
-            // Teardown must see every observer that reaches the kernel.
-            started.forEach { it.startWatching() }
+            // Teardown must see every observer that reaches the kernel. An open's watch on
+            // the same directory is handed over only once this one has started, and is not
+            // stopped there; see [ChangesDuringOpen.handOver].
+            started.forEach {
+                it.startWatching()
+                it.adopted = handingOver?.handOver(it.dir)
+            }
         }
 
         if (atLimit || targets.size >= room) {
@@ -3746,7 +3877,8 @@ class SafSyncEngine(private val context: Context) {
      * Copies a single SAF document to a local file.
      *
      * @return the installed [LandedCopy], or why no copy was installed. A writer observed
-     *   during the read remains [FailedCopy.IN_FLIGHT] even if it finishes before the
+     *   during the read, or a save that changed the file as the copy went into place (see
+     *   [installFetched]), remains [FailedCopy.IN_FLIGHT] even if it finishes before the
      *   caller handles the result. Other failures answer [FailedCopy.UNAVAILABLE]. The
      *   destination can still hold a local edit, or its preserved copy can be beside it
      *   if installation failed after preservation. The landed identity is taken before
@@ -3873,9 +4005,10 @@ class SafSyncEngine(private val context: Context) {
                 } else if (afterCallback == null || !currentEntry.matches(afterCallback)) {
                     throw IOException("The destination changed before installation")
                 }
-                // Observation and rename are not atomic against external filesystem writers.
-                fetched.parent.move(fetched.name, target.parent, target.leaf)
-                fetched.moved = true
+                if (!installFetched(fetched, target, dest, afterCallback)) {
+                    Logger.w(tag, "Not putting the copy of ${dest.name} in place: a save changed it meanwhile")
+                    return@withCurrent FailedCopy.IN_FLIGHT
+                }
                 installed = true
                 onCopied(target, staged)
                 landed
@@ -3910,6 +4043,100 @@ class SafSyncEngine(private val context: Context) {
             }
             partial?.close()
             destination?.let { runCatching { it.close() } }
+        }
+    }
+
+    /**
+     * Puts the [fetched] copy at [target]'s name, where [replacing] stands and was judged
+     * replaceable, or which was free when [replacing] is null. False when the file at the name
+     * is no longer the one judged as the copy goes in: that is a save, and it is kept where it
+     * is with the copy dropped, and the caller answers [FailedCopy.IN_FLIGHT].
+     *
+     * A rename replaces whatever stands at its destination, and the look that judged [replacing]
+     * comes before it, so an editor's save into the file in between was replaced by the device's
+     * older copy, with no copy of it anywhere. So the file at the name is opened for reading
+     * first, and what that descriptor holds is checked to be the judged copy, and checked again
+     * once the copy has been renamed over the name: the replaced file lives on through the
+     * descriptor, so a save written into it in between is still there to read, and goes to
+     * `<name>.local-<time>` beside the file, the name every kept copy of the app's own work
+     * gets, with the same notice ([keepHeldSave]). The checks compare the digest of the
+     * descriptor's bytes up to [keptCopyDigestBytes], and past it the length alone, which an
+     * in-place save of the same length passes. No process is started: a move helper per
+     * replaced file, measured at about 65 ms a process on an API 36 emulator, made a reopen with
+     * 200 changed files take 30 s, to close a moment of microseconds.
+     *
+     * What this cannot see is a save made after that second check, and one made by renaming a
+     * finished file over the name between the last look and the rename, which the rename then
+     * replaces; Linux has no rename that refuses to replace what it was not shown. A free name
+     * is renamed onto after the caller's look, so a file a program makes at that name in the
+     * same moment is replaced too.
+     */
+    private fun installFetched(fetched: InboundStage, target: OutboundPath, dest: File, replacing: InboundEntry?): Boolean {
+        if (replacing == null || !replacing.attributes.isRegularFile) {
+            fetched.parent.move(fetched.name, target.parent, target.leaf)
+            fetched.moved = true
+            return true
+        }
+        target.parent.newByteChannel(
+            target.leaf, setOf<OpenOption>(StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS),
+        ).use { held ->
+            if (!sameInboundAttributes(replacing.attributes, target.attributes()) || !holdsJudged(held, replacing)) {
+                return false
+            }
+            // One last look by name, which narrows the moment a save renamed over the name has.
+            if (!sameInboundAttributes(replacing.attributes, target.attributes())) return false
+            replaceName(dest) { fetched.parent.move(fetched.name, target.parent, target.leaf) }
+            fetched.moved = true
+            if (!holdsJudged(held, replacing)) keepHeldSave(held, target, dest)
+        }
+        return true
+    }
+
+    /**
+     * How the fetched copy is renamed over the file at [dest], which [installFetched] has
+     * judged; a `var` so the suite can put a save in the moment before the rename.
+     */
+    internal var replaceName: (dest: File, rename: () -> Unit) -> Unit = { _, rename -> rename() }
+
+    /** Whether [held] still carries the bytes of [judged]: its digest, or past the digest budget its length. */
+    private fun holdsJudged(held: SeekableByteChannel, judged: InboundEntry): Boolean {
+        val length = judged.attributes.size()
+        if (held.size() != length) return false
+        if (length > keptCopyDigestBytes) return true
+        val digest = sha256(Channels.newInputStream(held.position(0)), length) ?: return false
+        return digest.second == length && judged.digest?.contentEquals(digest.first) == true
+    }
+
+    /**
+     * Writes the save [held] carries, made into a file a newer device copy has just replaced, to
+     * `<name>.local-<time>` beside it, made only where that name is free, and says so as every
+     * kept copy of the app's own work is said.
+     */
+    private fun keepHeldSave(held: SeekableByteChannel, target: OutboundPath, dest: File) {
+        var time = System.currentTimeMillis()
+        while (true) {
+            val kept = target.sibling(localCopyName(dest.name, time))
+            val out = try {
+                target.parent.newByteChannel(
+                    kept,
+                    setOf<OpenOption>(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS),
+                )
+            } catch (_: FileAlreadyExistsException) {
+                time++
+                continue
+            }
+            out.use {
+                val buffer = ByteBuffer.allocate(COPY_BUFFER_SIZE)
+                held.position(0)
+                while (held.read(buffer) >= 0) {
+                    buffer.flip()
+                    while (buffer.hasRemaining()) it.write(buffer)
+                    buffer.clear()
+                }
+            }
+            notePreservedLocalCopy(File(dest.parentFile, kept.toString()))
+            Logger.w(tag, "Kept a save made into ${dest.name} as the device's copy replaced it, as $kept")
+            return
         }
     }
 
@@ -4480,6 +4707,19 @@ class SafSyncEngine(private val context: Context) {
     internal var onDeleteRefused: (File) -> Unit = {}
 
     /**
+     * Told when a deletion the editor made did not reach the device folder because another
+     * write to the same provider still held it after [providerClaimWaitMs]: a closing
+     * folder's save, or a second drain of this one.
+     *
+     * Its own seam rather than [onDeleteRefused], whose sentence says the device folder
+     * refused and sends the person to delete the file in their file manager. Nothing
+     * refused here, and the file comes back at the next open, where deleting it again
+     * works. Not retried: the delete has to name the document it resolved when the event
+     * arrived, and a later lookup by path finds whatever stands there by then.
+     */
+    internal var onDeleteBusy: (File) -> Unit = {}
+
+    /**
      * Told when mirror copies or conflicting local entries are set aside under `.local-`
      * because the device folder held a newer copy or incompatible kind: once per batch after
      * [initialSync] finishes, or once per live copy outside a sync.
@@ -4626,6 +4866,16 @@ class SafSyncEngine(private val context: Context) {
                 "copy it back into the editor",
         )
         onDeleteRefused(localFile)
+    }
+
+    /** Says that a deletion did not reach the device folder because the provider was busy. */
+    private fun announceDeleteBusy(localFile: File) {
+        Logger.w(
+            tag,
+            "Did not delete ${localFile.name} from the device folder: another write to the " +
+                "same storage still held it; the next open will copy it back into the editor",
+        )
+        onDeleteBusy(localFile)
     }
 
     private fun uploadJournal(): File = File(context.filesDir, UPLOADS_IN_FLIGHT_FILE)
@@ -4826,19 +5076,20 @@ class SafSyncEngine(private val context: Context) {
     }
 
     /**
-     * Moves the provider's unread markers, fetched exceptions, retained deletes and
-     * version baselines only after its directory relocation lands. Older queued deletes
-     * still need the old paths until then. Failed and superseded renames keep them there.
-     * Held saves end because their captured document URIs may no longer be valid; what they
-     * were waiting to send is not lost with them: the rename's job takes the holds under the
-     * old name before it calls this and sends them at the new one ([processWriteBack]), and a
-     * directory made under the name the device stored has its children sent right after
-     * ([createInSaf]).
+     * Moves the provider's unread markers, fetched exceptions, retained deletes, version
+     * baselines and the record's rows only after its directory relocation lands. Older
+     * queued deletes still need the old paths until then. Failed and superseded renames
+     * keep them there. Held saves end because their captured document URIs may no longer be
+     * valid; what they were waiting to send is not lost with them: the rename's job takes the
+     * holds under the old name before it calls this and sends them at the new one
+     * ([processWriteBack]), and a directory made under the name the device stored has its
+     * children sent right after ([createInSaf]).
      */
     private fun renameDeviceMemoryUnder(from: File, to: File) {
         val old = from.absolutePath
         val new = to.absolutePath
         if (old == new) return
+        renameRecordRowsUnder(old, new)
         fun movedTo(path: String): String? = when {
             path == old -> new
             path.startsWith(old + File.separator) -> new + path.removePrefix(old)
@@ -5059,16 +5310,23 @@ class SafSyncEngine(private val context: Context) {
         localFile: File, parentSafUri: Uri, treeUri: Uri, mirrorRoot: File,
         access: OutboundAccess? = null, mutation: ProviderMutation? = null,
     ): CreatedDocument? {
-        if (access != null) {
-            return withCurrent(access) { createOneInSaf(localFile, parentSafUri, treeUri, mirrorRoot, mutation = mutation) }
-        }
+        // The claim before the turn, given back inside it, as every other mutation takes
+        // them; see [withCurrent]. A claim that was handed in is the caller's to give back.
         if (mutation == null) {
+            // A stale drain is let go before it waits for a claim it would never use.
+            if (access != null && withCurrent(access) { true } == null) return null
             val owned = claimProviderMutationWithin(parentSafUri, providerClaimWaitMs) ?: return null
             try {
-                return createOneInSaf(localFile, parentSafUri, treeUri, mirrorRoot, mutation = owned)
+                return if (access == null) createOneInSaf(localFile, parentSafUri, treeUri, mirrorRoot, mutation = owned)
+                else withCurrent(access, { releaseProviderMutation(owned) }) {
+                    createOneInSaf(localFile, parentSafUri, treeUri, mirrorRoot, mutation = owned)
+                }
             } finally {
                 releaseProviderMutation(owned)
             }
+        }
+        if (access != null) {
+            return withCurrent(access) { createOneInSaf(localFile, parentSafUri, treeUri, mirrorRoot, mutation = mutation) }
         }
         if (!ownsProviderMutation(parentSafUri, mutation)) return null
         var file = localFile
@@ -5702,13 +5960,19 @@ class SafSyncEngine(private val context: Context) {
                         job.safTreeUri != null &&
                             providerHolds(job.safTreeUri, job.relativePath) != false
                     else -> {
-                        val handled = withCurrent(access) {
-                            val mutation = claimProviderMutationWithin(job.safDocUri, providerClaimWaitMs)
-                            if (mutation == null) {
-                                busyRefusal = true
-                                return@withCurrent false
-                            }
-                            try {
+                        // The claim before the turn and given back inside it, as a save and a
+                        // rename take theirs; see [withCurrent]. Taken inside the turn, a delete
+                        // held the mirror for the whole claim wait while a save of the same
+                        // mirror held the claim and waited for that turn, which two drains of
+                        // one mirror do after a busy reopen. A stale drain is let go first, so
+                        // it does not wait for a claim it would never use.
+                        val mutation = if (withCurrent(access) { true } == null) null
+                            else claimProviderMutationWithin(job.safDocUri, providerClaimWaitMs)
+                                .also { if (it == null) busyRefusal = true }
+                        val handled = if (mutation == null) {
+                            if (busyRefusal) false else null
+                        } else try {
+                            withCurrent(access, { releaseProviderMutation(mutation) }) {
                                 val current = File(job.localPath)
                                 val currentKind = when {
                                     current.isDirectory -> true
@@ -5722,9 +5986,9 @@ class SafSyncEngine(private val context: Context) {
                                     providerHolds(job.safTreeUri, job.relativePath) == false
                                 replacedLocally || alreadyGone || keepsDeviceDocument(job, job.safDocUri, access) ||
                                     deleteFromSaf(job.safDocUri)
-                            } finally {
-                                releaseProviderMutation(mutation)
                             }
+                        } finally {
+                            releaseProviderMutation(mutation)
                         }
                         if (handled == null) {
                             keepUnread(File(job.localPath), job.relativePath, job.isDirectory, changed = true)
@@ -5733,7 +5997,9 @@ class SafSyncEngine(private val context: Context) {
                     }
                 }
                 if (replacedLocally) return
-                if (refused) {
+                if (busyRefusal) {
+                    announceDeleteBusy(File(job.localPath))
+                } else if (refused) {
                     announceDeleteRefused(File(job.localPath))
                 }
                 // Both cleanups below run whatever the device folder decided.
@@ -6020,6 +6286,157 @@ class SafSyncEngine(private val context: Context) {
         createInSaf(localFile, parentUri, treeUri, mirrorRoot, access)
     }
 
+    // -- Changes during an open --
+
+    /**
+     * What the person changed in a mirror while an open was filling it, recorded by a watch of
+     * its own because the watcher is stopped for the open: left running, it read every copy the
+     * open put in place as a save and sent it straight back.
+     *
+     * Nothing used to watch in that window. A file deleted or moved away before the open reached
+     * it was fetched back, so the deletion was undone, and one saved after the open had passed it
+     * stayed in the app until its next save or the next open. Now a deletion keeps phase 2 off the
+     * path ([removed]), and [startWatching] hands what was recorded to the write-back thread
+     * ([replayChangesDuringOpen]), which sends it through the same guards as any change.
+     *
+     * The open's own moves, set-asides and removals raise the same events and are told apart by
+     * what is on disk once it has finished, not by marking each of them, since the kernel
+     * reports them after the fact. Only the directories that existed when the open began are
+     * watched, as many as the watcher itself would take; one the open makes is new from the
+     * device, and what is done inside it before the watcher starts is seen at the next open.
+     */
+    internal class ChangesDuringOpen {
+        private val watches = LinkedHashMap<String, OpenWatch>()
+        private val events = ConcurrentLinkedQueue<Pair<Int, File>>()
+        private val removedPaths = ConcurrentHashMap.newKeySet<String>()
+        private val removedDirectories = ConcurrentHashMap.newKeySet<String>()
+
+        fun watch(dir: File, watch: OpenWatch) = synchronized(watches) { watches[dir.absolutePath] = watch }
+
+        /** One inotify [event] on [file], in the order the kernel reported it. */
+        fun record(event: Int, file: File) {
+            events.add(event to file)
+            val type = event and FileObserver.ALL_EVENTS
+            if (type == FileObserver.DELETE || type == FileObserver.MOVED_FROM) {
+                removedPaths.add(file.absolutePath)
+                if ((event and IN_ISDIR) != 0) removedDirectories.add(file.absolutePath)
+            }
+        }
+
+        /** Whether [file] was deleted or moved away while the open ran, itself or with a folder above it. */
+        fun removed(file: File): Boolean {
+            val path = file.absolutePath
+            return path in removedPaths || removedDirectories.any { path.startsWith(it + File.separator) }
+        }
+
+        /**
+         * Hands the watch of [dir] to the watcher that has just started its own, without
+         * stopping it. Two observers of one directory share one inotify watch, and the one
+         * started last is the one the kernel's events go to, so from that start each event
+         * reaches one of the two and none falls between them. Stopping this one then would
+         * remove the shared watch and leave the watcher deaf; it is stopped with the
+         * watcher's own instead ([DirectoryObserver.stopWatching]).
+         */
+        fun handOver(dir: File): OpenWatch? = synchronized(watches) { watches.remove(dir.absolutePath) }
+
+        /** Stops every watch left. What was recorded stays to be read. */
+        fun close() {
+            val left = synchronized(watches) { watches.values.toList().also { watches.clear() } }
+            left.forEach { runCatching { it.stop() } }
+        }
+
+        fun recorded(): List<Pair<Int, File>> = events.toList()
+    }
+
+    /**
+     * Watches every directory of [mirrorDir] the watcher would, for the open about to run.
+     * Best effort: a directory that cannot be watched leaves the rest of the open as it was
+     * before anything was recorded, which is what it was on every build before this one.
+     */
+    private fun watchChangesDuringOpen(mirrorDir: File): ChangesDuringOpen {
+        val changes = ChangesDuringOpen()
+        try {
+            for (dir in watchableDirectories(mirrorDir, MAX_WATCHED_DIRECTORIES)) {
+                val watch = directoryWatchFactory(dir) { event, name -> if (name != null) changes.record(event, File(dir, name)) }
+                changes.watch(dir, watch)
+                watch.start()
+            }
+        } catch (e: Exception) {
+            Logger.w(tag, "Not recording changes to ${mirrorDir.name} while it opens: ${e.javaClass.simpleName}")
+        }
+        return changes
+    }
+
+    /** What [mirrorDir]'s open recorded, for [startWatching] to send; nothing once taken. */
+    internal fun takeChangesDuringOpen(mirrorDir: File): ChangesDuringOpen? = changesDuringOpen.remove(mirrorDir.absolutePath)
+
+    private fun dropChangesDuringOpen() {
+        changesDuringOpen.keys.toList().forEach { changesDuringOpen.remove(it)?.close() }
+    }
+
+    /**
+     * What the person changed while [mirrorDir] opened, turned into the events this watcher
+     * would have seen, in the order they happened, so a folder renamed and named again is
+     * still one rename.
+     *
+     * The open's own work raises events too, and what is on disk once it has finished tells
+     * them apart from the person's:
+     * - a delete or a move away stands only where nothing is at the path now and the device
+     *   held a document there; the open sets a copy aside and puts another in its place, and
+     *   removes only what the device no longer holds;
+     * - a file made or saved stands only where its copy is not the one the open's record
+     *   vouches for, which is every copy the open put in place, kept, or sent itself, and
+     *   only its last event, as one save sends everything;
+     * - a folder made stands only where the device holds none, which leaves out every folder
+     *   the open made for the device's own.
+     *
+     * A file is sent as a save whatever made it, so [keepsDeviceEdit] still asks about the
+     * device's copy, and a delete goes through [keepsDeviceDocument] as any other.
+     */
+    internal fun replayChangesDuringOpen(
+        changes: ChangesDuringOpen,
+        mirrorDir: File,
+        safUri: Uri,
+        owner: WatchSession = session,
+    ) {
+        changes.close()
+        val events = changes.recorded()
+        if (events.isEmpty()) return
+        // The rows with a digest, which every copy the open put in place, kept with its bytes
+        // read, or sent itself carries; a row without one only names a file the open could
+        // not place. Null where the record cannot be read: then nothing tells the open's own
+        // copies from the person's saves, and sending them all would write every file back.
+        val vouched: Set<String>? by lazy {
+            readSyncedRecord(File(mirrorDir.path + SYNCED_RECORD_SUFFIX)).let { lines ->
+                if (lines.firstOrNull() != RECORD_HEADER) null
+                else lines.drop(1).map { splitRecordLine(it) }.filter { it.second != null }.mapTo(HashSet()) { it.first }
+            }
+        }
+        val type = { event: Int -> event and FileObserver.ALL_EVENTS }
+        val removal = { event: Int -> type(event) == FileObserver.DELETE || type(event) == FileObserver.MOVED_FROM }
+        val lastWrite = HashMap<String, Int>()
+        events.forEachIndexed { i, (event, file) ->
+            if ((event and IN_ISDIR) == 0 && !removal(event)) lastWrite[file.absolutePath] = i
+        }
+        events.forEachIndexed { i, (event, file) ->
+            val relative = file.toRelativeString(mirrorDir)
+            val onDevice = { cachedDocId(safUri, relative) != null }
+            val replay = when {
+                removal(event) -> when {
+                    file.exists() || isLink(file) || !onDevice() -> null
+                    (event and IN_ISDIR) != 0 -> event
+                    else -> FileObserver.DELETE
+                }
+                (event and IN_ISDIR) != 0 ->
+                    event.takeIf { type(it) != FileObserver.MODIFY && file.isDirectory && !onDevice() }
+                lastWrite[file.absolutePath] != i -> null
+                file.isFile && !isLink(file) && vouched?.contains(identityLine(relative, file)) == false -> FileObserver.MODIFY
+                else -> null
+            }
+            if (replay != null) handleMirrorEvent(replay, file, mirrorDir, safUri, owner)
+        }
+    }
+
     // -- FileObserver --
 
     /**
@@ -6031,14 +6448,24 @@ class SafSyncEngine(private val context: Context) {
      * per directory, because a watch descriptor covers a directory and not a tree.
      */
     private inner class DirectoryObserver(
-        private val dir: File,
+        val dir: File,
         private val rootDir: File,
         private val safTreeUri: Uri,
         private val owner: WatchSession,
-    ) : FileObserver(dir, MODIFY or CREATE or DELETE or MOVED_FROM or MOVED_TO) {
-        override fun onEvent(event: Int, path: String?) {
-            if (path == null || !isWatching) return
-            handleMirrorEvent(event, File(dir, path), rootDir, safTreeUri, owner)
+    ) {
+        private val watch = directoryWatchFactory(dir) { event, path ->
+            if (path != null && isWatching) handleMirrorEvent(event, File(dir, path), rootDir, safTreeUri, owner)
+        }
+
+        /** The open's watch of [dir], which shares this one's inotify watch; see [ChangesDuringOpen.handOver]. */
+        var adopted: OpenWatch? = null
+
+        fun startWatching() = watch.start()
+
+        fun stopWatching() {
+            watch.stop()
+            adopted?.let { runCatching { it.stop() } }
+            adopted = null
         }
     }
 
@@ -6744,10 +7171,12 @@ class SafSyncEngine(private val context: Context) {
         /**
          * The default for [providerClaimWaitMs]: ten seconds.
          *
-         * Far below [OUTBOUND_TURN_WAIT_MS] on purpose. A delete and the create inside a turn wait
-         * for the claim while holding their mirror's turn, and a save of the same mirror is waiting
-         * for that turn; the longer wait is the one that gives up on a stalled provider, and this one
-         * must not be the reason it does. A save and a rename take the claim before the turn.
+         * Far below [OUTBOUND_TURN_WAIT_MS] on purpose: the longer wait is the one that gives up on
+         * a stalled provider, and this one must not be the reason it does. A save, a rename, a
+         * delete and a create all take the claim before their mirror's turn, so nobody waits for
+         * it holding a turn that the claim's holder waits for. An open's own creates claim while
+         * the open holds the mirror, which cannot close a cycle: a write that meets a mirror being
+         * opened is refused at once instead of waiting for it.
          */
         internal const val PROVIDER_CLAIM_WAIT_MS = 10_000L
 
@@ -7965,6 +8394,12 @@ internal enum class DeviceCopyOutcome {
  * digested yet and this open's budget, [SafSyncEngine.KEPT_COPY_DIGEST_BYTES], did not
  * reach, until a write of this app lands there, and after a write that does not land.
  */
+/** One directory's watch while an open fills the mirror; see [SafSyncEngine.ChangesDuringOpen]. */
+internal interface OpenWatch {
+    fun start()
+    fun stop()
+}
+
 private class DeviceState(
     /**
      * Null where an open found the device holding bytes it could not place, or where a stamp

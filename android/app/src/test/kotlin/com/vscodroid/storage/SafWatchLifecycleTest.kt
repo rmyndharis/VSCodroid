@@ -234,6 +234,29 @@ class SafWatchLifecycleWiringTest {
         }
     }
 
+    /**
+     * What a person changes while a folder opens is recorded only where it is asked for, by the
+     * open the editor waits on, and sent only by the watcher that starts after it. Asked for
+     * nowhere, the deletion is fetched back and the late save waits again, and every engine test
+     * still passes, because none of them can build the watch.
+     */
+    @Test
+    fun `the folder open records what changes while it runs, and the watcher sends it`() {
+        val manager = SourceScan.withoutComments(SourceScan.read(managerFile))
+        val open = manager.substringAfter("suspend fun syncToLocal(").substringBefore("fun startFileWatcher(")
+        assertTrue(Regex("""initialSync\([^)]*recordChanges = true""").containsMatchIn(open)) {
+            "syncToLocal no longer asks its open to record what changes while it runs"
+        }
+
+        val start = body(engineFile, "fun startWatching(mirrorDir: File, safUri: Uri) {")
+        assertTrue(start.any { it.contains("takeChangesDuringOpen(mirrorDir)") }) {
+            "startWatching no longer takes what the open recorded"
+        }
+        assertTrue(start.any { it.contains("replayChangesDuringOpen(") }) {
+            "startWatching no longer sends what the open recorded"
+        }
+    }
+
     @Test
     fun `the manager's shutdown reaches the engine's, not its ordinary stop`() {
         val delegation = body(managerFile, "fun shutdownFileWatcher() {")

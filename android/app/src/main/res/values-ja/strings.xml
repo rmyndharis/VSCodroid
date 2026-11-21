@@ -265,6 +265,7 @@
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">%1$s はデバイスのフォルダーに残しました。中のファイルを、エディターが最後に読み込むか保存したあとに、他のアプリが変更した可能性があるためです。不要な場合は、デバイス側で削除してください。</string>
     <string name="saf_delete_refused">%1$s をデバイスのフォルダーから削除できませんでした。次にフォルダーを開いたときに再び表示されます。デバイスのファイル管理アプリで削除してください。</string>
+    <string name="saf_delete_busy">%1$s はデバイスのフォルダーから削除されませんでした。同じストレージへの別の書き込みがまだ実行中だったためです。次にフォルダーを開いたときに再び表示されるので、そのときにもう一度削除してください。</string>
     <!-- Device and app edits kept beside their file instead of being overwritten -->
     <string name="saf_device_copy_preserved">端末の変更を横に保存: %1$s。</string>
     <plurals name="saf_device_copies_preserved">

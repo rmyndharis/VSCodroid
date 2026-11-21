@@ -615,6 +615,40 @@ class SafLiveDeviceEditTest {
         assertEquals(listOf(listOf("notes.txt.device-$editedAt")), preservedNotices.map { batch -> batch.map { it.name } })
     }
 
+    /**
+     * A save the watcher delivered is recorded with the mirror copy's time, and the provider
+     * stamps the write with a time of its own, so after a delivered save the two never agree. The
+     * next open read that disagreement as another app's edit: an edit made since and not yet sent
+     * had the device copy, which is this app's own earlier save, kept beside the file as a
+     * `.device-` copy and announced as a device edit. The record carries the delivered bytes'
+     * digest, and those are what decide.
+     */
+    @Test
+    fun `a reopen after a delivered save keeps no copy of that save when the mirror was edited since`() {
+        open()
+        save("delivered save")
+        File(mirror, "notes.txt").writeText("edited since, never sent")
+
+        open()
+
+        assertEquals(emptyMap<String, String>(), deviceCopies(), "this app's own delivered save was kept as a device edit")
+        assertTrue(preservedNotices.isEmpty(), "a device edit was announced that nobody made")
+        assertEquals("edited since, never sent", deviceText)
+    }
+
+    /** The same reopen after another app rewrote the delivered save at the same length: its bytes are kept. */
+    @Test
+    fun `a reopen still keeps another app's edit of a delivered save that has the same length`() {
+        open()
+        save("delivered save")
+        editOnDevice("DELIVERED SAVE")
+        File(mirror, "notes.txt").writeText("edited since, never sent")
+
+        open()
+
+        assertEquals(listOf("DELIVERED SAVE"), deviceCopies().values.toList(), "another app's edit was taken for this app's save")
+    }
+
     @Test
     fun `a sync that preserves two device edits reports one batch with both names`() {
         otherText = "original other"

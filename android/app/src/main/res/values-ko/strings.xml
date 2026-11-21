@@ -265,6 +265,7 @@
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">%1$s은(는) 기기 폴더에 남겨 두었습니다. 편집기가 그 안의 파일을 마지막으로 읽거나 저장한 뒤에 다른 앱이 그 파일을 변경했을 수 있기 때문입니다. 더 이상 필요하지 않으면 기기 폴더에서 삭제하세요.</string>
     <string name="saf_delete_refused">%1$s 을(를) 기기 폴더에서 삭제하지 못했습니다. 폴더를 다시 열면 해당 항목이 다시 나타납니다. 기기의 파일 관리자에서 삭제하세요.</string>
+    <string name="saf_delete_busy">같은 저장소에 대한 다른 쓰기 작업이 아직 진행 중이어서 %1$s 을(를) 기기 폴더에서 삭제하지 않았습니다. 폴더를 다시 열면 해당 항목이 다시 나타나니 그때 다시 삭제하세요.</string>
     <!-- Device and app edits kept beside their file instead of being overwritten -->
     <string name="saf_device_copy_preserved">기기 변경 사항을 옆에 보관: %1$s.</string>
     <plurals name="saf_device_copies_preserved">

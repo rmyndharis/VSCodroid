@@ -130,8 +130,10 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   folder you closed a moment ago and the one you opened next. While one is
   still saving, a save in the other is held back and retried on its own, and a
   delete, a new file or a rename there waits up to ten seconds for the first
-  folder to finish. If that folder is still writing after that, it is refused
-  with a notice; repeat it once the first folder has finished.
+  folder to finish. If that folder is still writing after that, it is not done
+  and a notice says so: repeat a new file or a rename once the first folder has
+  finished, and delete a deleted file again after the next open of the folder,
+  which brings it back.
 - A file of a device folder that you delete in the editor is deleted in the
   device folder too, unless the device folder's version is one VSCodroid has not
   read: another app may have changed it since you opened the folder or last
@@ -1724,7 +1726,11 @@ VS Code's web client runs as a single window. You cannot open multiple VS Code w
 
 ### A Program Changes a Device Folder While It Opens
 
-While a device folder is opening, VSCodroid shows a progress dialog and does not hear changes to the folder's copy. If a program that was already running, such as a terminal command, deletes a file or renames a folder inside it during that time, the change is not sent to the device: the file comes back the next time you open the folder, and a renamed folder ends up under both names, on the device too. Nothing is lost. Start such commands after the dialog has closed.
+While a device folder is opening, VSCodroid shows a progress dialog and records what a program that was already running, such as a terminal command, changes in the folder's copy, then sends it once the folder is open: a file or folder it deletes is deleted on the device too, through the same checks as a delete in the editor, and a file it saves is sent. Two kinds of change are not sent then. A change inside a folder that appeared on the device since the folder was last opened is not seen: a file saved there reaches the device at its next save or the next open, and a file deleted there comes back at the next open. A folder renamed during that time can end up under both names, on the device too. Nothing is lost. Start such commands after the dialog has closed.
+
+### A Program Writes a File While Its Folder Opens
+
+When opening a device folder brings in a newer copy of a file you already have and a program saves into that file in the same moment, the save is kept beside it as `<name>.local-<time>`, in the editor and in the device folder, and a notice says so. Three cases are not covered, each within a fraction of a second of the newer copy going in: a save into the old file made just after VSCodroid has looked at it for the last time, a save made by renaming a finished file over the name, and a file a program creates at the name of one the folder is bringing in for the first time. In those, what the program wrote goes. Let such programs finish before you open the folder.
 
 ### Saving a Download Over an Existing File
 

@@ -30,6 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Renaming a folder no longer writes a file in it again that you have not changed since it was sent, a leftover of an earlier rename that gave way to another onto the same name.
 - A save still queued or still arriving when a device folder is closed shows the notice that the only copy is inside VSCodroid, instead of only a log line.
 - Saves inside a renamed folder that the device stored under a name the copy could not take show the same notice instead of none.
+- Opening a device folder no longer keeps a `.device-` copy of a save VSCodroid itself delivered when the file was edited again since, also after the folder holding it was renamed.
+- A delete or a new file in a device folder that waits for another folder's write to the same storage no longer stalls that folder's saves for up to ten seconds.
+- A delete that gave up waiting for another write to the same storage says so, instead of saying the device folder refused it and to delete the file in the file manager.
+- A file or folder a program deletes while its device folder is opening is deleted on the device instead of being copied back, and a file it saves after the open has read it is sent once the folder is open.
+- A save written into a file just as opening its device folder puts the device's newer copy in place is kept beside it as a `.local-` copy instead of being lost.
 
 ## [1.10.1] - 2026-11-21
 
