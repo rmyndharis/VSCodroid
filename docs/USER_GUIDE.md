@@ -109,11 +109,11 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   If it reports none, opening it again leaves both versions as they are, as
   above: VSCodroid goes on trying the save, and after VSCodroid restarts, your
   next save of the file sends it. Renaming the folder that holds the file, in
-  the editor, ends the trying: your next save of the file then keeps the other
-  app's version beside yours as a copy, as above, and where the folder reports
-  file times opening the folder tries the save too. In either kind of folder, an
-  open that finds that version reported as over 50 MiB keeps saves of the file
-  inside VSCodroid until an open finds it smaller.
+  the editor, takes the save along: VSCodroid tries it at once under the new
+  name and, while that version still cannot be read or copied, goes on trying
+  it there. In either kind of folder, an open that finds that version reported
+  as over 50 MiB keeps saves of the file inside VSCodroid until an open finds it
+  smaller.
   When a file and a folder share a name, one on the device and one in the editor,
   for example after you delete a folder in the Explorer, which leaves it on the
   device, and make a file of the same name, the device's keeps the name and

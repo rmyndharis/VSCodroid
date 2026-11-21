@@ -775,6 +775,54 @@ class SafPendingDirectoryRenameTest {
         assertTrue(written.isEmpty(), "an old captured URI must never receive the recreated path's bytes")
     }
 
+    /**
+     * The device stored the renamed folder under another name, and the mirror could not follow because
+     * it already holds that name: the saves the rename carried stayed in the mirror under the name the
+     * person gave, and nothing said they had not reached the device.
+     */
+    @Test fun `a save carried by a rename the mirror cannot follow to the stored name is announced`() {
+        open()
+        local("a_b/retained.txt", "unique local copy")
+        rewriteNames = true
+        local("old/f.txt", "pending local save")
+        observe(FileObserver.MODIFY, "old/f.txt")
+        renameDirectory("old", "a:b")
+
+        drain()
+
+        assertEquals("unique local copy", File(mirror, "a_b/retained.txt").readText())
+        assertEquals("baseline", contents("a_b/f.txt"))
+        assertEquals(listOf("a:b/f.txt"), lost, "the save left inside the app was not announced, or the folder was")
+    }
+
+    /**
+     * A save held back because the device's version could not be read is tried at the new name once its
+     * folder is renamed, through the same guard: held again while that version still cannot be read, and
+     * sent with the version kept beside it once it can.
+     */
+    @Test fun `a save held for an unreadable device version follows its folder rename`() {
+        open()
+        foreignEdit()
+        failedReads += "file-id"
+        local("old/f.txt", "held local save")
+        observe(FileObserver.MODIFY, "old/f.txt")
+        drain()
+        assertTrue(written.isEmpty(), "setup failed: the save was not held back")
+
+        renameDirectory("old", "new")
+        drain()
+        assertTrue(written.isEmpty(), "the save went over a device version nothing could read")
+        failedReads.clear()
+        elapsed = 100_000
+        assertTrue(engine.retryHeldBack(WatchSession(mirror)), "the save was not tried again at the new name")
+
+        assertEquals("held local save", contents("new/f.txt"))
+        assertTrue(
+            File(mirror, "new").listFiles()!!.any { it.name.startsWith("f.txt.device-") && it.readText() == "foreign version" },
+            "the device's version was not kept beside the save",
+        )
+    }
+
     @Test fun `normalization callbacks do not upload a renamed directory a second time`() {
         open()
         rewriteNames = true
