@@ -45,6 +45,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A delete that gave up waiting for another write to the same storage says so, instead of saying the device folder refused it and to delete the file in the file manager.
 - A file or folder a program deletes while its device folder is opening is deleted on the device instead of being copied back, and a file it saves after the open has read it is sent once the folder is open.
 - A save written into a file just as opening its device folder puts the device's newer copy in place is kept beside it as a `.local-` copy instead of being lost.
+- A folder renamed while its device folder opens, or set aside by the open, is still watched afterwards, so saves in it reach the device instead of staying inside VSCodroid for the rest of the session.
+- A save made in a folder renamed while its device folder opens reaches the renamed folder on the device, whether it was made before or after the rename.
+- A folder renamed while its device folder opens is renamed on the device instead of ending up there under both names.
+- A folder renamed onto an existing empty folder in a device folder is watched under that name, so saves directly inside it reach the device.
+- Opening a device folder no longer keeps an event in memory for every 8 KiB it writes until the folder is open.
+- A save made just as a device folder finishes opening, in a folder made or renamed while it opened, reaches that folder on the device instead of being announced as kept inside VSCodroid or missing the rename.
+- A folder moved out of a device folder while it opens is no longer taken for the rename of an unrelated folder arriving within the same second.
 
 ## [1.10.1] - 2026-11-21
 

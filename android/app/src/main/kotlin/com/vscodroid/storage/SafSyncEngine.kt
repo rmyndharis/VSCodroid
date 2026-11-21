@@ -2590,7 +2590,7 @@ class SafSyncEngine(private val context: Context) {
         val candidates = missing.filter { (original, relativePath) ->
             val line = recordedLines[relativePath]
             if (original.absolutePath in unsent && (line == null || splitRecordLine(line).second == null)) return@filter true
-            if (line == null) return@filter relativePath !in kept && !leftOut(original, relativePath)
+            if (line == null) return@filter relativePath !in kept && !leftOut(original, relativePath) && !renamedInDuringOpen(original)
             matchesRecordedCopy(original, relativePath, line) == false &&
                 !isUnprovenCopyOfRecord(mirrorDir, relativePath, line)
         }
@@ -2932,6 +2932,19 @@ class SafSyncEngine(private val context: Context) {
             else rows += identityLine(file.toRelativeString(mirrorDir), file)
         }
         return rows
+    }
+
+    /**
+     * Whether [file] came with a folder renamed while the open running on this thread ran
+     * ([ChangesDuringOpen.renamedIn]), which leaves it to the replay to send after the rename. Sent by the open, it put
+     * the folder on the device under its new name, and the rename the replay makes then had nothing to move to: the
+     * device kept the folder under both names.
+     */
+    private fun renamedInDuringOpen(file: File): Boolean {
+        val recording = recordingDuringSync.get() ?: return false
+        if (!recording.renamedIn(file)) return false
+        recording.leaveToReplay(file)
+        return true
     }
 
     /**
@@ -3321,11 +3334,12 @@ class SafSyncEngine(private val context: Context) {
      * Must be called after [initialSync] completes.
      *
      * What the open recorded the person doing meanwhile ([ChangesDuringOpen]) is handed
-     * over directory by directory: this watcher's watch of each starts first, and from
-     * then on the kernel reports to it alone, so each event reaches one of the two; see
-     * [ChangesDuringOpen.handOver]. A folder the open made itself had no watch until this
-     * one. The record is then sent by the write-back thread before anything else, through
-     * the same guards as an event this watcher sees; see [replayChangesDuringOpen].
+     * over directory by directory, by the directory's identity: this watcher's watch of each
+     * starts first, and from then on the kernel reports to it alone, so each event reaches one
+     * of the two; see [ChangesDuringOpen.handOver]. A folder the open made itself had no watch
+     * until this one. The record is then sent by the write-back thread before anything else,
+     * through the same guards as an event this watcher sees, and what this watcher queues
+     * meanwhile waits behind it; see [replayChangesDuringOpen].
      *
      * A no-op once [shutdown] has run; see [shutDown] for why that is a refusal rather
      * than a start that happens to be late.
@@ -3348,6 +3362,8 @@ class SafSyncEngine(private val context: Context) {
             val opening = WatchSession(mirrorDir, mirrorGenerations[mirrorDir.absolutePath])
             session = opening
             isWatching = true
+            // Before the first observer starts: what it queues waits behind what the open recorded.
+            if (changes != null) opening.holdLiveJobs()
             handingOver = changes
             try {
                 watchTree(mirrorDir, mirrorDir, safUri, opening)
@@ -3565,9 +3581,14 @@ class SafSyncEngine(private val context: Context) {
                         break
                     }
                     // Also for a directory already watched: `mv x a` onto an empty `a` replaces it
-                    // with no event for the old one, and its key would otherwise go on naming it.
-                    keys[target]?.let { watchedDirectoryKeys[target.absolutePath] = it }
-                    if (watchers.containsKey(target)) continue
+                    // with no event for the old one, and its key would otherwise go on naming it. Its
+                    // observer goes too, since it watches the directory that left: kept, nothing
+                    // watched the files directly inside the one that arrived.
+                    val key = keys[target]
+                    val replaced = key?.let { watchedDirectoryKeys.put(target.absolutePath, it) }.let { it != null && it != key }
+                    val existing = watchers[target]
+                    if (existing != null && !replaced) continue
+                    existing?.stopWatching()
                     val observer = DirectoryObserver(target, rootDir, safTreeUri, owner)
                     watchers[target] = observer
                     started += observer
@@ -3578,7 +3599,7 @@ class SafSyncEngine(private val context: Context) {
             // stopped there; see [ChangesDuringOpen.handOver].
             started.forEach {
                 it.startWatching()
-                it.adopted = handingOver?.handOver(it.dir)
+                it.adopted = handingOver?.handOver(keys[it.dir])
             }
         }
 
@@ -3590,11 +3611,6 @@ class SafSyncEngine(private val context: Context) {
             )
         }
     }
-
-    /** The identity of the directory at [dir], or null when it cannot be read; see [renameSourceFor]. */
-    private fun directoryKeyOf(dir: File): Any? = runCatching {
-        Files.readAttributes(dir.toPath(), BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).fileKey()
-    }.getOrNull()
 
     /** Releases the observer for [dir] and for anything below it. A no-op if unwatched. */
     private fun unwatchTree(dir: File, owner: WatchSession) {
@@ -6587,30 +6603,108 @@ class SafSyncEngine(private val context: Context) {
      * device, and what is done inside it before the watcher starts is seen at the next open.
      */
     internal class ChangesDuringOpen {
-        private val watches = LinkedHashMap<String, OpenWatch>()
-        private val events = ConcurrentLinkedQueue<Pair<Int, File>>()
+        /**
+         * The open's watch of each directory, by the directory's identity ([BasicFileAttributes.fileKey]). A watch
+         * belongs to the directory and not to its name: filed by name, a folder renamed while the open ran was handed
+         * over under a name the watcher never asked for, and the watch left over was stopped, which removed the one
+         * the watcher's own observer of the folder shares, and the folder went unheard for the rest of the session.
+         */
+        private val watches = LinkedHashMap<Any, OpenWatch>()
+
+        /** Where each watched directory is now, as far as the events recorded so far show, by identity. */
+        private val directories = HashMap<Any, File>()
+
+        /** Where each watched directory was when the open began: the name the device and the record give it. */
+        private val origins = HashMap<Any, File>()
+
+        /**
+         * The watched directories that have left the mirror as far as the events show, each with the one whose
+         * departure took it along, so an arrival of that one brings them back with it.
+         */
+        private val departedWith = HashMap<Any, Any>()
+
+        /**
+         * Every event, in the order the kernel reported it, by the order it came in. A file written again keeps only
+         * its last write: the replay sends a file once, from what the mirror holds then, and the open's own copies
+         * wrote an event for every 8 KiB they put in place, all kept until the folder was open.
+         */
+        private val events = LinkedHashMap<Long, Recorded>()
+        private val lastWrite = HashMap<String, Long>()
+        private var next = 0L
         private val removedPaths = ConcurrentHashMap.newKeySet<String>()
         private val removedDirectories = ConcurrentHashMap.newKeySet<String>()
         private val placedPaths = ConcurrentHashMap.newKeySet<String>()
         private val placedDirectories = ConcurrentHashMap.newKeySet<String>()
+        private val arrivedDirectories = ConcurrentHashMap.newKeySet<String>()
         private val leftToReplay = ConcurrentHashMap.newKeySet<String>()
         private val keptByOpen = ConcurrentHashMap.newKeySet<String>()
 
-        fun watch(dir: File, watch: OpenWatch) = synchronized(watches) { watches[dir.absolutePath] = watch }
+        /** One recorded event on [file], with the identity of the directory it names where it is one the open watched. */
+        data class Recorded(val event: Int, val file: File, val identity: Any?)
 
-        /** One inotify [event] on [file], in the order the kernel reported it. */
-        fun record(event: Int, file: File) {
-            events.add(event to file)
+        fun watch(dir: File, identity: Any, watch: OpenWatch) = synchronized(this) {
+            watches[identity] = watch
+            directories[identity] = dir
+            origins[identity] = dir
+        }
+
+        /**
+         * One inotify [event] on the entry [name] of the watched directory [directory], an identity given to [watch],
+         * in the order the kernel reported it. The path is built from where that directory is now, so a save in a
+         * folder renamed while the open runs is recorded under the name it has. A folder's arrival is read for its
+         * identity, which is how the record learns where a watched folder went; a folder's departure carries the
+         * identity it had, for [renameSourceFor].
+         */
+        fun record(event: Int, directory: Any, name: String) {
             val type = event and FileObserver.ALL_EVENTS
-            if (type == FileObserver.DELETE || type == FileObserver.MOVED_FROM) {
+            val isDirectory = (event and IN_ISDIR) != 0
+            // The open's own staging copies, which nothing sends; and a directory's own change, which the replay skips.
+            if (!isDirectory && isMachineTemporary(name) || isDirectory && type == FileObserver.MODIFY) return
+            val removal = type == FileObserver.DELETE || type == FileObserver.MOVED_FROM
+            val file: File
+            synchronized(this) {
+                if (directory in departedWith) return
+                file = File(directories[directory] ?: return, name)
+                var identity: Any? = null
+                if (isDirectory && removal) {
+                    identity = directories.entries.firstOrNull { it.value == file && it.key !in departedWith }?.key
+                    identity?.let { gone ->
+                        val below = directories.filter { (key, dir) -> key !in departedWith && isAtOrBelow(dir, file) }.keys
+                        // A directory deleted is forgotten: its watch has ended, and its identity can be given to the next.
+                        if (type == FileObserver.DELETE) below.forEach { directories.remove(it); origins.remove(it) }
+                        else below.forEach { departedWith[it] = gone }
+                    }
+                } else if (isDirectory && type == FileObserver.MOVED_TO) {
+                    identity = directoryKeyOf(file)
+                    // A folder renamed onto an empty one replaces it, and the watch of the one replaced ended with it.
+                    // Kept, its place answered for the next departure from this name, and its identity, which the
+                    // kernel can give to the next folder made, would move whatever is recorded under the name.
+                    directories.filter { (key, dir) -> key != identity && dir == file && key !in departedWith }.keys
+                        .forEach { directories.remove(it); origins.remove(it) }
+                    directories[identity]?.let { from ->
+                        arrivedDirectories.add(file.absolutePath)
+                        val group = departedWith[identity]
+                        directories.filter { (key, dir) -> departedWith[key] == group && isAtOrBelow(dir, from) }.keys.forEach {
+                            directories[it] = File(file.path + directories.getValue(it).path.removePrefix(from.path))
+                            departedWith.remove(it)
+                        }
+                    }
+                }
+                val at = next++
+                if (!isDirectory && !removal) lastWrite.put(file.path, at)?.let { events.remove(it) }
+                events[at] = Recorded(event, file, identity)
+            }
+            if (removal) {
                 removedPaths.add(file.absolutePath)
-                if ((event and IN_ISDIR) != 0) removedDirectories.add(file.absolutePath)
-            } else if ((event and IN_ISDIR) == 0) {
+                if (isDirectory) removedDirectories.add(file.absolutePath)
+            } else if (!isDirectory) {
                 placedPaths.add(file.absolutePath)
-            } else if (type != FileObserver.MODIFY) {
+            } else {
                 placedDirectories.add(file.absolutePath)
             }
         }
+
+        private fun isAtOrBelow(path: File, dir: File) = path == dir || path.path.startsWith(dir.path + File.separator)
 
         /**
          * Whether [file] was made, saved or moved in while the open ran, itself or with a folder above it. Such a
@@ -6620,6 +6714,15 @@ class SafSyncEngine(private val context: Context) {
         fun placed(file: File): Boolean {
             val path = file.absolutePath
             return path in placedPaths || placedDirectories.any { path.startsWith(it + File.separator) }
+        }
+
+        /**
+         * Whether [file] is in a folder the open watched that arrived under another name while it ran, a rename, which
+         * the replay makes on the device before it sends what the folder holds that the device lacks.
+         */
+        fun renamedIn(file: File): Boolean {
+            val path = file.absolutePath
+            return arrivedDirectories.any { path.startsWith(it + File.separator) }
         }
 
         /** A file only the mirror holds that the open did not keep because the replay is to send it. */
@@ -6638,36 +6741,44 @@ class SafSyncEngine(private val context: Context) {
             return path in removedPaths || removedDirectories.any { path.startsWith(it + File.separator) }
         }
 
-        /**
-         * Hands the watch of [dir] to the watcher that has just started its own, without
-         * stopping it. Two observers of one directory share one inotify watch, and the one
-         * started last is the one the kernel's events go to, so from that start each event
-         * reaches one of the two and none falls between them. Stopping this one then would
-         * remove the shared watch and leave the watcher deaf; it is stopped with the
-         * watcher's own instead ([DirectoryObserver.stopWatching]).
-         */
-        fun handOver(dir: File): OpenWatch? = synchronized(watches) { watches.remove(dir.absolutePath) }
+        /** Where the watched directory [identity] was when the open began, or null for one it did not watch. */
+        fun origin(identity: Any?): File? = synchronized(this) { identity?.let { origins[it] } }
 
-        /** Stops every watch left. What was recorded stays to be read. */
+        /**
+         * Hands the watch of the directory [identity] to the watcher that has just started its own, without stopping
+         * it. Two observers of one directory share one inotify watch, and the one started last is the one the kernel's
+         * events go to, so from that start each event reaches one of the two and none falls between them. Stopping this
+         * one then would remove the shared watch and leave the watcher deaf; it is stopped with the watcher's own
+         * instead ([DirectoryObserver.stopWatching]). By identity, so a folder renamed while the open ran is handed over
+         * under the name the watcher found it by.
+         */
+        fun handOver(identity: Any?): OpenWatch? = identity?.let { synchronized(this) { watches.remove(it) } }
+
+        /**
+         * Stops every watch not handed over: those of directories the watcher does not watch, which no observer of the
+         * watcher shares. What was recorded stays to be read.
+         */
         fun close() {
-            val left = synchronized(watches) { watches.values.toList().also { watches.clear() } }
+            val left = synchronized(this) { watches.values.toList().also { watches.clear() } }
             left.forEach { runCatching { it.stop() } }
         }
 
-        fun recorded(): List<Pair<Int, File>> = events.toList()
+        fun recorded(): List<Recorded> = synchronized(this) { events.values.toList() }
     }
 
     /**
      * Watches every directory of [mirrorDir] the watcher would, for the open about to run.
      * Best effort: a directory that cannot be watched leaves the rest of the open as it was
-     * before anything was recorded, which is what it was on every build before this one.
+     * before anything was recorded, which is what it was on every build before this one, and
+     * so does one whose identity cannot be read, which has gone since the walk found it.
      */
     private fun watchChangesDuringOpen(mirrorDir: File): ChangesDuringOpen {
         val changes = ChangesDuringOpen()
         try {
             for (dir in watchableDirectories(mirrorDir, MAX_WATCHED_DIRECTORIES)) {
-                val watch = directoryWatchFactory(dir) { event, name -> if (name != null) changes.record(event, File(dir, name)) }
-                changes.watch(dir, watch)
+                val identity = directoryKeyOf(dir) ?: continue
+                val watch = directoryWatchFactory(dir) { event, name -> if (name != null) changes.record(event, identity, name) }
+                changes.watch(dir, identity, watch)
                 watch.start()
             }
         } catch (e: Exception) {
@@ -6692,20 +6803,34 @@ class SafSyncEngine(private val context: Context) {
      * them apart from the person's:
      * - a delete or a move away stands only where nothing is at the path now and the device
      *   held a document there; the open sets a copy aside and puts another in its place, and
-     *   removes only what the device no longer holds;
+     *   removes only what the device no longer holds. A folder moved away also stands where a
+     *   folder made since stands at its name (`mv a b; mkdir a`), told apart by its identity,
+     *   which goes with it to [handleMirrorEvent] so only its own arrival can claim it;
      * - a file made or saved stands only where its copy is not the one the open's record
      *   vouches for, which is every copy the open put in place, kept, or sent itself, nor
      *   one the open keeps inside the app with a row without a digest
      *   ([ChangesDuringOpen.keptByOpen]), and only its last event, as one save sends
-     *   everything;
+     *   everything ([ChangesDuringOpen.record] keeps no other);
      * - a folder made stands only where the device holds none, which leaves out every folder
      *   the open made for the device's own.
+     *
+     * A folder that arrives with the identity of one that left, a rename, is followed by each
+     * file under it whose copy the record does not vouch for under the folder's old name: the
+     * rename moves the device's copies, and a save made there before the rename was recorded
+     * under a name that is no longer there to send. The open writes no row for a folder renamed
+     * before it reached it, so then every file in it is sent again.
      *
      * A file is sent as a save whatever made it, so [keepsDeviceEdit] still asks about the
      * device's copy, and a delete goes through [keepsDeviceDocument] as any other.
      *
+     * The watcher has started when this runs, and what it queues meanwhile waits behind what
+     * this queues ([WatchSession.holdLiveJobs]): queued ahead, a save in a folder this makes or
+     * renames found no folder on the device and was announced as kept in the app, and missed
+     * the rename that would have carried it.
+     *
      * The open leaves to this pass the files only the mirror held that the person placed while
-     * it ran ([ChangesDuringOpen.leaveToReplay]): it neither keeps them nor tells of them. One
+     * it ran ([ChangesDuringOpen.leaveToReplay]): it neither keeps them nor tells of them, and
+     * sends none that came with a folder renamed meanwhile ([ChangesDuringOpen.renamedIn]). One
      * this pass does not send is told of here, once for the pass.
      */
     internal fun replayChangesDuringOpen(
@@ -6714,6 +6839,15 @@ class SafSyncEngine(private val context: Context) {
         safUri: Uri,
         owner: WatchSession = session,
     ) {
+        owner.holdLiveJobs()
+        try {
+            replayRecorded(changes, mirrorDir, safUri, owner)
+        } finally {
+            owner.releaseLiveJobs()
+        }
+    }
+
+    private fun replayRecorded(changes: ChangesDuringOpen, mirrorDir: File, safUri: Uri, owner: WatchSession) {
         changes.close()
         val events = changes.recorded()
         if (events.isEmpty()) return
@@ -6732,33 +6866,55 @@ class SafSyncEngine(private val context: Context) {
         // What this pass sends, files and folders, for what the open left to it below.
         val sent = HashSet<String>()
         val sentDirectories = ArrayList<String>()
-        val lastWrite = HashMap<String, Int>()
-        events.forEachIndexed { i, (event, file) ->
-            if ((event and IN_ISDIR) == 0 && !removal(event)) lastWrite[file.absolutePath] = i
-        }
-        events.forEachIndexed { i, (event, file) ->
+        // The folders this pass moved away, by identity, and the ones that arrived with one of those identities.
+        val departures = HashSet<Any>()
+        val renamedIn = ArrayList<Pair<File, File>>()
+        for ((event, file, identity) in events) {
             val relative = file.toRelativeString(mirrorDir)
             val onDevice = { cachedDocId(safUri, relative) != null }
+            // A folder that arrives with the identity of one this pass moved away is the other half of a rename, also
+            // where the device holds a folder of its name: the watcher sends it into that folder, as it does live.
+            val renamed = identity != null && identity in departures && type(event) == FileObserver.MOVED_TO
+            var heldByDevice = false
             val replay = when {
                 removal(event) -> when {
-                    file.exists() || isLink(file) || !onDevice() -> null
+                    isLink(file) || !onDevice() -> null
+                    file.exists() && !(type(event) == FileObserver.MOVED_FROM && identity != null &&
+                        file.isDirectory && directoryKeyOf(file) != identity) -> null
                     (event and IN_ISDIR) != 0 -> event
                     else -> FileObserver.DELETE
                 }
-                (event and IN_ISDIR) != 0 ->
-                    event.takeIf { type(it) != FileObserver.MODIFY && file.isDirectory && !onDevice() }
-                lastWrite[file.absolutePath] != i -> null
+                (event and IN_ISDIR) != 0 -> event.takeIf {
+                    heldByDevice = onDevice()
+                    type(it) != FileObserver.MODIFY && file.isDirectory && (!heldByDevice || renamed)
+                }
                 // A copy the open keeps inside the app with a row without a digest, as one set aside beside a
                 // folder that replaced its file: the open's own move of it reaches this record too.
                 file.isFile && !isLink(file) && !changes.isKeptByOpen(identityLine(relative, file)) &&
                     vouched?.contains(identityLine(relative, file)) == false -> FileObserver.MODIFY
                 else -> null
+            } ?: continue
+            if (!removal(replay)) {
+                if ((replay and IN_ISDIR) != 0) sentDirectories += file.absolutePath else sent += file.absolutePath
             }
-            if (replay != null) {
-                if (!removal(replay)) {
-                    if ((replay and IN_ISDIR) != 0) sentDirectories += file.absolutePath else sent += file.absolutePath
-                }
-                handleMirrorEvent(replay, file, mirrorDir, safUri, owner)
+            handleMirrorEvent(
+                replay, file, mirrorDir, safUri, owner,
+                departedKey = identity.takeIf { removal(replay) }, replayed = true,
+            )
+            if (identity == null || (replay and IN_ISDIR) == 0) continue
+            if (type(replay) == FileObserver.MOVED_FROM) departures += identity
+            // Sent whole where the device holds the name, the rename being refused there.
+            else if (renamed && !heldByDevice) changes.origin(identity)?.let { renamedIn += file to it }
+        }
+        for ((dir, origin) in renamedIn) {
+            for (file in uploadPlan(dir, Int.MAX_VALUE) { it.isFile }.entries) {
+                val relative = file.toRelativeString(mirrorDir)
+                val before = File(origin, file.toRelativeString(dir)).toRelativeString(mirrorDir)
+                if (file.absolutePath in sent || changes.isKeptByOpen(identityLine(relative, file)) ||
+                    vouched?.contains(identityLine(before, file)) != false
+                ) continue
+                sent += file.absolutePath
+                handleMirrorEvent(FileObserver.MODIFY, file, mirrorDir, safUri, owner, replayed = true)
             }
         }
         // The files only the mirror held that the open left to this pass rather than keep, and that it did not send:
@@ -6792,7 +6948,7 @@ class SafSyncEngine(private val context: Context) {
             if (path != null && isWatching) handleMirrorEvent(event, File(dir, path), rootDir, safTreeUri, owner)
         }
 
-        /** The open's watch of [dir], which shares this one's inotify watch; see [ChangesDuringOpen.handOver]. */
+        /** The open's watch of the directory, which shares this one's inotify watch; see [ChangesDuringOpen.handOver]. */
         var adopted: OpenWatch? = null
 
         fun startWatching() = watch.start()
@@ -6812,6 +6968,10 @@ class SafSyncEngine(private val context: Context) {
      * one: constructing a [FileObserver] runs a static initializer that reaches native
      * code a JVM test has no way to satisfy, and what happens to the device copy is
      * decided here.
+     *
+     * [departedKey] is the identity of a directory that left, for one this watcher never
+     * watched and the open did ([replayChangesDuringOpen]); [replayed] marks an event of that
+     * replay, whose job goes ahead of the live watcher's ([WatchSession.holdLiveJobs]).
      */
     internal fun handleMirrorEvent(
         event: Int,
@@ -6819,6 +6979,8 @@ class SafSyncEngine(private val context: Context) {
         rootDir: File,
         safTreeUri: Uri,
         sourceSession: WatchSession = session,
+        departedKey: Any? = null,
+        replayed: Boolean = false,
     ) {
         // The session this event belongs to, captured rather than read at the offer at the
         // end. Everything in between is provider round trips, a query per path segment
@@ -6882,7 +7044,9 @@ class SafSyncEngine(private val context: Context) {
             }.getOrNull() == expectedMove.second
 
         // Read before the watch goes below: a directory that has left cannot be asked what it is.
-        val departedKey = if (isDirectory && type == SyncType.DELETE) watchedDirectoryKeys[localFile.absolutePath] else null
+        val departed = if (isDirectory && type == SyncType.DELETE) {
+            departedKey ?: watchedDirectoryKeys[localFile.absolutePath]
+        } else null
 
         // A directory arriving or leaving changes what has to be watched. Unwatching
         // is unconditional because it is a no-op for anything never watched.
@@ -6978,7 +7142,7 @@ class SafSyncEngine(private val context: Context) {
             dropVanished { now - it.atMillis > RENAME_PAIR_WINDOW_MS }
             synchronized(vanishedLock) {
                 vanishedDirectories.add(
-                    VanishedDirectory(relativePath, now, localFile.absolutePath, departedKey)
+                    VanishedDirectory(relativePath, now, localFile.absolutePath, departed)
                 )
                 // The move landed on disk before this event, and the write-back thread may have dropped
                 // a save of a file inside the directory in between, with nothing yet to note it with.
@@ -7177,11 +7341,11 @@ class SafSyncEngine(private val context: Context) {
         if (renamedFrom != null && !pairedRename) takeClaimedDrops(target, File(rootDir, renamedFrom).absolutePath)
         val renamedSaves = if (pairedRename) {
             val prefix = File(rootDir, renamedFrom).absolutePath + File.separator
-            target.queue.filter {
+            target.pending().filter {
                 (it.type == SyncType.MODIFY || it.type == SyncType.CREATE) && it.localPath.startsWith(prefix)
             }.map { relativePath + "/" + it.localPath.removePrefix(prefix) }.distinct()
         } else emptyList()
-        target.queue.offer(
+        target.offer(
             SyncJob(
                 type = if (pairedRename) SyncType.RENAME else type,
                 localPath = localFile.absolutePath,
@@ -7197,7 +7361,8 @@ class SafSyncEngine(private val context: Context) {
                 generation = access.generation,
                 renamedSaves = renamedSaves,
                 previousPath = if (pairedRename) File(rootDir, renamedFrom).absolutePath else null,
-            )
+            ),
+            live = !replayed,
         )
     }
 
@@ -8586,6 +8751,11 @@ class SafSyncEngine(private val context: Context) {
         private fun isMachineTemporary(name: String): Boolean =
             name.endsWith(PARTIAL_SUFFIX)
 
+        /** The identity of the directory at [dir], or null when it cannot be read; see [renameSourceFor]. */
+        private fun directoryKeyOf(dir: File): Any? = runCatching {
+            Files.readAttributes(dir.toPath(), BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).fileKey()
+        }.getOrNull()
+
         /**
          * Whether a change at [relativePath] should be pushed back to the device.
          *
@@ -8723,6 +8893,12 @@ internal enum class DeviceCopyOutcome {
     UNAVAILABLE,
 }
 
+/** One directory's watch while an open fills the mirror; see [SafSyncEngine.ChangesDuringOpen]. */
+internal interface OpenWatch {
+    fun start()
+    fun stop()
+}
+
 /**
  * What [SafSyncEngine] last knew of one device document: the (COLUMN_LAST_MODIFIED,
  * COLUMN_SIZE) its provider reported, or a placeholder no report equals where a read matched
@@ -8732,12 +8908,6 @@ internal enum class DeviceCopyOutcome {
  * digested yet and this open's budget, [SafSyncEngine.KEPT_COPY_DIGEST_BYTES], did not
  * reach, until a write of this app lands there, and after a write that does not land.
  */
-/** One directory's watch while an open fills the mirror; see [SafSyncEngine.ChangesDuringOpen]. */
-internal interface OpenWatch {
-    fun start()
-    fun stop()
-}
-
 private class DeviceState(
     /**
      * Null where an open found the device holding bytes it could not place, or where a stamp
@@ -8984,6 +9154,32 @@ internal class WatchSession(
     val generation: Any? = null,
 ) {
     val queue = ConcurrentLinkedQueue<SyncJob>()
+
+    /**
+     * The live watcher's jobs while what the open recorded is being replayed, which then go into [queue] behind the
+     * replay's own; null while none is ([SafSyncEngine.replayChangesDuringOpen]). The watcher starts before the replay
+     * has queued anything, and a save in a folder the replay makes or renames, queued ahead of that folder's job, found
+     * no folder on the device: it was announced as kept in the app, and a rename did not carry it. Guarded by [queue].
+     */
+    private var heldForReplay: MutableList<SyncJob>? = null
+
+    fun holdLiveJobs() = synchronized(queue) { if (heldForReplay == null) heldForReplay = ArrayList() }
+
+    fun releaseLiveJobs() = synchronized(queue) {
+        heldForReplay?.forEach { queue.offer(it) }
+        heldForReplay = null
+    }
+
+    /** Queues [job], or holds it while a replay runs when it is the [live] watcher's. */
+    fun offer(job: SyncJob, live: Boolean) {
+        synchronized(queue) {
+            val held = heldForReplay
+            if (live && held != null) held += job else queue.offer(job)
+        }
+    }
+
+    /** What is queued and what is held, in the order it will be sent. */
+    fun pending(): List<SyncJob> = synchronized(queue) { queue.toList() + heldForReplay.orEmpty() }
     /** One-shot inode checks for directory names already followed after provider creation or rename. */
     val normalizedDirectories = ConcurrentHashMap<String, Pair<String, Any>>()
 

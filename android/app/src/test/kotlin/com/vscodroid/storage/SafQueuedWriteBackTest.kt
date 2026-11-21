@@ -817,43 +817,67 @@ class SafQueuedWriteBackTest {
 
     /**
      * Stands in for FileObserver as Android has it: all observers of a process share one inotify
-     * instance, so two observers of one directory share one watch. The one started last is the one
-     * the directory's events go to, and stopping either removes the watch for both.
+     * instance, so two observers of one directory share one watch. A watch belongs to the directory
+     * itself, not to the name it was asked for by, so it follows a rename, and asking for it again
+     * under any name gets the same descriptor. The observer started last is the one the directory's
+     * events go to; stopping either removes the watch for both, unless the watch has gone already, as
+     * the kernel drops it when its directory is unlinked ([unlinked]).
      */
     private inner class KernelWatches {
         val log = mutableListOf<String>()
-        private val active = mutableMapOf<String, Boolean>()
-        private val receiver = mutableMapOf<String, (Int, String?) -> Unit>()
+        private val descriptors = mutableMapOf<Any, Int>()
+        private val receiver = mutableMapOf<Int, (Int, String?) -> Unit>()
+        private var next = 1
 
         /** Whose watches are being made: the open's, or the watcher's once it starts. */
         var owner = "open"
 
         private fun name(dir: File) = dir.relativeTo(mirror).path.ifEmpty { "." }
 
+        private fun identity(dir: File): Any? = runCatching { identityOf(dir) }.getOrNull()
+
         fun install() {
             engine.directoryWatchFactory = { dir, deliver ->
                 val whose = owner
+                var watched: Pair<Any, Int>? = null
                 object : OpenWatch {
                     override fun start() {
-                        log += "start:$whose:${name(dir)}"
-                        active[name(dir)] = true
-                        receiver[name(dir)] = deliver
+                        synchronized(this@KernelWatches) {
+                            log += "start:$whose:${name(dir)}"
+                            val key = identity(dir) ?: return
+                            val descriptor = descriptors.getOrPut(key) { next++ }
+                            receiver[descriptor] = deliver
+                            watched = key to descriptor
+                        }
                     }
 
                     override fun stop() {
-                        log += "stop:$whose:${name(dir)}"
-                        active[name(dir)] = false
+                        synchronized(this@KernelWatches) {
+                            log += "stop:$whose:${name(dir)}"
+                            val (key, descriptor) = watched ?: return
+                            if (descriptors[key] == descriptor) {
+                                descriptors.remove(key)
+                                receiver.remove(descriptor)
+                            }
+                        }
                     }
                 }
             }
         }
 
-        fun watched(dir: String) = active[dir] == true
+        /** The directory that had [identity] is gone, and so is its watch. */
+        fun unlinked(identity: Any) {
+            synchronized(this) { descriptors.remove(identity)?.let { receiver.remove(it) } }
+        }
+
+        fun watched(dir: String) = synchronized(this) { identity(File(mirror, dir))?.let { it in descriptors } == true }
 
         fun fire(event: Int, path: String) {
             val file = File(mirror, path)
-            val dir = name(file.parentFile)
-            if (watched(dir)) receiver.getValue(dir)(event, file.name)
+            val deliver = synchronized(this) {
+                identity(file.parentFile)?.let { descriptors[it] }?.let { receiver[it] }
+            }
+            deliver?.invoke(event, file.name)
         }
     }
 
@@ -1457,5 +1481,511 @@ class SafQueuedWriteBackTest {
         observe(FileObserver.MODIFY, "notes.txt")
 
         assertEquals(listOf("notes.txt"), lost)
+    }
+
+    /** Waits up to five seconds for the write-back thread to leave the device folder as [done] says. */
+    private fun waitFor(done: () -> Boolean) {
+        val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5)
+        while (!done() && System.nanoTime() < deadline) Thread.sleep(10)
+    }
+
+    /** `mv from to` of a folder in the mirror, as the kernel reports it to whoever watches the mirror's root. */
+    private fun renameWatched(kernel: KernelWatches, from: String, to: String) {
+        assertTrue(File(mirror, from).renameTo(File(mirror, to)))
+        kernel.fire(FileObserver.MOVED_FROM or isDirFlag, from)
+        kernel.fire(FileObserver.MOVED_TO or isDirFlag, to)
+    }
+
+    /**
+     * A watch belongs to the folder, not to its name. The open's watch of a folder renamed while it ran was
+     * handed over under the old name, which the watcher never asked for, and stopped as left over, which
+     * removed the watch the watcher's own observer of the renamed folder shares: no save in it reached the
+     * device for the rest of the session.
+     */
+    @Test
+    fun `a folder renamed while its folder opens is still heard under its new name once the watcher starts`() {
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } returns 0L
+        onDevice("0.txt", "zero")
+        onDevice("src")
+        onDevice("src/a.txt", "alpha")
+        onDevice("src/b.txt", "bravo")
+        onDevice("src/sub")
+        onDevice("src/sub/c.txt", "charlie")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val kernel = KernelWatches().also { it.install() }
+        var renamed = false
+        openRecording { done, _ ->
+            if (done == 4 && !renamed) {
+                renamed = true
+                renameWatched(kernel, "src", "lib")
+            }
+        }
+        assertTrue(renamed, "precondition: the folder was renamed while it opened")
+        kernel.owner = "watcher"
+
+        engine.startWatching(mirror, treeUri)
+        try {
+            waitFor { text("lib/a.txt") == "alpha" }
+            assertEquals("alpha", text("lib/a.txt"), "precondition: the renamed folder reached the device")
+            inMirror("lib/a.txt", "typed after the watcher started")
+            kernel.fire(FileObserver.MODIFY, "lib/a.txt")
+            inMirror("lib/sub/c.txt", "typed below it")
+            kernel.fire(FileObserver.MODIFY, "lib/sub/c.txt")
+            waitFor { text("lib/a.txt") == "typed after the watcher started" && text("lib/sub/c.txt") == "typed below it" }
+        } finally {
+            engine.shutdown()
+        }
+        assertEquals("typed after the watcher started", text("lib/a.txt"), "the watcher did not hear the folder renamed while it opened")
+        assertEquals("typed below it", text("lib/sub/c.txt"), "the watcher did not hear a folder inside the renamed one")
+        assertEquals(
+            setOf("0.txt", "lib", "lib/a.txt", "lib/b.txt", "lib/sub", "lib/sub/c.txt"), device.keys,
+            "the renamed folder is on the device under both names",
+        )
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /**
+     * The same folder made again at its old name: the new folder took the open's watch of the renamed one, and
+     * stopping it with the new folder's watch left the renamed folder unheard. The rename is still one rename on
+     * the device, beside the new folder.
+     */
+    @Test
+    fun `a folder renamed and made again while its folder opens keeps both folders heard`() {
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } returns 0L
+        onDevice("0.txt", "zero")
+        onDevice("src")
+        onDevice("src/a.txt", "alpha")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val kernel = KernelWatches().also { it.install() }
+        openRecording { _, _ -> }
+        renameWatched(kernel, "src", "lib")
+        assertTrue(File(mirror, "src").mkdir())
+        kernel.fire(FileObserver.CREATE or isDirFlag, "src")
+        kernel.owner = "watcher"
+        var afterReplay = emptySet<String>()
+
+        engine.startWatching(mirror, treeUri)
+        try {
+            waitFor { text("lib/a.txt") == "alpha" && "src" in device && "src/a.txt" !in device }
+            afterReplay = device.keys.toSet()
+            val made = identityOf(File(mirror, "src"))
+            assertTrue(File(mirror, "src").delete())
+            kernel.unlinked(made)
+            kernel.fire(FileObserver.DELETE or isDirFlag, "src")
+            waitFor { "src" !in device }
+            inMirror("lib/a.txt", "typed after the new folder went")
+            kernel.fire(FileObserver.MODIFY, "lib/a.txt")
+            waitFor { text("lib/a.txt") == "typed after the new folder went" }
+        } finally {
+            engine.shutdown()
+        }
+        assertEquals("typed after the new folder went", text("lib/a.txt"), "the renamed folder went unheard with the folder made at its old name")
+        assertEquals(setOf("0.txt", "lib", "lib/a.txt", "src"), afterReplay, "the folder renamed while it opened is not one rename on the device")
+        assertEquals(setOf("0.txt", "lib", "lib/a.txt"), device.keys)
+    }
+
+    /**
+     * The open sets a folder aside as `<name>.local-<time>` when the device replaced it with a file. Its watch went
+     * with the folder, was handed over under the old name, and stopped: a save in the set-aside folder never
+     * reached the device.
+     */
+    @Test
+    fun `a folder the open sets aside is heard once the watcher starts`() {
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } returns 0L
+        onDevice("keep.txt", "kilo")
+        onDevice("x")
+        onDevice("x/f.txt", "foxtrot")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        device.remove("x/f.txt")
+        onDevice("x", "the device's file")
+        val kernel = KernelWatches().also { it.install() }
+
+        openRecording { _, _ -> }
+        val kept = mirror.list()!!.single { it.startsWith("x" + SafSyncEngine.LOCAL_COPY_SUFFIX) }
+        // What the kernel reports for the open's own move, which reaches the watch after the fact.
+        kernel.fire(FileObserver.MOVED_FROM or isDirFlag, "x")
+        kernel.fire(FileObserver.MOVED_TO or isDirFlag, kept)
+        kernel.fire(FileObserver.MOVED_TO, "x")
+        kernel.owner = "watcher"
+
+        engine.startWatching(mirror, treeUri)
+        try {
+            waitFor { text("$kept/f.txt") == "foxtrot" }
+            assertEquals("foxtrot", text("$kept/f.txt"), "precondition: the set-aside folder reached the device")
+            inMirror("$kept/f.txt", "typed in the folder set aside")
+            kernel.fire(FileObserver.MODIFY, "$kept/f.txt")
+            waitFor { text("$kept/f.txt") == "typed in the folder set aside" }
+        } finally {
+            engine.shutdown()
+        }
+        assertEquals("typed in the folder set aside", text("$kept/f.txt"), "the watcher did not hear the folder the open set aside")
+        assertEquals("the device's file", text("x"))
+    }
+
+    /**
+     * A save in a folder renamed while its folder opens, made after the rename and before the watcher starts. The
+     * open's watch built its path from the name the folder had when it was watched, and the save was recorded
+     * under a path that no longer existed, so nothing sent it.
+     */
+    @Test
+    fun `a save in a folder renamed while its folder opens reaches the device under the new name`() {
+        onDevice("0.txt", "zero")
+        onDevice("src")
+        onDevice("src/a.txt", "alpha")
+        onDevice("src/b.txt", "bravo")
+        onDevice("src/sub")
+        onDevice("src/sub/c.txt", "charlie")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val kernel = KernelWatches().also { it.install() }
+        var renamed = false
+        openRecording { done, _ ->
+            if (done == 4 && !renamed) {
+                renamed = true
+                renameWatched(kernel, "src", "lib")
+            }
+        }
+        assertTrue(renamed, "precondition: the folder was renamed while it opened")
+        inMirror("lib/a.txt", "saved in the renamed folder")
+        kernel.fire(FileObserver.MODIFY, "lib/a.txt")
+        inMirror("lib/sub/c.txt", "saved below it")
+        kernel.fire(FileObserver.MODIFY, "lib/sub/c.txt")
+        writes.clear()
+
+        replayWhatTheOpenRecorded()
+        drain()
+
+        assertEquals("saved in the renamed folder", text("lib/a.txt"), "a save in the renamed folder did not reach the device")
+        assertEquals("saved below it", text("lib/sub/c.txt"), "a save in a folder inside the renamed one did not reach the device")
+        assertEquals(setOf("0.txt", "lib", "lib/a.txt", "lib/b.txt", "lib/sub", "lib/sub/c.txt"), device.keys)
+        assertEquals(listOf("lib/a.txt", "lib/sub/c.txt"), writes.sorted(), "a file the rename carried unchanged was sent again")
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /**
+     * A save made in a folder just before it is renamed, both while its folder opens. The save is recorded under
+     * the old name, where nothing is to send any more, and the rename moves the device's copy, which is the one
+     * before the save.
+     */
+    @Test
+    fun `a save made just before its folder is renamed while its folder opens reaches the renamed folder`() {
+        onDevice("0.txt", "zero")
+        onDevice("src")
+        onDevice("src/a.txt", "alpha")
+        onDevice("src/b.txt", "bravo")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val kernel = KernelWatches().also { it.install() }
+        openRecording { _, _ -> }
+        inMirror("src/a.txt", "saved before the rename")
+        kernel.fire(FileObserver.MODIFY, "src/a.txt")
+        renameWatched(kernel, "src", "lib")
+        writes.clear()
+
+        replayWhatTheOpenRecorded()
+        drain()
+
+        assertEquals("saved before the rename", text("lib/a.txt"), "the save made before the rename did not reach the renamed folder")
+        assertEquals(setOf("0.txt", "lib", "lib/a.txt", "lib/b.txt"), device.keys)
+        assertEquals(listOf("lib/a.txt"), writes, "a file the rename carried unchanged was sent again")
+    }
+
+    /**
+     * A folder renamed before the open reached it. The open does not read it under either name, so its record
+     * vouches for none of its files, and every one of them is sent again into the renamed folder. The open used
+     * to send the folder under the new name itself, while the rename's other half kept the old one on the device.
+     */
+    @Test
+    fun `a folder renamed before its open reaches it ends up under the new name only`() {
+        onDevice("0.txt", "zero")
+        onDevice("src")
+        onDevice("src/a.txt", "alpha")
+        onDevice("src/b.txt", "bravo")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val watches = OpenWatches().also { it.install() }
+        var renamed = false
+        openRecording { done, _ ->
+            if (done == 1 && !renamed) {
+                renamed = true
+                assertTrue(File(mirror, "src").renameTo(File(mirror, "lib")))
+                watches.fire(FileObserver.MOVED_FROM or isDirFlag, "src")
+                watches.fire(FileObserver.MOVED_TO or isDirFlag, "lib")
+            }
+        }
+        assertTrue(renamed, "precondition: the folder was renamed before the open reached it")
+        assertFalse(File(mirror, "src").exists(), "the open fetched back a folder renamed before it reached it")
+
+        replayWhatTheOpenRecorded()
+        drain()
+
+        assertEquals(setOf("0.txt", "lib", "lib/a.txt", "lib/b.txt"), device.keys, "the renamed folder is on the device under both names")
+        assertEquals("alpha", text("lib/a.txt"))
+        assertEquals("bravo", text("lib/b.txt"))
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /**
+     * A folder renamed onto an existing empty folder, as `mv -T`, `os.replace` or `fs.rename` do it: the folder
+     * that is replaced reports nothing but the end of its watch, and the watcher kept its observer, which watches
+     * the folder that left. Nothing watched the files directly inside the one that arrived.
+     */
+    @Test
+    fun `a folder renamed onto an empty folder is watched under that name`() {
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } returns 0L
+        onDevice("a")
+        onDevice("x")
+        onDevice("x/f.txt", "foxtrot")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val kernel = KernelWatches().also { it.install() }
+        kernel.owner = "watcher"
+
+        engine.startWatching(mirror, treeUri)
+        try {
+            val replaced = identityOf(File(mirror, "a"))
+            assertTrue(File(mirror, "x").renameTo(File(mirror, "a")), "precondition: the rename replaced the empty folder")
+            kernel.unlinked(replaced)
+            kernel.fire(FileObserver.MOVED_FROM or isDirFlag, "x")
+            kernel.fire(FileObserver.MOVED_TO or isDirFlag, "a")
+            waitFor { text("a/f.txt") == "foxtrot" }
+            assertEquals("foxtrot", text("a/f.txt"), "precondition: the folder that arrived reached the device")
+            inMirror("a/f.txt", "typed in the folder that arrived")
+            kernel.fire(FileObserver.MODIFY, "a/f.txt")
+            waitFor { text("a/f.txt") == "typed in the folder that arrived" }
+        } finally {
+            engine.shutdown()
+        }
+        assertEquals("typed in the folder that arrived", text("a/f.txt"), "nothing watched the folder renamed onto an empty one")
+    }
+
+    /**
+     * The open's own copies write an event for every 8 KiB they put in place, and a program can write as often.
+     * Every event was kept until the folder opened, about 300 bytes each; a file written many times now keeps
+     * its last write, which is the only one the replay sends, and the replay sends what it sent before.
+     */
+    @Test
+    fun `a flood of writes while a folder opens is kept once per file and sent the same`() {
+        val names = (0 until 10).map { "f$it.txt" }
+        names.forEach { onDevice(it, "before") }
+        onDevice("zz-gone.txt", "golf")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val watches = OpenWatches().also { it.install() }
+        var flooded = false
+        openRecording { done, _ ->
+            // Every file but the last read, so the deletion is made before the open reaches it.
+            if (done == names.size && !flooded) {
+                flooded = true
+                names.forEach { inMirror(it, "after $it") }
+                repeat(100_000) { watches.fire(FileObserver.MODIFY, names[it % names.size]) }
+                // Written, deleted and written again: one save of what is there at the end.
+                watches.fire(FileObserver.DELETE, names[0])
+                watches.fire(FileObserver.CREATE, names[0])
+                watches.fire(FileObserver.MODIFY, names[0])
+                // Written and then deleted: one delete.
+                watches.fire(FileObserver.MODIFY, "zz-gone.txt")
+                assertTrue(File(mirror, "zz-gone.txt").delete())
+                watches.fire(FileObserver.DELETE, "zz-gone.txt")
+            }
+        }
+        assertTrue(flooded, "precondition: the files were written while the folder opened")
+        val changes = checkNotNull(engine.takeChangesDuringOpen(mirror))
+        assertTrue(changes.recorded().size <= names.size + 3, "the open kept ${changes.recorded().size} events for ${names.size + 1} files")
+        writes.clear()
+
+        engine.replayChangesDuringOpen(changes, mirror, treeUri)
+        drain()
+
+        names.forEach { assertEquals("after $it", text(it), "$it did not reach the device as last written") }
+        assertEquals(names.sorted(), writes.sorted(), "a file was not sent exactly once")
+        assertFalse("zz-gone.txt" in device.keys, "the file deleted while the folder opened is still on the device")
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /**
+     * The watcher starts before the replay of what the open recorded has queued anything. A save in a folder made
+     * while the folder opened, seen as the watcher started, was queued ahead of the folder's own create: the
+     * device had no such folder yet, and the save was announced as kept inside the app, which the folder's create
+     * then disproved by sending it.
+     */
+    @Test
+    fun `a save in a folder made while its folder opens, seen as the watcher starts, is sent without a notice`() {
+        onDevice("0.txt", "zero")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val watches = OpenWatches().also { it.install() }
+        openRecording { _, _ -> }
+        inMirror("d/y.txt", "made while it opened")
+        watches.fire(FileObserver.CREATE or isDirFlag, "d")
+        var live = false
+        onProviderCall = {
+            if (!live) {
+                live = true
+                inMirror("d/z.txt", "saved as the watcher started")
+                observe(FileObserver.MODIFY, "d/z.txt")
+            }
+        }
+
+        replayWhatTheOpenRecorded()
+        onProviderCall = null
+        drain()
+
+        assertTrue(live, "precondition: the save was seen while the replay ran")
+        assertEquals("made while it opened", text("d/y.txt"))
+        assertEquals("saved as the watcher started", text("d/z.txt"))
+        assertEquals(emptyList<String>(), lost, "a save that reached the device was announced as kept inside the app")
+    }
+
+    /** The same for a folder renamed while it opened: queued ahead of the rename, the save missed it and stayed in the app. */
+    @Test
+    fun `a save in a folder renamed while its folder opens, seen as the watcher starts, reaches the renamed folder`() {
+        onDevice("0.txt", "zero")
+        onDevice("src")
+        onDevice("src/a.txt", "alpha")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val watches = OpenWatches().also { it.install() }
+        openRecording { _, _ -> }
+        assertTrue(File(mirror, "src").renameTo(File(mirror, "lib")))
+        watches.fire(FileObserver.MOVED_FROM or isDirFlag, "src")
+        watches.fire(FileObserver.MOVED_TO or isDirFlag, "lib")
+        var live = false
+        onProviderCall = {
+            if (!live) {
+                live = true
+                inMirror("lib/a.txt", "saved as the watcher started")
+                observe(FileObserver.MODIFY, "lib/a.txt")
+            }
+        }
+
+        replayWhatTheOpenRecorded()
+        onProviderCall = null
+        drain()
+
+        assertTrue(live, "precondition: the save was seen while the replay ran")
+        assertEquals("saved as the watcher started", text("lib/a.txt"), "the save missed the rename of its folder")
+        assertEquals(setOf("0.txt", "lib", "lib/a.txt"), device.keys)
+        assertEquals(emptyList<String>(), lost)
+    }
+
+    /**
+     * A folder moved out of the copy while its folder opens has the identity the open's watch read, and keeps it
+     * when the move is replayed: without one, an unrelated folder arriving within the second was taken for its
+     * rename, and the device's copy of the departed folder was renamed onto the arriving one's name.
+     */
+    @Test
+    fun `a folder moved away while its folder opens is not taken for the rename of a folder arriving after it`() {
+        onDevice("0.txt", "zero")
+        onDevice("gone")
+        onDevice("gone/g.txt", "golf")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val watches = OpenWatches().also { it.install() }
+        openRecording { _, _ -> }
+        assertTrue(File(mirror, "gone").renameTo(File(filesDir, "elsewhere")))
+        watches.fire(FileObserver.MOVED_FROM or isDirFlag, "gone")
+
+        replayWhatTheOpenRecorded()
+        File(filesDir, "incoming").mkdirs()
+        File(filesDir, "incoming/fresh.txt").writeText("from outside")
+        assertTrue(File(filesDir, "incoming").renameTo(File(mirror, "fresh")))
+        observe(FileObserver.MOVED_TO or isDirFlag, "fresh")
+        drain()
+
+        assertEquals("from outside", text("fresh/fresh.txt"), "the folder that arrived was not sent")
+        assertFalse("fresh/g.txt" in device.keys, "the departed folder was renamed onto the one that arrived")
+        assertEquals("golf", text("gone/g.txt"))
+    }
+
+    /**
+     * A folder renamed while its folder opens onto an empty folder the device also holds. The rename cannot be made
+     * on the device, where the name is taken, so the folder's files are sent into the folder that holds the name, as
+     * the watcher does for the same rename once the folder is open; the device keeps its copy under the old name.
+     */
+    @Test
+    fun `a folder renamed onto an empty folder while its folder opens is sent into that folder`() {
+        onDevice("0.txt", "zero")
+        onDevice("a")
+        onDevice("a/x.txt", "x-ray")
+        onDevice("b")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val notReached = mutableListOf<Int>()
+        engine.onUploadIncomplete = { _, count, _ -> notReached += count }
+        val watches = OpenWatches().also { it.install() }
+        var renamed = false
+        openRecording { done, _ ->
+            if (done == 1 && !renamed) {
+                renamed = true
+                assertTrue(File(mirror, "a").renameTo(File(mirror, "b")), "precondition: the rename replaced the empty folder")
+                watches.fire(FileObserver.MOVED_FROM or isDirFlag, "a")
+                watches.fire(FileObserver.MOVED_TO or isDirFlag, "b")
+            }
+        }
+        assertTrue(renamed, "precondition: the folder was renamed while it opened")
+
+        replayWhatTheOpenRecorded()
+        drain()
+
+        assertEquals("x-ray", text("b/x.txt"), "the folder renamed onto an empty one did not reach it")
+        assertEquals(emptyList<Int>(), notReached)
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /**
+     * A file a program makes while its folder opens, in a folder the device gained since the last open. The open
+     * makes that folder itself and has no watch inside it, so nothing records the file, and the open sends it as
+     * any file only the copy holds.
+     */
+    @Test
+    fun `a file made while its folder opens in a folder the device gained reaches the device`() {
+        onDevice("0.txt", "zero")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        onDevice("d")
+        onDevice("d/e.txt", "echo")
+        val notReached = mutableListOf<Int>()
+        engine.onUploadIncomplete = { _, count, _ -> notReached += count }
+        val watches = OpenWatches().also { it.install() }
+        var made = false
+        openRecording { done, _ ->
+            if (done == 2 && !made) {
+                made = true
+                // What the kernel reports for the open's own folder, and a file made in it that nothing watches.
+                watches.fire(FileObserver.CREATE or isDirFlag, "d")
+                inMirror("d/p.txt", "made in the new folder")
+            }
+        }
+        assertTrue(made, "precondition: the file was made while the folder opened")
+
+        replayWhatTheOpenRecorded()
+        drain()
+
+        assertEquals("made in the new folder", text("d/p.txt"))
+        assertEquals(emptyList<Int>(), notReached)
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /**
+     * A folder renamed onto an empty folder takes that folder's place in the record too. The folder it replaced kept
+     * its place under the same name, and the next departure from that name was given its identity, which no folder
+     * has any more and the kernel can give to the next one made. Here the arrival is reported only once the folder
+     * has moved on, so the record cannot read who arrived, and only the folder replaced answered for the name.
+     */
+    @Test
+    fun `a folder renamed onto an empty folder while its folder opens takes that folder's place in the record`() {
+        onDevice("0.txt", "zero")
+        onDevice("a")
+        onDevice("x")
+        onDevice("x/f.txt", "foxtrot")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val kernel = KernelWatches().also { it.install() }
+        openRecording { _, _ -> }
+        val replaced = identityOf(File(mirror, "a"))
+        assertTrue(File(mirror, "x").renameTo(File(mirror, "a")))
+        kernel.unlinked(replaced)
+        assertTrue(File(mirror, "a").renameTo(File(mirror, "c")))
+        for ((event, name) in listOf(FileObserver.MOVED_FROM to "x", FileObserver.MOVED_TO to "a", FileObserver.MOVED_FROM to "a", FileObserver.MOVED_TO to "c")) {
+            kernel.fire(event or isDirFlag, name)
+        }
+
+        val recorded = checkNotNull(engine.takeChangesDuringOpen(mirror)).recorded()
+        val departure = recorded.last { it.event == (FileObserver.MOVED_FROM or isDirFlag) && it.file.name == "a" }
+        assertFalse(departure.identity == replaced, "the folder that left a was recorded as the one it replaced")
     }
 }
