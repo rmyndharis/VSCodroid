@@ -24,8 +24,8 @@ A practical guide to using VSCodroid, the full VS Code IDE running natively on y
 
 ### What Happens on First Open
 
-1. **Install**. Download from the [Play Store](https://play.google.com/store/apps/details?id=com.vscodroid) or [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases). The core download is roughly 270 MB, and you need about 800 MB free for the extraction that follows.
-2. **Binary extraction**. On first launch, VSCodroid extracts bundled tools (Node.js, Python, Git, Bash, and others) to internal storage. About 603 MB lands on disk, unpacked one file at a time behind a progress bar, so allow minutes rather than seconds on a slower device. The ~800 MB above is that payload plus the working room setup insists on before it will start. It happens on the first launch and again after every app update or reinstall, because extraction follows the installed package's version and update timestamp rather than only what is already unpacked. An update needs far less free space than a fresh install (the app credits what it already holds, so roughly 230 MB for a complete tree rather than 800 MB), but it does re-copy the files and it does take minutes. A first run that is interrupted and retried with the same installed package is the one case that does not start over: files already the right size are left alone.
+1. **Install**. Download from the [Play Store](https://play.google.com/store/apps/details?id=com.vscodroid) or [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases). The core download is roughly 210 MB (the APK on GitHub Releases is 217 MB), and you need about 800 MB free for the extraction that follows.
+2. **Binary extraction**. On first launch, VSCodroid extracts bundled tools (Node.js, Python, Git, Bash, and others) to internal storage. About 603 MB of files are unpacked, one file at a time behind a progress bar, so allow minutes rather than seconds on a slower device. They occupy more than that on disk, because the filesystem spends space of its own on every file and directory, and setup also wants working room: the ~800 MB above is what it insists on having free before it will start. It happens on the first launch and again after every app update or reinstall, because extraction follows the installed package's version and update timestamp rather than only what is already unpacked. An update needs far less free space than a fresh install (the app credits what it already holds, so roughly 230 MB for a complete tree rather than 800 MB), but it does re-copy the files and it does take minutes. A first run that is interrupted and retried with the same installed package is the one case that does not start over: files already the right size are left alone.
 3. **Language Picker**. A prompt asks "What do you code in?" with options for Ruby, Java and C/C++. It comes back at each launch until you answer it with Continue or Skip (a Continue that chose something counts once its downloads have ended, so if the app ends before they finish, the picker comes back at the next launch), and your answer is not final: touch and hold the app icon and pick **Manage toolchains** to add or remove them later. Whatever you select downloads there on the setup screen, one at a time; a download that fails is skipped and the rest continue. Skip goes straight to the editor.
 4. **Ready**. The VS Code editor loads with terminal, file explorer, and all bundled tools available immediately.
 
@@ -78,7 +78,7 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   add another.
 - A device folder is edited as a copy inside the app. The copy is read from the
   device when you open the folder, and each save is written back to the device
-  as you make it. It leaves out files the device folder reports as over 50 MB,
+  as you make it. It leaves out files the device folder reports as over 50 MiB,
   and the directories `.git`, `node_modules`, `.gradle`, `.idea`, `venv`, `.env`
   and `__pycache__` are neither read in nor written back, so a git repository
   opened this way has no history here. Changes another app makes while the
@@ -100,7 +100,7 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   next save of the file keeps the other app's beside it. If the device folder's
   version cannot be copied, as can happen in a network folder while it is
   offline even when no other app changed the file, or when the device folder
-  reports that version as over 50 MB, your save stays inside VSCodroid and a
+  reports that version as over 50 MiB, your save stays inside VSCodroid and a
   notice says so. While the folder is open VSCodroid tries the save again by
   itself, at least every five minutes, and it goes through, without a second
   notice, once that version can be read or copied. If the folder reports file
@@ -112,7 +112,7 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   the editor, ends the trying: your next save of the file then keeps the other
   app's version beside yours as a copy, as above, and where the folder reports
   file times opening the folder tries the save too. In either kind of folder, an
-  open that finds that version reported as over 50 MB keeps saves of the file
+  open that finds that version reported as over 50 MiB keeps saves of the file
   inside VSCodroid until an open finds it smaller.
   When a file and a folder share a name, one on the device and one in the editor,
   for example after you delete a folder in the Explorer, which leaves it on the
@@ -561,7 +561,7 @@ storage** shows none of those files. So bring the file inside first:
    itself, which is where a browser usually saves, so first move the file into
    a folder of its own, such as a new one inside Download, with the phone's
    Files app. A device folder is copied into the app for as long as it is open,
-   so pick a folder holding little else. Files over 50 MB are not carried in at
+   so pick a folder holding little else. Files over 50 MiB are not carried in at
    all, so a very large VSIX has to arrive another way.
 3. Open a terminal (**Ctrl+\`**), which starts in that folder, and copy it
    across: `cp name.vsix ~/`.
@@ -1035,13 +1035,13 @@ Beyond the bundled tools (Node.js, Python, Git, Bash), VSCodroid offers addition
 | Language | Download Size | Installed Size | Includes |
 |----------|--------------|----------------|----------|
 | Ruby | 11 MB | 41 MB | ruby, gem, irb, bundler, rake, and the headers native gems build against |
-| Java 25 (OpenJDK) | 69 MB | 192 MB | java, javac, jar, jshell |
-| C/C++ (clang) | 80 MB | 280 MB | cc, c++, gcc, g++, clang, clang++, ld, ar, ranlib, nm, strip, objdump, objcopy, readelf, size, clangd (the language server), and the C and C++ headers |
-| Codex | 146 MB | 375 MB | codex, OpenAI's coding agent (see [Codex](#codex)); not a language, so the first-run picker does not offer it |
+| Java 25 (OpenJDK) | 70 MB | 192 MB | java, javac, jar, jshell |
+| C/C++ (clang) | 81 MB | 280 MB | cc, c++, gcc, g++, clang, clang++, ld, ar, ranlib, nm, strip, objdump, objcopy, readelf, size, clangd (the language server), and the C and C++ headers |
+| Codex | 153 MB | 395 MB | codex, OpenAI's coding agent (see [Codex](#codex)); not a language, so the first-run picker does not offer it |
 
 Codex is the largest. Installing a toolchain holds the unpacked copy and the
 installed copy at once, so the install asks for roughly twice the installed size free while
-it runs, which for this one is about 770 MB. Reinstalling or updating a toolchain that is
+it runs, which for this one is about 840 MB. Reinstalling or updating a toolchain that is
 already installed asks for less, about one installed size plus its largest file, because the
 copy replaces files that are already on the disk.
 
@@ -1215,7 +1215,7 @@ files in the project and run commands. The `codex` command in a terminal shares 
 What to know before using it:
 
 - **Space.** The extension is about 420 MB to download and about 1.2 GB once unpacked, on top of the
-  toolchain's 375 MB, and Codex keeps its own data under `~/.codex`: about 150 MB after a few runs, 50 MB of it
+  toolchain's 395 MB, and Codex keeps its own data under `~/.codex`: about 150 MB after a few runs, 50 MB of it
   a catalogue of plugins it fetches when it first starts. A phone short of space may not have room for the
   extension, or for the next update of the app once it is installed.
 - **Approvals.** The engine's own sandbox is not available on Android: `codex sandbox` answers that it is not
@@ -1718,7 +1718,7 @@ A download saved over a file that already exists is copied in two steps, and And
 
 ### Storage
 
-Core installation extracts approximately 603 MB to internal storage. With Ruby and Java installed, expect around 830 MB, and about 1,090 MB with C/C++ as well. The Codex toolchain adds about 375 MB. Setup needs about 800 MB free before it starts, which is more than it ends up occupying because extraction needs room to work. If it refuses, it asks for the shortfall it measured rather than the whole figure, so a device part of the way through is asked only for what is missing. Beyond it, keep a few hundred MB free for node_modules, build artifacts and caches.
+Core installation extracts approximately 603 MB to internal storage. With Ruby and Java installed, expect around 840 MB, and about 1,120 MB with C/C++ as well. The Codex toolchain adds about 395 MB. Setup needs about 800 MB free before it starts, which is more than it ends up occupying because extraction needs room to work. If it refuses, it asks for the shortfall it measured rather than the whole figure, so a device part of the way through is asked only for what is missing. Beyond it, keep a few hundred MB free for node_modules, build artifacts and caches.
 
 ---
 

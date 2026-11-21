@@ -276,6 +276,14 @@ jobs:
       - name: Check no document offers a withdrawn toolchain
         run: python3 scripts/check-toolchain-claims.py
 
+      # The README, the user guide and the requirements document quote the toolchain
+      # sizes and the totals they add up to by hand. Each is compared with
+      # ToolchainRegistry.kt, which is what the card quotes and what
+      # package-toolchains.sh holds the packs to, so a pack that grew or a registry
+      # figure that moved cannot leave a document saying less than the app does.
+      - name: Check the documents quote the sizes the registry records
+        run: python3 scripts/check-size-claims.py
+
       # Reads two Markdown files, the checklist and the release plan that cites
       # its rows, and no assets. The summary it checks is derived data kept by
       # hand, and it is the only record of whether a manual test pass covered

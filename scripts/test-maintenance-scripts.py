@@ -1064,15 +1064,23 @@ esac
 
     def test_toolchain_zip_is_held_to_the_sizes_the_registry_records(self):
         """The card quotes both figures, and a figure below what ships costs the person choosing."""
+        # Two entries, the second with figures of its own: a read that runs on past the first entry's
+        # end answers with the second pack's figure when the first has none, and passes by accident.
         registry = (
             "ToolchainInfo(\n"
             "    packName = \"toolchain_ruby\",\n"
+            "    // estimatedSize = 999_999_999, a figure in a comment is not the figure\n"
             "    estimatedSize = %s,\n"
             "    downloadSize = %s,\n"
             ")\n"
+            "ToolchainInfo(\n"
+            "    packName = \"toolchain_java\",\n"
+            "    estimatedSize = 192_000_000,\n"
+            "    downloadSize = 70_000_000,\n"
+            ")\n"
         )
 
-        def package(estimated, download):
+        def package(estimated, download, stale_zip=False):
             with tempfile.TemporaryDirectory() as raw:
                 root = Path(raw)
                 script = root / "scripts" / "package-toolchains.sh"
@@ -1084,6 +1092,8 @@ esac
                 write(assets / "toolchain_ruby.json", '{"version": "1"}')
                 (assets / "usr" / "lib").mkdir(parents=True)
                 (assets / "usr" / "lib" / "blob").write_bytes(os.urandom(300_000))
+                if stale_zip:
+                    write(root / "toolchain-zips" / "toolchain_ruby.zip", "from an earlier run")
                 result = run(["bash", str(script), "ruby"], root)
                 result["zip"] = (root / "toolchain-zips" / "toolchain_ruby.zip").exists()
                 return result
@@ -1092,19 +1102,113 @@ esac
         self.assertEqual(within["status"], 0, within)
         self.assertTrue(within["zip"])
         self.assertIn("Download:", within["stdout"])
+        self.assertIn("recorded 1000000)", within["stdout"])
 
         small_zip = package("1_000_000", "1_000")
         self.assertEqual(small_zip["status"], 1, small_zip)
         self.assertIn("downloadSize", small_zip["stderr"])
         self.assertFalse(small_zip["zip"], "a ZIP the gate refused was left to be attached to a release")
 
-        small_tree = package("1_000", "1_000_000")
+        small_tree = package("1_000", "1_000_000", stale_zip=True)
         self.assertEqual(small_tree["status"], 1, small_tree)
         self.assertIn("estimatedSize", small_tree["stderr"])
+        self.assertFalse(small_tree["zip"], "a ZIP from an earlier run survived a refused tree")
 
-        unrecorded = package("1_000_000", "oops")
-        self.assertEqual(unrecorded["status"], 1, unrecorded)
-        self.assertIn("records no downloadSize", unrecorded["stderr"])
+        # A value that is not a plain number is no figure: it must not be read from the next entry.
+        for unreadable in ("oops", "RUBY_ZIP_BYTES", "11_000_000 + 1"):
+            result = package("1_000_000", unreadable)
+            self.assertEqual(result["status"], 1, (unreadable, result))
+            self.assertIn("records no downloadSize", result["stderr"], (unreadable, result))
+            self.assertNotIn("70000000", result["stdout"], "the next pack's figure was read for this one")
+
+        # A Long literal is a plain number.
+        suffixed = package("1_000_000", "1_000_000L")
+        self.assertEqual(suffixed["status"], 0, suffixed)
+
+    def test_size_claims_follow_the_registry_and_the_apk(self):
+        """A figure a document quotes by hand has to be the one the code gives."""
+        def registry(codex_download="153_000_000", ruby_download="11_300_000", extra=""):
+            entries = {
+                "ruby": ("41_000_000", ruby_download), "java": ("192_000_000", "70_000_000"),
+                "cpp": ("280_000_000", "81_000_000"), "codex": ("395_000_000", codex_download),
+            }
+            return "".join(
+                f'ToolchainInfo(\n    packName = "toolchain_{pack}",\n    estimatedSize = {est},\n'
+                f"    downloadSize = {dl},\n)\n"
+                for pack, (est, dl) in entries.items()
+            ) + extra
+
+        readme = (
+            "| Play Store download (core)             | ~1 MB              |\n"
+            "| + Each toolchain (on-demand)           | 11-153 MB per toolchain |\n"
+            "| Extracted to internal storage (core)   | ~1 MB              |\n"
+            "| Extracted, plus Ruby and Java          | ~230 MB              |\n"
+            "| Extracted, plus Ruby, Java and C/C++   | ~510 MB            |\n"
+            "| + Codex, on top of any of these        | +395 MB              |\n"
+        )
+        guide = (
+            "The core download is roughly 1 MB, and you need room.\n"
+            "About 1 MB of files are unpacked, one by one.\n"
+            "| Language | Download Size | Installed Size | Includes |\n"
+            "| Ruby | 11 MB | 41 MB | ruby |\n"
+            "| Java 25 (OpenJDK) | 70 MB | 192 MB | java |\n"
+            "| C/C++ (clang) | 81 MB | 280 MB | cc |\n"
+            "| Codex | 153 MB | 395 MB | codex |\n"
+            "it runs, which for this one is about 840 MB. Reinstalling\n"
+            "once unpacked, on top of the\n  toolchain's 395 MB, and Codex keeps\n"
+            "Core installation extracts approximately 1 MB to internal storage. With Ruby and Java installed, "
+            "expect around 230 MB, and about 510 MB with C/C++ as well. The Codex toolchain adds about 395 MB.\n"
+        )
+        srs = (
+            "| NFR-RES-05 | Runtime storage | About 1 MiB (1 MB), the asset tree that is measured; about 219 MiB "
+            "(230 MB) with Ruby and Java installed, and about 486 MiB (510 MB) with C/C++ as well, by the estimates |\n"
+        )
+        manager = "internal const val SPACE_BUFFER = 50_000_000L\n"
+
+        def check(*, readme=readme, guide=guide, srs=srs, registry_text=None, apk=None):
+            with tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                script = root / "scripts" / "check-size-claims.py"
+                script.parent.mkdir()
+                shutil.copy(SOURCE / "scripts" / "check-size-claims.py", script)
+                kotlin = root / "android/app/src/main/kotlin/com/vscodroid/setup"
+                write(kotlin / "ToolchainRegistry.kt", registry_text if registry_text is not None else registry())
+                write(kotlin / "ToolchainManager.kt", manager)
+                write(root / "README.md", readme)
+                write(root / "docs/USER_GUIDE.md", guide)
+                write(root / "docs/02-SRS.md", srs)
+                command = [sys.executable, "-I", str(script)]
+                if apk:
+                    path = root / "app-release.apk"
+                    with zipfile.ZipFile(path, "w") as archive:
+                        archive.writestr("assets/core.bin", b"x" * apk["assets"])
+                        archive.writestr("assets/nls/messages.bin", b"x" * 1_000)
+                        archive.writestr("classes.dex", b"")
+                    command += ["--apk", str(path)]
+                return run(command, root)
+
+        self.assertEqual(check()["status"], 0, check())
+        self.assertEqual(check(apk={"assets": 1_000_000})["status"], 0, check(apk={"assets": 1_000_000}))
+
+        def refused(label, expected, **kwargs):
+            result = check(**kwargs)
+            self.assertEqual(result["status"], 1, (label, result))
+            self.assertIn(expected, result["stdout"] + result["stderr"], (label, result))
+
+        refused("codex on top", "README.md", readme=readme.replace("+395 MB", "+375 MB"))
+        refused("codex row", "Codex row of the toolchain table", guide=guide.replace("| Codex | 153 MB", "| Codex | 134 MB"))
+        refused("codex free space", "Codex install free space", guide=guide.replace("about 840 MB", "about 770 MB"))
+        refused("srs total", "docs/02-SRS.md", srs=srs.replace("(230 MB)", "(200 MB)"))
+        refused("total with C/C++", "total with C/C++", readme=readme.replace("~510 MB", "~480 MB"))
+        refused("a sentence that went away", "expected exactly one", guide=guide.replace("The Codex toolchain adds about 395 MB.", ""))
+        refused("registry moved", "Codex row of the toolchain table", registry_text=registry(codex_download="134_000_000"))
+        refused("range follows the registry", "toolchain download range", registry_text=registry(ruby_download="9_000_000"))
+        refused("a figure that is not a number", "no plain number", registry_text=registry(codex_download="CODEX_ZIP_BYTES"))
+        refused(
+            "a pack with no label", "no label",
+            registry_text=registry(extra='ToolchainInfo(\n    packName = "toolchain_lua",\n    estimatedSize = 1,\n    downloadSize = 1,\n)\n'),
+        )
+        refused("core extraction against the APK", "the APK holds", apk={"assets": 2_000_000})
 
     def test_site_live_data_holds_only_what_was_checked(self):
         source = SOURCE / "scripts/fetch-site-live.py"

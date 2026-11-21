@@ -9,8 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- The Codex toolchain card quotes a 146 MB download, up from 134 MB, which is what its pack weighs.
-- The release build refuses a toolchain ZIP that is larger than the download size the card quotes for it.
+- The Toolchains screen quotes Codex at 153 MB to download and 395 MB installed, up from 134 MB and 375 MB, which were below what the pack weighs, and every toolchain's figures leave room for the next build of its package.
+- The README, the user guide and the requirements document quote the sizes the app does and measures: a core download of about 210 MB (they said 270 MB), about 840 MB with Ruby and Java and 1,120 MB with C/C++ (830 and 1,090), 840 MB of free space for a Codex install (770), and 50 MiB for the largest file a device folder carries (50 MB).
+- The release build refuses a toolchain ZIP larger than the download size the Toolchains screen quotes, and reads each toolchain's sizes from its own entry only, never from a comment or the next toolchain.
+- CI refuses a README, user guide or requirements document whose toolchain sizes or totals differ from the registry, and the release build refuses a documented core size that differs from the APK's.
 
 ## [1.10.0] - 2026-11-21
 
