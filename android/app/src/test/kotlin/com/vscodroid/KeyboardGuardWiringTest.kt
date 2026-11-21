@@ -239,7 +239,7 @@ class KeyboardGuardWiringTest {
                 "evaluateJavascript, so the hold never comes back.",
         )
         assertTrue(
-            Regex("""override fun onConfigurationChanged\(newConfig: Configuration\)[^}]*keyboardDismissal\.turned\(\)""")
+            Regex("""private fun configurationChanged\(newConfig: Configuration\)[^}]*keyboardDismissal\.turned\(\)""")
                 .containsMatchIn(source),
             "onConfigurationChanged no longer tells keyboardDismissal about the turn, so the " +
                 "hold is written for the hide a turn of the phone brings and keeps the keyboard " +
@@ -250,7 +250,7 @@ class KeyboardGuardWiringTest {
             "the guard no longer exposes __vscodroidFinishComposition on window",
         )
         val configBody = SourceScan.withoutComments(
-            SourceScan.body(source, "override fun onConfigurationChanged("),
+            SourceScan.body(source, "private fun configurationChanged("),
         )
         assertTrue(
             configBody.contains("finishKeyboardCompositionOnTurn()"),
@@ -541,7 +541,7 @@ class KeyboardGuardWiringTest {
             recreate.contains("val newWebView = EditorWebView(this)"),
             "recreateWebView builds a plain WebView: after a renderer crash no turn holds the editor answer.",
         )
-        val turn = SourceScan.withoutComments(SourceScan.body(activity, "override fun onConfigurationChanged("))
+        val turn = SourceScan.withoutComments(SourceScan.body(activity, "private fun configurationChanged("))
         assertTrue(
             turn.contains("armTextEditorHold(keyboardDismissal.turned())"),
             "onConfigurationChanged no longer arms the hold from what keyboardDismissal says about the keyboard at the turn.",

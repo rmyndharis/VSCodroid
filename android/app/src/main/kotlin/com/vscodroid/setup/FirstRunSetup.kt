@@ -2228,7 +2228,11 @@ class FirstRunSetup(
      *  - a `.bashrc` that still opens with the header this app writes but has
      *    lost the `PROJECTS_DIR` export that always followed it. Someone
      *    replacing our file writes their own; someone editing it does not
-     *    usually keep our first line and delete our third.
+     *    usually keep our first line and delete our third. Text after the
+     *    header is kept aside first. When `.bashrc` is a link, the file it
+     *    names is kept elsewhere and may be read by other machines, so it is
+     *    rewritten only when it is the header alone or every byte of it is the
+     *    start of what this app writes.
      *
      * A partial file that is neither -- one that got far enough to look
      * plausible -- is left alone, and that is deliberate. It cannot be told
@@ -2315,8 +2319,12 @@ class FirstRunSetup(
             // person's own or a longer cut, and the header proves nothing about it.
             val beyondHeader = headerWithoutBody && text.orEmpty().removePrefix(BASHRC_HEADER).isNotBlank()
             // And a link is the file they keep elsewhere, often in a repository other machines read:
-            // the rewrite would put this device's paths into what the link names. Left as it is.
-            val theirs = beyondHeader && Files.isSymbolicLink(bashrc.toPath())
+            // the rewrite would put this device's paths into what the link names. Left as it is, unless
+            // every byte of it is the start of what this app writes: that is a copy of ours cut short,
+            // which an older release writing through the link left on a full disk, and nothing of the
+            // person's is in it. It is kept aside below like any text after the header.
+            val theirs = beyondHeader && Files.isSymbolicLink(bashrc.toPath()) &&
+                !isStartOf(bytes ?: ByteArray(0), bashrcText().toByteArray())
             if ((emptied || headerWithoutBody) && !theirs) {
                 // Written OVER, never deleted first. Deleting is what satisfied
                 // createBashrc's `!exists()` guard, and it is also what let this
@@ -3430,8 +3438,6 @@ claude() {
      *   makes a retry worth offering.
      */
     private fun writeBashrc(): Boolean {
-        val projectsDir = Environment.getProjectsDir(context)
-        val safMirrorsDir = Environment.getSafMirrorsDir(context)
         val bashrc = File(context.filesDir, "home/.bashrc")
         // Atomic for the reason the rewrite in ensurePromptFix() is: the
         // caller's guard is the file's own existence, so a first-run write
@@ -3439,7 +3445,15 @@ claude() {
         // was never written again -- the prompt half-defined and the
         // PROJECTS_DIR export missing, on a device that had never had a
         // working shell to compare against.
-        val initial = BASHRC_HEADER + "\n" + PROMPT_BLOCK + "\n\n" + """
+        val text = bashrcText().toByteArray()
+        return writeAtomically(bashrc, throughLink = true) { it.write(text) }
+    }
+
+    /** What [writeBashrc] writes, which [repairTruncatedSetupFiles] also reads a cut-short copy against. */
+    private fun bashrcText(): String {
+        val projectsDir = Environment.getProjectsDir(context)
+        val safMirrorsDir = Environment.getSafMirrorsDir(context)
+        return BASHRC_HEADER + "\n" + PROMPT_BLOCK + "\n\n" + """
             export PROJECTS_DIR='$projectsDir'
             export SAF_MIRRORS_DIR='$safMirrorsDir'
             alias ls='ls --color=auto'
@@ -3448,7 +3462,6 @@ claude() {
             # On-demand toolchain env vars
             [ -f "${'$'}HOME/.vscodroid/toolchain-env.sh" ] && . "${'$'}HOME/.vscodroid/toolchain-env.sh"
         """.trimIndent() + "\n\n" + STARTUP_DIR_BLOCK + "\n"
-        return writeAtomically(bashrc, throughLink = true) { it.write(initial.toByteArray()) }
     }
 
     private fun createBashProfile() {
@@ -5993,6 +6006,10 @@ internal fun isSymlink(file: File): Boolean =
  * 0170000 and `S_IFLNK` is 0120000.
  */
 internal fun isSymlinkMode(stMode: Int): Boolean = (stMode and 0xF000) == 0xA000
+
+/** Whether [prefix] is all of [whole] up to its own length, and shorter than it. */
+private fun isStartOf(prefix: ByteArray, whole: ByteArray): Boolean =
+    prefix.size < whole.size && whole.copyOf(prefix.size).contentEquals(prefix)
 
 /**
  * Writes [dest] through a temporary file, so a failure leaves no partial file

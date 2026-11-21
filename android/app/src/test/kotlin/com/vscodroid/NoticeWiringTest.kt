@@ -173,55 +173,22 @@ class NoticeWiringTest {
     }
 
     /**
-     * "The server is taking longer than usual to start" is a dialog from Android 12, and nothing took
-     * it down when the server did start: it stayed over the working editor until it was tapped.
-     *
-     * It is taken back by its topic, not its text: a screen made again for a language change carries
-     * the old language's text, which the new language's string does not match. And it is taken back
-     * where a screen binds to a server already ready, which is how a server that came up while no
-     * screen was bound reaches the dialog the screen before carried over.
+     * The slow start notice is recorded with the topic that takes it back once the server is up. Raised
+     * from inside the late readiness poll, a coroutine on the service's main dispatcher that a JVM test
+     * cannot reach, so this is read from the source; what the screens do with the topic, and that a
+     * terminal notice is recorded and not raised, is run in `SlowStartNoticeTest`.
      */
     @Test
-    fun `the slow start notice is taken back by its topic when the server is ready`() {
-        val main = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"))
-        val callbacks = SourceScan.body(main, "private fun setupServiceCallbacks(")
-        val ready = callbacks.substringAfter("nodeService?.onServerReady = ").substringBefore("nodeService?.onServerError = ")
-        val error = callbacks.substringAfter("nodeService?.onServerError = ").substringBefore("nodeService?.onServerGaveUp = ")
-        val retract = "AppNotices.retractTopic(this, NodeService.TOPIC_SLOW_START)"
-
-        assertTrue(ready.contains(retract), "onServerReady no longer takes the slow start notice back")
-        assertTrue(
-            callbacks.substringAfter("is BindDecision.Load ->").substringBefore("BindDecision.Wait").contains(retract),
-            "a screen that binds to a server already ready leaves the slow start notice carried from the screen before",
-        )
-        assertFalse(
-            main.contains("AppNotices.retract("),
-            "a notice is taken back by its text again, which a language change makes miss",
-        )
-        assertTrue(
-            error.contains("lastStartupNotice()?.takeIf { it.message == message }?.topic") &&
-                error.contains("AppNotices.showNotice(this, message, Toast.LENGTH_LONG, topic = topic)"),
-            "a notice raised to a bound screen is shown without the topic its readiness takes it back by",
-        )
-        assertTrue(
-            callbacks.substringAfter("is BindDecision.ShowNotice ->").substringBefore("is BindDecision.ShowGaveUp ->")
-                .contains("AppNotices.showNotice(this, decision.message, Toast.LENGTH_LONG, topic = notice?.topic)"),
-            "a notice read when a screen binds is shown without the topic its readiness takes it back by",
-        )
+    fun `the slow start notice is recorded with its topic`() {
         val service = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/service/NodeService.kt"))
         assertTrue(
             service.contains("reportStartupNotice(getString(R.string.status_server_slow_start), topic = TOPIC_SLOW_START)"),
             "the slow start notice is recorded without its topic",
         )
-        assertTrue(
-            SourceScan.body(service, "private fun reportStartupNotice(").contains("if (!terminal) onServerError?.invoke(message)"),
-            "a terminal notice is raised as well as recorded again, and flashes as a dialog under the page " +
-                "that onServerGaveUp puts up at once",
-        )
+        val main = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"))
         assertFalse(
-            callbacks.substringAfter("is BindDecision.ShowGaveUp ->").substringBefore("is BindDecision.Load ->")
-                .contains("AppNotices.showNotice("),
-            "a screen that binds after the server gave up raises the notice the gave-up page takes down at once",
+            main.contains("AppNotices.retract("),
+            "a notice is taken back by its text again, which a language change makes miss",
         )
     }
 

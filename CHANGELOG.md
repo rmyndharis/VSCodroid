@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A change of navigation device, night mode or keyboard no longer ends the word a keyboard is composing in the editor, or brings back a keyboard put away just after it; only a turn, a resize or a fold does.
+- Stop Server from the notification no longer freezes the screen for up to a few seconds while the server shuts down.
+- A toolchain install whose command name is taken by a folder now says the install failed and points at the log, instead of asking for free space that would not help.
+- A linked `.bashrc` holding only the start of the app's own text, cut short on a full disk by an older release, is now repaired through the link, with a copy kept aside.
+- A projects folder that resolves into `~/.ssh`, `~/.claude` or another location that must stay unreadable is no longer served to webviews.
+
 ## [1.10.1] - 2026-11-21
 
 ### Fixed

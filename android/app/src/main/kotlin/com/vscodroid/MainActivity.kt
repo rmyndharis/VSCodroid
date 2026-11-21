@@ -11,6 +11,7 @@ import android.content.ComponentCallbacks2.TRIM_MEMORY_COMPLETE
 import android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE
 import android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL
 import android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Typeface
@@ -386,7 +387,8 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * The directories this app publishes into the WebView, resolved once.
      *
      * Resolved on the main thread, deliberately. [publishedResourceRoots] stats
-     * external storage and canonicalises four paths, so it is disk I/O, and
+     * external storage and canonicalises four paths (and [sensitivePaths], which it
+     * leaves out of them), so it is disk I/O, and
      * [MainThreadWatch] makes a debug build say so: it is the first violation
      * logged on every launch, and it is expected. It is also the allowlist that
      * `shouldInterceptRequest` compares every resource request against, and
@@ -401,7 +403,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * [recreateWebView] clears `bridgeInitialized`, so a plain call would re-stat
      * all four on every renderer crash, the moment the app can least afford it.
      */
-    private val resourceRoots: List<String> by lazy { publishedResourceRoots(this) }
+    private val resourceRoots: List<String> by lazy { publishedResourceRoots(this, sensitivePaths) }
 
     /** Directories the interceptor must refuse to serve, resolved once, as above. */
     private val sensitivePaths: List<String> by lazy { sensitiveLocations(this) }
@@ -791,6 +793,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         // Before super.onCreate(), as the call it replaces required.
         drawBehindSystemBars()
         super.onCreate(savedInstanceState)
+        lastConfiguration = Configuration(resources.configuration)
         // A screen made again (a font size or language change, or a restore after
         // the process was killed) is handed the intent it last had, and Recents
         // restarts a task whose screens are gone with its first intent, marked as
@@ -1448,20 +1451,49 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
 
     /**
      * The manifest's `configChanges` keeps the activity across a turn of the phone,
-     * a resize or a fold, so this is where one is seen. The keyboard is reported
-     * hidden with it and comes back by itself, [keyboardDismissal] must not hold
-     * the page's editor down for that. Let the keyboard commit its word before
-     * finishing the composition and releasing the old native input connection,
-     * the second only while the person is aimed at text: the refocus it makes reaches
-     * the page's focus handler as a new focus, which after a drag outside text
-     * holds the host and takes a keyboard that stayed up away.
+     * a resize or a fold, and across the other changes it lists, so this is where
+     * they are seen. See [configurationChanged].
      */
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        armTextEditorHold(keyboardDismissal.turned())
-        edgeBackGesture.lifted()
-        keyboardDismissal.edgeLifted()
-        finishKeyboardCompositionOnTurn()
+        configurationChanged(newConfig)
+    }
+
+    /**
+     * The configuration this activity was last given, so a change can be told apart
+     * from a turn by what it changed ([isScreenTurn]). Null until [onCreate] records it.
+     */
+    private var lastConfiguration: Configuration? = null
+
+    /**
+     * [onConfigurationChanged] after the framework's part, apart so that a JVM test
+     * can run it: the framework's own method cannot run there.
+     *
+     * A turn of the phone, a resize or a fold reports the keyboard hidden and it comes
+     * back by itself, so [keyboardDismissal] must not hold the page's editor down for
+     * that. Let the keyboard commit its word before finishing the composition and
+     * releasing the old native input connection, the second only while the person is
+     * aimed at text: the refocus it makes reaches the page's focus handler as a new
+     * focus, which after a drag outside text holds the host and takes a keyboard that
+     * stayed up away.
+     *
+     * Only a change of the screen's shape is such a turn. A change of navigation type,
+     * of the night mode a schedule switches, or of the keyboard attached, also reaches
+     * here and was taken for one: it finished a word the keyboard was composing, and
+     * for up to 13 s ([KeyboardDismissal.TURN_CAP_MS]) credited to the turn a keyboard
+     * the person put away, which then came back at the next scroll. A change whose
+     * diff cannot be read (no configuration recorded yet) is taken for a turn, as
+     * every change was before.
+     */
+    private fun configurationChanged(newConfig: Configuration) {
+        val diff = lastConfiguration?.diff(newConfig)
+        lastConfiguration = Configuration(newConfig)
+        if (diff == null || isScreenTurn(diff)) {
+            armTextEditorHold(keyboardDismissal.turned())
+            edgeBackGesture.lifted()
+            keyboardDismissal.edgeLifted()
+            finishKeyboardCompositionOnTurn()
+        }
         // The keyboard the extra key row stood aside for is gone, a Bluetooth one
         // asleep or unpaired, and the soft keyboard is what is left. A touch would
         // bring the row back, but the person may well carry on typing on the screen.
@@ -8542,6 +8574,18 @@ private const val FORCED_REMOVAL_CONFIRM_MS = 45_000L
 internal const val PRESSURE_NONE = "none"
 internal const val PRESSURE_MODERATE = "moderate"
 internal const val PRESSURE_CRITICAL = "critical"
+
+/**
+ * Whether a change of configuration with this [diff] (`Configuration.diff`) changes the shape
+ * of the screen: a turn of the phone, a resize in a window or a fold. Those are the changes that
+ * take the keyboard down for a moment and bring it back. A change of navigation type, of night
+ * mode, of the keyboard attached or of density alone does not reshape the window, and is not
+ * one, though the manifest keeps the activity across all of them.
+ */
+internal fun isScreenTurn(diff: Int): Boolean = diff and (
+    ActivityInfo.CONFIG_ORIENTATION or ActivityInfo.CONFIG_SCREEN_SIZE or
+        ActivityInfo.CONFIG_SMALLEST_SCREEN_SIZE or ActivityInfo.CONFIG_SCREEN_LAYOUT
+    ) != 0
 
 /**
  * What a trim level actually says about memory, which is not what comparing

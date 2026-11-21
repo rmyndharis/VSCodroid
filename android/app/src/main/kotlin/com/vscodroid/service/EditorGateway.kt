@@ -460,13 +460,19 @@ internal class EditorGateway(
  *
  * Throws when the descriptors cannot be listed or one of the sockets cannot be looked at: an
  * answer that left out a connection of this process would have it closed as another's.
+ *
+ * [descriptors] is where the process's descriptors are listed, and a parameter only so that a
+ * JVM test can lay out a directory of its own; nothing in the app passes another.
  */
-internal fun ownLoopbackClients(listener: InetSocketAddress): Set<InetSocketAddress> {
+internal fun ownLoopbackClients(
+    listener: InetSocketAddress,
+    descriptors: File = File("/proc/self/fd"),
+): Set<InetSocketAddress> {
     val ends = ArrayList<Pair<SocketAddress?, SocketAddress?>>()
-    val names = File("/proc/self/fd").list() ?: throw IOException("The descriptors cannot be listed")
+    val names = descriptors.list() ?: throw IOException("The descriptors cannot be listed")
     for (name in names) {
         val number = name.toIntOrNull() ?: continue
-        val kind = try { Os.readlink("/proc/self/fd/$number") } catch (_: ErrnoException) { continue }
+        val kind = try { Os.readlink("${descriptors.path}/$number") } catch (_: ErrnoException) { continue }
         if (!kind.startsWith("socket:")) continue
         val copy = try {
             ParcelFileDescriptor.fromFd(number)
