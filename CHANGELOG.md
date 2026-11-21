@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.1] - 2026-11-21
+
 ### Fixed
 
 - The Toolchains screen quotes Codex at 153 MB to download and 395 MB installed, up from 134 MB and 375 MB, which were below what the pack weighs, and every toolchain's figures leave room for the next build of its package.
@@ -1557,7 +1559,8 @@ This release represents the cumulative work across milestones M0 through M5, bri
 - Health check polling for server readiness
 - Android intent handling for "Open with VSCodroid"
 
-[Unreleased]: https://github.com/rmyndharis/VSCodroid/compare/v1.10.0...HEAD
+[Unreleased]: https://github.com/rmyndharis/VSCodroid/compare/v1.10.1...HEAD
+[1.10.1]: https://github.com/rmyndharis/VSCodroid/compare/v1.10.0...v1.10.1
 [1.10.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.7.0...v1.8.0
