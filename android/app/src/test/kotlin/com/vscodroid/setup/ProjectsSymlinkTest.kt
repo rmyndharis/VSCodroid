@@ -269,6 +269,26 @@ class ProjectsSymlinkTest {
     }
 
     /**
+     * The link is the record of which folder the install works in, and it is read as one only when it
+     * names a folder called `projects`. `~/projects` is a root the webview serves as a whole, so a link
+     * that something re-pointed at `~` or at a folder of keys must not become the answer on the launch
+     * that cannot see shared storage, where the link is all there is to go on.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = ["home", "home/.ssh", "keys"])
+    fun `a link that names no projects folder is not taken as the record`(target: String) {
+        val named = File(filesDir, target).apply { mkdirs() }
+        Files.createSymbolicLink(link.toPath(), named.toPath())
+        every { context.getExternalFilesDir(null) } returns null
+
+        assertEquals(
+            File(filesDir, "projects").absolutePath,
+            Environment.projectsDirFor(context, 34),
+            "a link to ${named.name} was taken as the projects folder",
+        )
+    }
+
+    /**
      * The other direction: an install that works in the internal folder, with a folder of that
      * name on shared storage that another app made, stays where it is when its own folder has
      * been deleted (a terminal can), whether the link spells the folder as written or relative to
