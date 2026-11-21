@@ -110,13 +110,17 @@ object Environment {
             "PATH" to path,
             "LD_LIBRARY_PATH" to "$nativeLibDir:$filesDir/usr/lib",
             // What the exec interceptor reads to tell the app's own paths from
-            // the system's, once a terminal preloads it (see
-            // [getExecPreloadPath]). Inert until then: no bundled ELF reads any
-            // of these, so they change nothing for the server, the extension
-            // host or a language server. They sit here rather than beside
-            // LD_PRELOAD in the terminal setting because this map is the base of
-            // every terminal, task and extension spawn, so the day the preload
-            // is widened past the terminal it is one row and no settings edit.
+            // the system's, once something preloads it (see
+            // [getExecPreloadPath]): a terminal, or a program under the data
+            // directory that the extension host starts through the linker,
+            // which platform-fix.js hands the interceptor per call (never a
+            // command run in a shell; it finds the library under
+            // TERMUX__PREFIX, and copies these rows into a call's own
+            // environment that leaves them out). Inert until then: no bundled
+            // ELF reads any of these, so they change nothing for the server,
+            // the extension host or a language server. They sit here rather
+            // than beside LD_PRELOAD in the terminal setting because this map is
+            // the base of every terminal, task and extension spawn.
             //
             // Both data-dir spellings are load-bearing. The interceptor decides
             // from these which files are the app's, and the kernel reports the
@@ -127,8 +131,10 @@ object Environment {
             //
             // LD_PRELOAD itself is deliberately NOT here. It reaches terminals
             // and tasks through terminal.integrated.env.linux, which is where
-            // the interception has been measured; from this map it would load
-            // under node itself and everything node forks, which has not.
+            // the interception has been measured, and the extension host's
+            // routed starts through platform-fix.js, in a copy of each call's
+            // environment; from this map it would load under node itself and
+            // everything node forks, which has not been measured.
             // ExecPreloadEnvTest pins that absence.
             // The fallback is filesDir's parent, the same directory on a device;
             // JVM fixtures built from a bare ApplicationInfo() may leave dataDir
@@ -634,7 +640,10 @@ object Environment {
 
     /**
      * The exec interceptor a terminal preloads, and the one LD_PRELOAD value
-     * that can be written into a setting.
+     * that can be written into a setting. `platform-fix.js` finds the same file
+     * as `TERMUX__PREFIX/lib/libtermux-exec.so` for the starts of the extension
+     * host it hands the interceptor (`ExecPreloadEnvTest` runs it against this
+     * path).
      *
      * It is a Bionic library that catches every exec a shell makes and starts a
      * file under filesDir, which SELinux refuses to execve, through

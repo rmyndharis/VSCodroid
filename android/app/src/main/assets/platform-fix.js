@@ -123,7 +123,9 @@ if (process.platform === 'android') {
   // native library directory, where a direct exec is allowed and keeps
   // /proc/self/exe honest; a musl binary needs its own loader; a script has no
   // interpreter entry at all. Left alone in a process that already has the
-  // terminal's interceptor, which does this itself.
+  // terminal's interceptor, which does this itself. The same for spawnSync and
+  // execFileSync, and for a call that names the linker itself in front of the
+  // program, which is taken as a call of that program.
   var LINKER = '/system/bin/linker64';
   var APP_DATA = null;
   // Only when it is set: realpathSync('') answers the working directory, which would turn the rule on for
@@ -135,6 +137,72 @@ if (process.platform === 'android') {
   // The person's home, read once. An extension in the shared host may reassign or delete HOME later, and where
   // ~/.gemini and the machine settings are must not follow it: the setting would no longer hold anything back.
   var HOME = process.env.HOME || null;
+
+  // A program started through the linker is also given the terminal's exec interceptor, and its own path. The
+  // linker names itself as the program's path, so a program that finds its files from that path looks beside the
+  // linker; clang and libLLVM read TERMUX_EXEC__PROC_SELF_EXE first, which is how the interceptor answers that in
+  // a terminal. And without the interceptor, whatever that program starts from the app's storage (a `#!` script,
+  // the linker a compiler runs, a program it built) is refused the way the first start would have been. A command
+  // run in a shell gets neither: with the interceptor, an extension could run any script or program in the app's
+  // storage by naming it in a command, and Android's refusal of such an exec is what stops that.
+  //
+  // The two go together and only while the interceptor is a file on disk: Bionic aborts every exec in an
+  // environment whose preload it cannot map, and the interceptor is what replaces or clears the path for the
+  // programs below. Found under TERMUX__PREFIX, as the interceptor finds the app's own files
+  // (Environment.getExecPreloadPath names the same file), read once as HOME is. Each call gets a copy of its own
+  // environment, or of this process's when it names none; this process's own is never changed, so nothing else
+  // the host starts carries the interceptor.
+  var EXEC_PRELOAD = process.env.TERMUX__PREFIX ? path.join(process.env.TERMUX__PREFIX, 'lib', 'libtermux-exec.so') : null;
+  // What the interceptor reads to tell the app's paths from the system's. The server environment carries them; a
+  // call with an environment of its own may leave them out.
+  var INTERCEPTOR_VARS = {};
+  ['TERMUX_APP__DATA_DIR', 'TERMUX_APP__LEGACY_DATA_DIR', 'TERMUX__PREFIX'].forEach(function (name) {
+    if (process.env[name]) INTERCEPTOR_VARS[name] = process.env[name];
+  });
+
+  /**
+   * `base` (a call's environment, or this process's when null) with the interceptor preloaded ahead of anything it
+   * preloads already, the variables the interceptor reads and `self`, the program's own path; null when the
+   * interceptor is not a file now, this process already has it, or `base` is not an object.
+   */
+  function interceptorEnv(base, self) {
+    if (!EXEC_PRELOAD || INTERCEPTED || (base != null && typeof base !== 'object')) return null;
+    try {
+      if (!fs.statSync(EXEC_PRELOAD).isFile()) return null;
+    } catch (e) {
+      return null;
+    }
+    var env = Object.assign({}, base || process.env);
+    var preloads = typeof env.LD_PRELOAD === 'string' ? env.LD_PRELOAD : '';
+    if (preloads.split(/[:\s]+/).indexOf(EXEC_PRELOAD) < 0) env.LD_PRELOAD = preloads ? EXEC_PRELOAD + ':' + preloads : EXEC_PRELOAD;
+    Object.keys(INTERCEPTOR_VARS).forEach(function (name) {
+      if (env[name] == null) env[name] = INTERCEPTOR_VARS[name];
+    });
+    env.TERMUX_EXEC__PROC_SELF_EXE = self;
+    return env;
+  }
+
+  /**
+   * `tail`, what follows a call's argument list (its options, then a callback), with `extra` in a copy of the
+   * options, or in options of its own put before the callback when the call has none.
+   */
+  function withOptions(tail, extra) {
+    var out = tail.slice();
+    if (out.length && (out[0] == null || typeof out[0] === 'object')) out[0] = Object.assign({}, out[0], extra);
+    else out.unshift(extra);
+    return out;
+  }
+
+  /** The directory a call runs in, as a path. */
+  function cwdOf(options) {
+    try {
+      var cwd = options && options.cwd;
+      if (!cwd) return process.cwd();
+      return path.resolve(typeof cwd === 'string' ? cwd : require('url').fileURLToPath(cwd));
+    } catch (e) {
+      return '/';
+    }
+  }
 
   /** The PT_INTERP string of an open ELF64 little-endian file, or null. */
   function elfInterpreter(fd) {
@@ -173,17 +241,21 @@ if (process.platform === 'android') {
 
   /**
    * What follows `file` in a child_process call (an argument list, options and a
-   * callback, whichever are given) as a call to `linker64 <file> <args>`, or null
-   * when the call is left alone. `change` may replace the argument list.
+   * callback, whichever are given) as a call to `linker64 <file> <args>` with the
+   * interceptor and the program's own path in its options, or null when the call
+   * is left alone. `change` may replace the argument list.
    */
   function throughLinker(file, rest, change) {
     if (typeof file !== 'string') return null;
     // Node takes null or undefined for the argument list, and options then follow it.
     var listed = Array.isArray(rest[0]) || rest[0] == null;
-    var options = listed ? rest[1] : rest[0];
+    var tail = rest.slice(listed ? 1 : 0);
+    var options = tail[0];
     if ((options && options.shell) || !bionicInAppData(file)) return null;
     var args = Array.isArray(rest[0]) ? rest[0] : [];
-    return [LINKER, [file].concat(change ? change(args) : args)].concat(rest.slice(listed ? 1 : 0));
+    // Not to a start that could reach ~/.gemini, the engine's own included (see ENGINE_SETTING).
+    var env = geminiNamed([file].concat(args), options, false) ? null : interceptorEnv(options && options.env, file);
+    return [LINKER, [file].concat(change ? change(args) : args)].concat(env ? withOptions(tail, { env: env }) : tail);
   }
 
   // The Antigravity engine's page refuses to be framed by anything but a short
@@ -211,13 +283,27 @@ if (process.platform === 'android') {
   // ~/.gemini, where the extension keeps what it downloads, until the person has turned on
   // `vscodroid.antigravity.runEngine`, a machine setting the process monitor extension declares and
   // offers when it sees the Antigravity extension. With the setting off such a call is left as it was
-  // written and fails with EACCES, as it always did here, whatever its arguments: the engine is a Go
+  // written and fails with EACCES, as it always did here, and one that writes the linker out in front of
+  // the program is made without it, which fails the same way, whatever its arguments: the engine is a Go
   // program whose flag parser takes `-hub` and `--hub=true` for `--hub`, it has a second listening
   // mode (`--remote-control`), and the extension and the engine both update themselves, so a list of
   // the arguments that start a listener would not stay complete. The one call let through is exactly
   // `agy --version`, which the extension runs to check the engine it downloaded and answers by
   // downloading the engine again when it fails. This is about what extensions start: a terminal runs
   // what the person types there through its own exec interceptor.
+  //
+  // The terminal's interceptor, which a start through the linker is given, would start a program in ~/.gemini
+  // as readily as any other. So a start that could reach ~/.gemini gets none, whatever the setting says: one
+  // that names a path there among its program and arguments, runs there, or searches a PATH directory there,
+  // and the engine itself, which runs as it always did. A command run in a shell gets no interceptor at all, so
+  // the shell's own start of anything there is refused; but the shell can run the linker. So the command is read
+  // as words, quotes taken out and a leading `~` or `$HOME` read as the home, and with the setting off one that
+  // names something in ~/.gemini (a path there, a directory it runs in or searches, or a word that spells the
+  // name) and also names the linker is made as a start of what it names, without the shell, which fails the
+  // same way. Only what the call spells out can be seen: a program that is told what to run (`sh -c` written as
+  // a program and its arguments, an interpreter, `env` or `nohup` in front of the linker) and a name the shell
+  // builds from a variable or a pattern are beyond this. Neither is a fence against code in the extension host, which could copy the engine anywhere;
+  // it holds back what an extension that means no harm starts on its own.
   //
   // Read from the machine settings file at each such call, and the way VS Code builds its settings from
   // it: the keys of the root object are split at their dots into a tree, in file order, so
@@ -318,10 +404,12 @@ if (process.platform === 'android') {
     return node === true;
   }
 
+  var SETTINGS_FILE = HOME ? path.join(HOME, '.vscodroid', 'data', 'Machine', 'settings.json') : null;
+
   function engineTurnedOn() {
-    if (!HOME) return false;
+    if (!SETTINGS_FILE) return false;
     try {
-      var file = path.join(HOME, '.vscodroid', 'data', 'Machine', 'settings.json');
+      var file = SETTINGS_FILE;
       if (fs.statSync(file).size > SETTINGS_BYTES) return false;
       var json = settingsAsJson(fs.readFileSync(file, 'utf8'));
       return json !== null && engineValue(JSON.parse(json));
@@ -330,14 +418,45 @@ if (process.platform === 'android') {
     }
   }
 
-  /** Whether the real path of `file` is inside ~/.gemini; an error of any kind says it is not. */
+  // The gate's own reading, for the process monitor extension: VS Code reads the setting more leniently than
+  // engineValue does, so the Settings editor can show it on while the engine stays off, and the extension says so.
+  globalThis[Symbol.for('vscodroid.engineGate')] = Object.freeze({ engineTurnedOn: engineTurnedOn, settingsFile: SETTINGS_FILE });
+
+  /** Whether the real path of `file` is ~/.gemini or inside it; an error of any kind says it is not. */
   function fromGemini(file) {
     if (!HOME || !path.isAbsolute(file)) return false;
     try {
-      return fs.realpathSync(file).indexOf(fs.realpathSync(path.join(HOME, '.gemini')) + '/') === 0;
+      var real = fs.realpathSync(file);
+      var gemini = fs.realpathSync(path.join(HOME, '.gemini'));
+      return real === gemini || real.indexOf(gemini + '/') === 0;
     } catch (e) {
       return false;
     }
+  }
+
+  /**
+   * What a call could reach in ~/.gemini: the first of `words` (its program and arguments, or the words of its
+   * shell command when `shell` is set) that is a path there, read from the call's working directory; else
+   * ~/.gemini itself when that directory is there, a directory of the PATH the call searches is, or a word of a
+   * shell command spells the name; null for none. See ENGINE_SETTING.
+   */
+  function geminiNamed(words, options, shell) {
+    var gemini = HOME ? path.join(HOME, '.gemini') : null;
+    if (!gemini || !fromGemini(gemini)) return null;
+    var cwd = cwdOf(options);
+    var spelled = false;
+    for (var i = 0; i < words.length; i++) {
+      var word = String(words[i]);
+      if (shell) word = word.replace(/["']/g, '').replace(/^(?:~|\$\{HOME\}|\$HOME)(?=\/|$)/, HOME);
+      if (!word) continue;
+      var full = path.resolve(cwd, word);
+      if (fromGemini(full)) return full;
+      if (shell && word.indexOf('.gemini') >= 0) spelled = true;
+    }
+    var env = (options && options.env) || process.env;
+    var dirs = typeof env.PATH === 'string' ? env.PATH.split(':') : [];
+    var searched = dirs.some(function (dir) { return dir !== '' && fromGemini(path.resolve(cwd, dir)); });
+    return spelled || searched || fromGemini(cwd) ? gemini : null;
   }
 
   var WEBVIEW_ORIGIN = 'https://*.vscode-cdn.net';
@@ -560,7 +679,7 @@ if (process.platform === 'android') {
   // When the system kills the editor server the app starts another, and the
   // engine of the first outlives it: a killed process forwards nothing to its
   // children. The orphan keeps its port, a page that carries the session token
-  // and about 200 MB. So each start ends the one before it. The pid and port of
+  // and the memory of a large process. So each start ends the one before it. The pid and port of
   // the engine started last are kept in a note, and the note is believed only
   // while that pid still runs the engine on that port.
   var HUB_NOTE = HOME ? path.join(HOME, '.vscodroid', 'antigravity-hub.json') : null;
@@ -624,12 +743,46 @@ if (process.platform === 'android') {
   }
 
   /**
-   * What a child_process call of `file` with `rest` after it becomes, for spawn, execFile and the promisified
-   * execFile alike: `call`, the arguments for the linker, or none when the call is left as written, and
-   * `hub`, the relay to put in front of an engine only spawn (`relay`) starts. See ENGINE_SETTING for ~/.gemini.
+   * What a child_process call of `file` with `rest` after it becomes, for every start wrapped below: `call`, the
+   * arguments to make it with instead, or none when it is made as written; `hub`, the relay to put in front of
+   * an engine only spawn (`relay`) starts. See ENGINE_SETTING for ~/.gemini.
    */
+  function startCall(file, rest, relay) {
+    if (typeof file !== 'string') return {};
+    var listed = Array.isArray(rest[0]) || rest[0] == null;
+    var tail = rest.slice(listed ? 1 : 0);
+    var options = tail[0];
+    // Options Node itself refuses are left for Node to refuse.
+    if (options != null && typeof options !== 'object' && typeof options !== 'function') return {};
+    if (options && options.shell) return shellCall(file, rest, tail);
+    return engineCall(file, rest, relay);
+  }
+
+  /**
+   * startCall for a command run in a shell, which Node makes of the file and the argument list joined by spaces.
+   * It is made as written, with no interceptor, unless the setting refuses it (see ENGINE_SETTING).
+   */
+  function shellCall(file, rest, tail) {
+    var text = [file].concat(Array.isArray(rest[0]) ? rest[0] : []).join(' ');
+    var named = geminiNamed(text.split(/[\s;&|()<>`]+/), tail[0], true);
+    if (!named || engineTurnedOn()) return {};
+    endEarlierHub();
+    if (!/linker64/.test(text.replace(/["']/g, ''))) return {};
+    return { call: [named, []].concat(withOptions(tail, { shell: false })) };
+  }
+
+  /** startCall for a call made without a shell. */
   function engineCall(file, rest, relay) {
-    var gemini = typeof file === 'string' && fromGemini(file);
+    // `linker64 <program> <args>`, the linker written out by the caller, is a start of the program: the same rules
+    // decide it, and a refusal is the program started without the linker. A loader option in front of the
+    // program (--list) runs nothing.
+    var linked = path.basename(file) === 'linker64' && Array.isArray(rest[0]) && typeof rest[0][0] === 'string' &&
+      rest[0][0] !== '' && rest[0][0].charAt(0) !== '-';
+    if (linked) {
+      file = path.resolve(cwdOf(rest[1]), rest[0][0]);
+      rest = [rest[0].slice(1)].concat(rest.slice(1));
+    }
+    var gemini = fromGemini(file);
     var on = gemini && engineTurnedOn();
     var args = Array.isArray(rest[0]) ? rest[0] : [];
     // The options are the first of what follows, or the second after an argument list, as in throughLinker.
@@ -641,7 +794,7 @@ if (process.platform === 'android') {
     // reloading the window leaves none running. The version check that is let through ends it too: the host
     // that started the engine may have ended without a word.
     if (refused || (gemini && !on)) endEarlierHub();
-    if (refused) return {};
+    if (refused) return linked ? { call: [file].concat(rest) } : {};
     if (!relay) hub = null;
     var call = throughLinker(file, rest, hub ? function () { return hub.args; } : null);
     return { call: call, hub: call && hub };
@@ -657,7 +810,7 @@ if (process.platform === 'android') {
         return realSpawn.apply(this, args);
       }
     }
-    var gate = engineCall(file, Array.prototype.slice.call(arguments, 1), true);
+    var gate = startCall(file, Array.prototype.slice.call(arguments, 1), true);
     if (!gate.call) return realSpawn.apply(this, arguments);
     var hub = gate.hub;
     if (hub) endEarlierHub();
@@ -674,26 +827,42 @@ if (process.platform === 'android') {
     return started;
   };
 
-  // execFile reaches the internal spawn, not the exported one replaced above, and
-  // the Antigravity extension runs its engine once with it (`agy --version`) to
-  // check what it downloaded; when that fails with EACCES it downloads the engine
-  // again. spawnSync and execFileSync are not wrapped: the extension calls neither.
+  // execFile, execFileSync and execSync reach Node's internal spawn and spawnSync, not the exported ones
+  // replaced here, so each is wrapped on its own. The Antigravity extension runs its engine once with execFile
+  // (`agy --version`) to check what it downloaded; when that fails with EACCES it downloads the engine again.
+  // exec, and its promisified form, reach the exported execFile with `shell` set and the whole command as the
+  // file.
   var promisify = require('util').promisify;
   var realExecFile = childProcess.execFile;
   var realExecFilePromised = realExecFile[promisify.custom];
+  var realSpawnSync = childProcess.spawnSync;
+  var realExecFileSync = childProcess.execFileSync;
+  var realExecSync = childProcess.execSync;
 
-  // The call execFile is to make: the same rules as spawn, without a relay, so an engine's hub started
-  // this way with the setting on is an ordinary program on the port it was given.
-  function execFileCall(file, all) {
-    return engineCall(file, Array.prototype.slice.call(all, 1), false).call || all;
+  // The call to make: the same rules as spawn, without a relay, so an engine's hub started this way with the
+  // setting on is an ordinary program on the port it was given.
+  function plainCall(all) {
+    return startCall(all[0], Array.prototype.slice.call(all, 1), false).call || all;
   }
-  childProcess.execFile = function (file) {
-    return realExecFile.apply(this, execFileCall(file, arguments));
+  childProcess.execFile = function () {
+    return realExecFile.apply(this, plainCall(arguments));
   };
   // util.promisify(execFile) resolves { stdout, stderr } through this property of the original.
   if (realExecFilePromised) {
-    childProcess.execFile[promisify.custom] = function (file) {
-      return realExecFilePromised.apply(this, execFileCall(file, arguments));
+    childProcess.execFile[promisify.custom] = function () {
+      return realExecFilePromised.apply(this, plainCall(arguments));
     };
   }
+  childProcess.spawnSync = function () {
+    return realSpawnSync.apply(this, plainCall(arguments));
+  };
+  childProcess.execFileSync = function () {
+    return realExecFileSync.apply(this, plainCall(arguments));
+  };
+  childProcess.execSync = function (command, options) {
+    if (options != null && typeof options !== 'object') return realExecSync.apply(this, arguments);
+    // A refusal is a start of what the command names without a shell, which execSync cannot make.
+    var gate = shellCall(command, [options || {}], [options || {}]);
+    return gate.call ? realExecFileSync.apply(this, gate.call) : realExecSync.apply(this, arguments);
+  };
 }

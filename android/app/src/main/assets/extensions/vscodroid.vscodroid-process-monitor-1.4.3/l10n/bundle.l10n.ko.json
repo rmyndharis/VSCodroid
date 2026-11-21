@@ -1,6 +1,0 @@
-{
-  "Google Antigravity is installed, but VSCodroid keeps its engine off. While the engine runs, other apps on this phone can reach it and use the account signed in to it. Turn it on only on a phone whose apps you trust.": "Google Antigravity가 설치되어 있지만 VSCodroid는 해당 엔진을 꺼 둡니다. 엔진이 실행되는 동안에는 이 휴대전화의 다른 앱이 엔진에 연결하여 엔진에 로그인된 계정을 사용할 수 있습니다. 설치된 앱을 신뢰할 수 있는 휴대전화에서만 켜세요.",
-  "Turn On and Reload": "켜고 다시 로드",
-  "Don't Show Again": "다시 표시 안 함",
-  "The Antigravity engine could not be turned on: {0}": "Antigravity 엔진을 켤 수 없습니다: {0}"
-}
