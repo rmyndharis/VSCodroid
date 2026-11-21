@@ -1,6 +1,7 @@
 package com.vscodroid.service
 
 import android.content.Intent
+import android.os.SystemClock
 import androidx.core.app.ServiceCompat
 import com.vscodroid.util.Logger
 import io.mockk.Runs
@@ -9,8 +10,12 @@ import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
 import io.mockk.mockkStatic
+import io.mockk.spyk
 import io.mockk.unmockkAll
 import io.mockk.verify
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -21,6 +26,8 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.intrinsics.suspendCoroutineUninterceptedOrReturn
 
 /**
  * Stop Server from the notification, run on a service whose framework half is mocked.
@@ -143,6 +150,75 @@ class NodeServiceStopTest {
         assertTrue(events.containsAll(listOf("stopSelf", "told")), "a failed stop left the service and its card up: ${events.toList()}")
     }
 
+    /**
+     * The service with its real crash handling, stopped by the notification and started again while
+     * the stop thread still runs, which leaves the start to [NodeService.stopEnded]. Only the framework
+     * half is stubbed, as in [setUp].
+     */
+    private fun restartedDuringStop(): NodeService {
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } returns 1_000L
+        every { processes.serverEpoch } returns EPOCH
+        every { processes.heapOverrideValueInEffect(any()) } returns null
+        val running = spyk(mockk<NodeService>(relaxed = true))
+        for ((name, value) in listOf("tag" to "NodeService", "processManager" to processes)) {
+            NodeService::class.java.getDeclaredField(name).apply { isAccessible = true }.set(running, value)
+        }
+        every { running.mainExecutor } returns Executor { posted += it }
+        every { running["promoteToForeground"](any<Boolean>()) } returns true
+        every { running["removeNotification"]() } answers { events += "removeNotification" }
+        every { running["launchServer"]() } answers { events += "launchServer" }
+        every { running.stopSelf() } answers { events += "stopSelf" }
+        running.onStartCommand(command(NodeService.ACTION_STOP), 0, 1)
+        running.onStartCommand(command(null), 0, 2)
+        return running
+    }
+
+    private fun restartCount(service: NodeService) =
+        NodeService::class.java.getDeclaredField("restartCount").apply { isAccessible = true }.getInt(service)
+
+    /**
+     * Calls a private suspending member of [service] and reports whether it ran to its end without
+     * suspending. A retry suspends in its backoff, so a call that stays suspended scheduled one.
+     */
+    private fun completes(service: NodeService, name: String, vararg args: Int): Boolean = runBlocking {
+        val types = args.map { Int::class.javaPrimitiveType } + Continuation::class.java
+        val member = NodeService::class.java.getDeclaredMethod(name, *types.toTypedArray()).apply { isAccessible = true }
+        val call = launch(start = CoroutineStart.UNDISPATCHED) {
+            suspendCoroutineUninterceptedOrReturn<Unit> { member.invoke(service, *args.toTypedArray(), it) }
+        }
+        val done = call.isCompleted
+        call.cancel()
+        done
+    }
+
+    /**
+     * A crash report already on its way to the service when Stop was pressed lands after a start that
+     * arrived while the stop thread runs. The start is the stop's to launch when it ends, so a retry
+     * here would be a second chain beside that launch, spending the new run's budget on the old
+     * server's exit.
+     */
+    @Test
+    fun `a crash report that lands while the stop runs schedules no restart`() {
+        val running = restartedDuringStop()
+
+        assertTrue(completes(running, "handleServerCrash", 137, EPOCH), "a retry is waiting out its backoff beside the stop's launch")
+        assertEquals(0, restartCount(running), "the old server's exit spent a restart of the new run")
+
+        release.countDown()
+        runEnd()
+        assertEquals(listOf("launchServer"), events.filter { it == "launchServer" }, "the start was not launched once, by the stop's end")
+    }
+
+    /** The same decision on the start path's way in, which shares it. */
+    @Test
+    fun `an unreported start while the stop runs schedules no restart`() {
+        val running = restartedDuringStop()
+
+        assertTrue(completes(running, "retryOrGiveUp"), "a retry is waiting out its backoff beside the stop's launch")
+        assertEquals(0, restartCount(running), "a restart was spent while the stop runs")
+    }
+
     @Test
     fun `setup's hold given back during a stop leaves the card to the stop`() {
         stop()
@@ -153,5 +229,9 @@ class NodeServiceStopTest {
         release.countDown()
         runEnd()
         assertEquals(1, events.count { it == "stopSelf" })
+    }
+
+    private companion object {
+        const val EPOCH = 3
     }
 }

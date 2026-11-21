@@ -20,9 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The release build refuses a user guide whose tool versions differ from what the build resolved, and a documented free space that differs from what setup asks of the APK.
 - A change of navigation device, night mode or keyboard no longer ends the word a keyboard is composing in the editor, or brings back a keyboard put away just after it; only a turn, a resize or a fold does.
 - Stop Server from the notification no longer freezes the screen for up to a few seconds while the server shuts down.
+- A crash of the old server reported while Stop Server is still ending it no longer starts a second restart beside the start that follows the stop.
 - A toolchain install whose command name is taken by a folder now says the install failed and points at the log, instead of asking for free space that would not help.
 - A linked `.bashrc` holding only the start of the app's own text, cut short on a full disk by an older release, is now repaired through the link, with a copy kept aside.
-- A projects folder that resolves into `~/.ssh`, `~/.claude` or another location that must stay unreadable is no longer served to webviews.
+- A `~/.bashrc` that is a link to a missing file is no longer replaced by a copy; the app's shell setup is written where the link points.
+- A projects folder that resolves into `~/.ssh`, `~/.claude` or another location that must stay unreadable, or that a credential link such as `~/.npmrc` points into, is no longer served to webviews.
 - Renaming a folder of a device folder in the editor sends a save that was held back inside it under the new name, instead of leaving it inside the app until the file is saved again.
 - A save made just before its folder is renamed reaches the renamed folder on the device also when the rename lands on disk before the save is sent.
 - A save made just before its folder is renamed reaches the device under the folder's last name when the folder is renamed again while the first rename is being sent.

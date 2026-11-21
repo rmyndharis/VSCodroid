@@ -4,6 +4,7 @@
 import base64
 import contextlib
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -720,6 +721,37 @@ class MaintenanceScriptsTest(unittest.TestCase):
         self.assertNotEqual(0, unread.returncode, unread.stdout + unread.stderr)
         self.assertIn("the pattern stopped matching", unread.stdout)
 
+    @unittest.skipUnless(importlib.util.find_spec("yaml"), "check-workflow-steps.py needs PyYAML, which CI images carry")
+    def test_workflow_step_check_holds_the_release_document_gates(self):
+        """The release steps that hold the documents to the build are required steps like any other gate."""
+        fixture = self.root / "workflow-steps"
+        (fixture / "scripts").mkdir(parents=True)
+        shutil.copy2(SOURCE / "scripts/check-workflow-steps.py", fixture / "scripts")
+        shutil.copytree(SOURCE / ".github/workflows", fixture / ".github/workflows")
+        release = fixture / ".github/workflows/release.yml"
+        text = release.read_text()
+
+        def check(edited):
+            release.write_text(edited)
+            return subprocess.run([sys.executable, "-I", str(fixture / "scripts/check-workflow-steps.py")],
+                                  cwd=fixture, capture_output=True, text=True, timeout=30)
+
+        healthy = check(text)
+        self.assertEqual(0, healthy.returncode, healthy.stdout + healthy.stderr)
+        sizes = ("      - name: Check the documented core sizes against the APK\n"
+                 "        run: python3 scripts/check-size-claims.py --apk "
+                 "android/app/build/outputs/apk/release/app-release.apk\n")
+        self.assertEqual(1, text.count(sizes))
+        deleted = check(text.replace(sizes, ""))
+        self.assertNotEqual(0, deleted.returncode, deleted.stdout + deleted.stderr)
+        self.assertIn("Check the documented core sizes against the APK", deleted.stdout)
+        guide = "      - name: Hold the user guide's tool versions to what this build resolved\n"
+        self.assertEqual(1, text.count(guide))
+        for key in ("continue-on-error: true", "if: ${{ false }}"):
+            skipped = check(text.replace(guide, f"{guide}        {key}\n"))
+            self.assertNotEqual(0, skipped.returncode, (key, skipped.stdout + skipped.stderr))
+            self.assertIn("Hold the user guide's tool versions", skipped.stdout, key)
+
     def cffi_builder(self):
         import importlib.util
         spec = importlib.util.spec_from_file_location("fixture_cffi_wheel", SOURCE / "scripts/build-cffi-wheel.py")
@@ -1266,7 +1298,8 @@ esac
             "| Free space required to install         | ~6 MB              |\n"
         )
         guide = (
-            "The core download is roughly 1 MB, and you need about 6 MB free for the extraction that follows.\n"
+            "The core download is roughly 1 MB (the APK on GitHub Releases is 1 MB), and you need about 6 MB free "
+            "for the extraction that follows.\n"
             "About 1 MB of files are unpacked, one by one. Setup wants room: the ~6 MB above is what it insists on "
             "having free before it will start. An update (roughly 2 MB for a complete tree rather than 6 MB).\n"
             "| Language | Download Size | Installed Size | Includes |\n"
@@ -1286,6 +1319,7 @@ esac
             "(230 MB) with Ruby and Java installed, and about 486 MiB (510 MB) with C/C++ as well, by the estimates |\n"
             "| Storage | About 1 MB extracted for core and about 6 MB free for a fresh installation |\n"
         )
+        site = "<dt>First launch</dt>\n<dd>Around 6 MB free</dd>\n"
         manager = "internal const val SPACE_BUFFER = 50_000_000L\n"
         # A block of a million bytes makes the allocation setup counts big enough to see in whole MB: two files
         # of 400,000 and 600,000 bytes and the directory one of them sits in take 4 MB, and with the margin and
@@ -1295,7 +1329,7 @@ esac
                  "private const val EXTRACTION_WORKING_MARGIN_BYTES = 1L * 1_000_000L\n"
                  "private const val EXTRACTION_BLOCK_BYTES = 1_000_000L\n")
 
-        def check(*, readme=readme, guide=guide, srs=srs, registry_text=None, apk=None, setup=setup):
+        def check(*, readme=readme, guide=guide, srs=srs, site=site, registry_text=None, apk=None, setup=setup):
             with tempfile.TemporaryDirectory() as raw:
                 root = Path(raw)
                 script = root / "scripts" / "check-size-claims.py"
@@ -1308,6 +1342,7 @@ esac
                 write(root / "README.md", readme)
                 write(root / "docs/USER_GUIDE.md", guide)
                 write(root / "docs/02-SRS.md", srs)
+                write(root / "docs/site/index.html", site)
                 command = [sys.executable, "-I", str(script)]
                 if apk:
                     path = root / "app-release.apk"
@@ -1355,6 +1390,12 @@ esac
                 guide=guide.replace("roughly 2 MB", "roughly 3 MB"))
         refused("a setup figure that is not a number", "EXTRACTION_SLACK_BYTES",
                 setup=setup.replace("1_400_000L", "SLACK"))
+        refused("free space on the site", "docs/site/index.html", site=site.replace("6 MB", "5 MB"))
+        refused("the site's sentence went away", "expected exactly one", site=site.replace("Around 6 MB free", "Plenty"))
+        refused("the release APK's size went away", "expected exactly one",
+                guide=guide.replace(" (the APK on GitHub Releases is 1 MB)", ""))
+        refused("the release APK's size against the APK", "size of the APK on GitHub Releases reads 2 MB", apk={"assets": 1_000_000},
+                guide=guide.replace("GitHub Releases is 1 MB", "GitHub Releases is 2 MB"))
 
     def test_site_live_data_holds_only_what_was_checked(self):
         source = SOURCE / "scripts/fetch-site-live.py"

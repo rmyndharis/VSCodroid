@@ -2401,11 +2401,20 @@ class FirstRunSetup(
             // `isFile` above rather than `exists()` keeps a directory at the path
             // out of both branches; mkdirs would not repair that and neither
             // would this.
+            //
+            // A link to a file that has gone reads as absent too. It is written
+            // through, never replaced (see linkTarget): the file is made where the
+            // link points, or, when the folder it points into has gone as well,
+            // nothing is written and the link stays, since making that folder
+            // again would undo a move the person made.
+            val linked = Files.isSymbolicLink(bashrc.toPath())
             val written = runCatching { writeBashrc() }
                 .onFailure { Logger.e(tag, "The .bashrc rewrite threw", it as? Exception) }
                 .getOrDefault(false)
             if (written) {
-                Logger.i(tag, "Recreated a .bashrc that had gone")
+                Logger.i(tag, if (linked) "Wrote the file a .bashrc link names, which had gone" else "Recreated a .bashrc that had gone")
+            } else if (linked) {
+                Logger.w(tag, LINKED_BASHRC_UNWRITTEN)
             } else {
                 Logger.e(tag, "Could not recreate the missing .bashrc; the terminal keeps no prompt, no PATH exports and no npm")
             }
@@ -3415,7 +3424,11 @@ claude() {
             // absent but tells no one, so no retry is offered. Together the
             // retry starts from a clean slate and produces a working shell.
             if (!writeBashrc()) {
-                throw IOException("could not write $bashrc")
+                // Not for a link: it is written through, and one into a folder that has gone is the
+                // person's and stays (see linkTarget). Throwing then would stop setup on every update
+                // for as long as the folder is away; the launch repair writes it once it can.
+                if (!Files.isSymbolicLink(bashrc.toPath())) throw IOException("could not write $bashrc")
+                Logger.w(tag, LINKED_BASHRC_UNWRITTEN)
             }
         }
     }
@@ -3529,7 +3542,10 @@ claude() {
             // claudeProcessWrapper and no verifySignature until the app
             // updates -- reported to the user as a successful first run.
             if (!writeDefaultSettings()) {
-                throw IOException("could not write $settingsFile")
+                // Not for a link into a folder that has gone, for the reason createBashrc gives.
+                if (!Files.isSymbolicLink(settingsFile.toPath())) throw IOException("could not write $settingsFile")
+                Logger.w(tag, "Could not write the file a settings.json link names, and left the link as it is")
+                return
             }
             // This document is ours and was written a line ago, so it holds none
             // of the preferences the prune exists to take out. Recording that here
@@ -5179,6 +5195,11 @@ claude() {
     }
 }
 
+/** Said when the file a `.bashrc` link names cannot be written, which leaves the link and the shell without setup. */
+private const val LINKED_BASHRC_UNWRITTEN =
+    "Could not write the file a .bashrc link names, and left the link as it is; " +
+        "the terminal starts without this app's setup until that file can be written"
+
 /**
  * The first line of every `.bashrc` this app writes.
  *
@@ -6059,27 +6080,47 @@ private fun isStartOf(prefix: ByteArray, whole: ByteArray): Boolean =
  *   untouched -- it keeps its previous contents, or stays absent.
  *
  * [throughLink] writes into the file a link at [dest] names instead of replacing the link, for the
- * files a person owns and may link elsewhere. The default replaces it, which the extraction of the
- * app's own files relies on.
+ * files a person owns and may link elsewhere, and never replaces a link, even one to nothing (see
+ * [linkTarget]). The default replaces it, which the extraction of the app's own files relies on.
  */
 internal fun writeAtomically(
     dest: File,
     onError: ((String) -> Unit)? = null,
     throughLink: Boolean = false,
     write: (OutputStream) -> Unit,
-): Boolean = writeAtomicallyTo(if (throughLink) linkTarget(dest) else dest, onError, write)
+): Boolean {
+    val target = if (throughLink) linkTarget(dest) else dest
+    if (target == null) {
+        onError?.invoke("${dest.name} is a link that cannot be followed to a file")
+        return false
+    }
+    return writeAtomicallyTo(target, onError, write)
+}
 
 /**
- * [file], or the regular file it is a link to. A dotfile a person keeps in a repository and links into
- * the home directory is replaced by a copy when the rename lands on the link, and the repository's file
- * is then no longer the one the shell reads. A link to nothing, or to anything but a file, is left to be
- * replaced as before.
+ * [file], or what a link at [file] names, followed link by link as the kernel follows it, or null when the links
+ * lead round in a circle or one cannot be read. A dotfile a person keeps in a repository and links into the home directory is replaced
+ * by a copy when the rename lands on the link, and the repository's file is then no longer the one the shell
+ * reads. So no link is ever the destination: a link to a file that has gone names where it would be, and the
+ * write makes it there, or fails without a trace when the folder it would be in has gone too, which is what a
+ * renamed dotfiles folder or a device folder's copy the app took back leaves. A link to a directory fails at the
+ * rename.
  */
-private fun linkTarget(file: File): File = try {
-    if (Files.isSymbolicLink(file.toPath())) file.toPath().toRealPath().toFile().takeIf { it.isFile } ?: file else file
-} catch (_: IOException) {
-    file
+private fun linkTarget(file: File): File? {
+    var path = file.toPath()
+    if (!Files.isSymbolicLink(path)) return file
+    repeat(MAX_LINK_HOPS) {
+        path = try { path.resolveSibling(Files.readSymbolicLink(path)) } catch (_: IOException) { return null }
+        if (!Files.isSymbolicLink(path)) {
+            // One canonical spelling for a file that is there, so two writers through different links share a lock.
+            return try { path.toRealPath().toFile() } catch (_: IOException) { path.toFile() }
+        }
+    }
+    return null
 }
+
+/** How many links the kernel follows before it answers ELOOP. */
+private const val MAX_LINK_HOPS = 40
 
 private fun writeAtomicallyTo(
     dest: File,

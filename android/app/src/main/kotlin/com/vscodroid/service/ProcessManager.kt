@@ -66,11 +66,12 @@ class ProcessManager internal constructor(
     /**
      * The spawned bootstrap, and the thread watching it.
      *
-     * Volatile for the same reason as the flags below, and the two threads are
-     * named there too: both are written on whichever thread called [startServer],
-     * which `NodeService.launchServer` puts on `Dispatchers.IO`, and both are read
-     * and written on the main thread by [stopServer], which the notification's
-     * Stop action and `Service.onDestroy` both reach. Without it the second stop
+     * Volatile for the same reason as the flags below: both are written on
+     * whichever thread called [startServer], which `NodeService.launchServer`
+     * puts on `Dispatchers.IO`, and both are read and written by [stopServer],
+     * which runs on the thread `NodeService.shutdown` starts for the
+     * notification's Stop, and on the main thread from `Service.onDestroy`.
+     * Without it the second stop
      * that `NodeService.shutdown` documents as the reaper for a process spawned
      * inside its own window has no happens-before edge to that write, so it can
      * read null over a live process and leave Node running with no service and no
@@ -709,8 +710,9 @@ class ProcessManager internal constructor(
         if (editorNote != null && recorded != null && recordedSocket != null &&
             portHeldByOurEditorServer(editorNote, origin)) {
             val owner = recorded.optString("runId", "")
-            // The reaps below run outside the lock, which Stop takes on the main thread: each
-            // gives the editor up to REAP_TERM_GRACE_MS to leave on its SIGTERM before it escalates.
+            // The reaps below run outside the lock, which [stopServer] takes, on the main thread
+            // when `Service.onDestroy` calls it: each gives the editor up to REAP_TERM_GRACE_MS to
+            // leave on its SIGTERM before it escalates.
             val stoppedBeforeAdoption = synchronized(readinessLock) {
                 val stopped = isShuttingDown || generation != stopGeneration || !canStart()
                 if (!stopped) {
@@ -839,8 +841,9 @@ class ProcessManager internal constructor(
                 throw failure
             }
             // A stop that landed while this was spawning has to take the process
-            // it could not see. [stopServer] runs on the main thread and reads
-            // `serverProcess`, which is still null everywhere above this line, so
+            // it could not see. [stopServer] runs on another thread (the stop thread
+            // of `NodeService.shutdown`, or the main one from `Service.onDestroy`) and
+            // reads `serverProcess`, which is still null everywhere above this line, so
             // a Stop pressed inside the few milliseconds `ProcessBuilder.start()`
             // takes destroys nothing and returns, and what it leaves behind is a
             // Node process with no foreground service tracking it, no watchdog
@@ -1362,19 +1365,24 @@ class ProcessManager internal constructor(
      * nothing restarts the server behind this call. It was the one thing a
      * second, older copy of this documentation said that this one did not.
      *
-     * The wait is short because it is paid on whichever thread calls this, and
-     * the Stop action on the notification calls it from Service.onDestroy --
-     * the main thread. A five-second wait there does not trip the service ANR
-     * timeout, which is far longer, but the main thread is shared: any input
-     * dispatched behind it waits too, and that timeout is five seconds. The
-     * freeze users reported is input starving, not the service stalling.
+     * The wait is short because it is paid on whichever thread calls this. The
+     * Stop action on the notification runs it on a thread of its own
+     * (`NodeService.shutdown`), so the screen keeps answering while it waits.
+     * `Service.onDestroy` runs it on the main thread. There it is usually the
+     * second stop of a server the first already ended, and costs a log line; when
+     * the system destroys the service without a Stop it is the whole stop, and
+     * input dispatched behind it waits, against a timeout of five seconds.
      *
-     * It is not moved to a background thread, and that is deliberate. Android
-     * will not kill the process while a lifecycle callback is running, so
-     * waiting here is what keeps [killBootstrap] reachable. Hand the
-     * wait to another thread and a process killed the moment onDestroy returns
-     * leaves Node reparented to init and still running -- trading a freeze for
-     * an orphan, which is worse and much harder to notice.
+     * Off the main thread, what keeps [killBootstrap] and the reap below
+     * reachable is the notification card. `NodeService.shutdown` keeps the
+     * service in the foreground until this has returned, and only then takes the
+     * card down and stops the service (`stopEnded`), so the system does not cache
+     * and freeze the process, or kill it, with the stop half done and Node
+     * reparented to init. One stop runs without that protection: Stop on the card
+     * the terminal state leaves (`stopServingRecoverably`), which is detached, and
+     * a Stop never promotes the service (`startCommand`). Little is left to end
+     * there, because the last server has already died: at most an editor server
+     * its bootstrap left behind, which the reap finds.
      *
      * A second is enough because it is not the real mechanism: server.js
      * forwards SIGTERM to the editor server it forked (its own SIGTERM handler),
@@ -2166,8 +2174,8 @@ internal fun signalName(signum: Int): String = when (signum) {
 /**
  * How long a deliberate stop waits before killing the server outright.
  *
- * Short on purpose: this is paid on the caller's thread, and the notification's
- * Stop action calls it on the main thread. See [ProcessManager.stopServer].
+ * Short on purpose: this is paid on the caller's thread, which is the main
+ * thread when `Service.onDestroy` stops the server. See [ProcessManager.stopServer].
  */
 internal const val GRACEFUL_STOP_TIMEOUT_MS = 1_000L
 

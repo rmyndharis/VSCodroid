@@ -457,8 +457,11 @@ payload to `/system/bin/linker64` the same way the bash functions do. So a bare 
 still does not reach is an absolute-path invocation such as `$JAVA_HOME/bin/java`, a toolchain
 forking its own helper by absolute path (the JDK's `lib/jspawnhelper`), and direct execution of a
 shebang script under `filesDir`, whose own inode is refused before its interpreter is consulted.
-All three hold outside a preloaded shell only: under the exec interceptor described below they run,
-and the table is what the extension host's own spawns, which carry no preload, still go through.
+All three hold outside a preloaded shell only: under the exec interceptor described below they run.
+The extension host's own starts carry no preload but one: an Android program under the data
+directory started by its absolute path without a shell, which `platform-fix.js` hands to the linker
+with the interceptor (below). So a command it starts by name still goes through the table, and a script it
+starts by its path is still refused.
 
 The table is no longer only about toolchains. One row is the app's own: `xdg-open`, the literal
 command every Node browser helper spawns, mapped through `libnode.so` onto `assets/xdg-open.js`.
@@ -473,7 +476,8 @@ app update does not move. Without it `pip install black` produced a `black` on P
 through a shebang means `execve` on the script's own inode. Symlinks in that directory are skipped:
 those are the bundled tools, already pointing at ELFs that run. The same scan covers `$GEM_HOME/bin`
 from the Ruby manifest for Ruby-shebang files, which is where `gem install` writes a gem's commands.
-Those rows stay because a process the extension host starts has no preload and still needs them.
+Those rows stay because a command the extension host starts by name gets no preload and still needs
+them.
 The rows are written by the launch pass and again whenever the editor returns to the foreground, so
 a command installed while the app is in front is reachable after switching away and back.
 
@@ -1824,8 +1828,10 @@ forks are refused however the driver command is reached, and a toolchain that in
 cannot compile is worse than one that is absent; one was withdrawn for exactly that. C/C++ is
 possible only because of the terminal's exec interceptor (section 2.3), which rewrites every `exec`
 the shell and its children make, the compiler's own fork of `ld.lld` included, into
-`linker64 <file>`. It is therefore declared `"preloadOnly": true` and it works in a terminal and in
-what a terminal starts, and nowhere else.
+`linker64 <file>`. It is therefore declared `"preloadOnly": true` and it works in a terminal, in
+what a terminal starts, and in an extension's start of the compiler by its absolute path without a
+shell, which `platform-fix.js` gives the same interceptor (section 2.3; read from the code, not
+tried with an extension). An extension that starts it through a shell or by name is refused.
 
 ### 7.2 Asset Pack Extraction Flow
 
@@ -1951,7 +1957,8 @@ do, the process believes it is the loader and finds none of it. Hence `"preloadO
 row for the toolchain's binaries, while `binaries`, `pathDirs` and `env` apply as for any other.
 
 `launchers` is the one thing that gets a row anyway: `{"usr/bin/clangd": ["--resource-dir=$FILESDIR/usr/lib/clang/<major>"]}`.
-A language client starts clangd with no terminal and so no interceptor, and started through the
+A language client starts clangd with no terminal and so no interceptor (its `tcbin` link resolves into
+the native library directory, outside what `platform-fix.js` routes), and started through the
 trampoline it takes the loader's directory for its own: every compile command it builds carries
 `-resource-dir=/apex/com.android.runtime/lib/clang/<major>`, and `stddef.h` and the rest of clang's
 own headers are not found (measured on an API 37 emulator, through the extension: `stdio.h` found,
@@ -1996,9 +2003,10 @@ Not in the pack, and not a defect: `clang-format` and the other clang tools, `li
 the sanitizer runtimes, OpenMP and the profile library. `make` is the base app's.
 
 **What it needs.** The terminal's interceptor, and only that, for the compilers. With `LD_PRELOAD`
-set to null, from an extension that starts a process itself, or as a `"type": "process"` task's own
-command, a compiler is a file under `filesDir` the kernel will not execute and nothing here makes
-it one. The card says so, and so does the user guide. clangd is the exception, through `launchers`
+set to null, from an extension that starts it through a shell or by name, or as a `"type": "process"`
+task's own command, a compiler is a file under `filesDir` the kernel will not execute and nothing
+here makes it one. An extension that starts it by its absolute path without a shell gets the
+interceptor from `platform-fix.js` (section 2.3). The card says so, and so does the user guide. clangd is the exception, through `launchers`
 above.
 
 ## 8. Package Manager

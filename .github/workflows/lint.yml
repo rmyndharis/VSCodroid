@@ -291,6 +291,15 @@ jobs:
       - name: Check the device-test checklist accounts for its own rows
         run: python3 scripts/check-checklist-totals.py
 
+      # GitHub draws a Markdown table only while each row has the header's cells
+      # and no blank line breaks it. A row run into the one before it drops its
+      # text, and a blank line turns every row below it into a paragraph of
+      # pipes; neither fails anything else. The self-test hands it both shapes.
+      - name: Check every Markdown table is drawn as written
+        run: |
+          python3 scripts/check-markdown-tables.py --self-test
+          python3 scripts/check-markdown-tables.py
+
       # The same question one directory over, and the answer had rotted twice.
       # Nothing runs the instrumented suite -- no runner measured here can, and
       # CI compiles it and stops -- so androidTest/README.md is the only account

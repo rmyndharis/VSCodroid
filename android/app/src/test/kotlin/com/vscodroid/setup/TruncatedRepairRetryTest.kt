@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.nio.file.Files
+import java.nio.file.Paths
 
 /**
  * What `repairTruncatedSetupFiles` must leave behind when its rewrite fails.
@@ -491,5 +492,56 @@ class TruncatedRepairRetryTest {
 
         assertTrue(Files.isSymbolicLink(bashrc.toPath()), "the link was replaced")
         assertTrue(target.readText().contains("export PROJECTS_DIR"), "a cut-short copy of ours was not repaired")
+    }
+
+    /**
+     * A `.bashrc` link whose file has gone, from a dotfiles folder emptied or checked out to a branch without it.
+     * The link says where the person keeps their shell setup, so the app's text is written there and the link
+     * stays; the rename used to land on the link and replace it with a copy.
+     */
+    @Test
+    fun `a dangling linked bashrc stays a link`() {
+        val target = File(filesDir, "projects/dotfiles/bashrc").apply { parentFile.mkdirs() }
+        Files.createSymbolicLink(bashrc.toPath(), Paths.get("../projects/dotfiles/bashrc"))
+
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        assertTrue(Files.isSymbolicLink(bashrc.toPath()), "the link was replaced by a copy")
+        assertTrue(target.readText().contains("export PROJECTS_DIR"), "the file the link names was not written")
+    }
+
+    /**
+     * The same link once the folder it points into was renamed, or was a device folder's copy the app took back.
+     * Writing there would mean making that folder again, where the person moved it away, so the link is left as
+     * it is, and a launch that cannot help it logs no error.
+     */
+    @Test
+    fun `a linked bashrc whose folder has gone stays a link and nothing is made`() {
+        Files.createSymbolicLink(bashrc.toPath(), Paths.get("../projects/dotfiles/bashrc"))
+
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        assertTrue(Files.isSymbolicLink(bashrc.toPath()), "the link was replaced by a copy")
+        assertFalse(File(filesDir, "projects/dotfiles").exists(), "the folder the person moved was made again")
+        verify(exactly = 0) { Logger.e(any(), any(), any()) }
+    }
+
+    /**
+     * Setup's own writers meet the same link on the first launch after an update. Throwing there stops setup on
+     * every update for as long as the folder is away, and writing over the link loses it.
+     */
+    @Test
+    fun `setup leaves rc links whose folders have gone as they are and carries on`() {
+        Files.createSymbolicLink(bashrc.toPath(), Paths.get("../projects/dotfiles/bashrc"))
+        Files.createSymbolicLink(settings.toPath(), File(filesDir, "projects/dotfiles/settings.json").toPath())
+        val setup = FirstRunSetup(context)
+
+        for (writer in listOf("createBashrc", "createDefaultSettings")) {
+            FirstRunSetup::class.java.getDeclaredMethod(writer).apply { isAccessible = true }.invoke(setup)
+        }
+
+        assertTrue(Files.isSymbolicLink(bashrc.toPath()), "the .bashrc link was replaced by a copy")
+        assertTrue(Files.isSymbolicLink(settings.toPath()), "the settings link was replaced by a copy")
+        assertFalse(File(filesDir, "projects/dotfiles").exists(), "the folder the person moved was made again")
     }
 }
