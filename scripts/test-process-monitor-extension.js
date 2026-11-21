@@ -728,7 +728,7 @@ assert.ok(
 // the workbench refuses is said, not dropped; "Don't Show Again" holds across windows until the setting
 // is turned on; and the offer is in the window's language.
 const TURN_ON = 'Turn On and Reload';
-const MISMATCH = 'The setting Antigravity: Run Engine shows as on, but VSCodroid reads it as off in {0}, so the Google Antigravity engine stays off. VS Code works around some errors in that file, such as a missing comma, and VSCodroid does not. Correct the file, then reload the window.';
+const MISMATCH = 'The setting Antigravity: Run Engine shows as on, but VSCodroid reads it as off in {0}, so the Google Antigravity engine stays off. VSCodroid reads nothing from that file when it has an error VS Code works around, such as a missing comma, when it is larger than 1 MiB, or when its nesting is more than 64 levels deep. Correct the file, then reload the window.';
 const NEVER = "Don't Show Again";
 const DECLINED = 'antigravity.engineOfferDeclined';
 // Recorded only while these cases run, and refused in every one of them: an offer whose promise rejects
@@ -791,10 +791,10 @@ async function antigravityOffer({ installed, runEngine, answer, installLater = f
     assert.strictEqual(on.offers.length, 0, 'the offer was made with the setting already on');
 
     // VS Code reads the settings file more leniently than the gate that starts the engine: a file with an error it
-    // works around (a missing comma) shows the box ticked while the engine stays off, and the extension's panel
-    // then fails with a spawn error that names no setting. So the two readings are compared, and when they
-    // disagree the person is told, once per window, which file to correct. Nothing is said when they agree, nor
-    // where the gate is not there to ask.
+    // works around (a missing comma), or one past the size or the nesting the gate reads, shows the box ticked
+    // while the engine stays off, and the extension's panel then fails with a spawn error that names no setting.
+    // So the two readings are compared, and when they disagree the person is told, once per window, which file to
+    // correct. Nothing is said when they agree, nor where the gate is not there to ask.
     const agree = await antigravityOffer({ installed: true, runEngine: true, gateReads: true });
     assert.deepStrictEqual(agree.offers, [], 'a notice was shown with VS Code and the gate both reading the setting as on');
     const disagree = await antigravityOffer({ installed: true, runEngine: true, gateReads: false });

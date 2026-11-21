@@ -1,0 +1,7 @@
+{
+  "Google Antigravity is installed, but VSCodroid keeps its engine off. While the engine runs, other apps on this phone can reach it and use the account signed in to it. Turn it on only on a phone whose apps you trust.": "Google Antigravity가 설치되어 있지만 VSCodroid는 해당 엔진을 꺼 둡니다. 엔진이 실행되는 동안에는 이 휴대전화의 다른 앱이 엔진에 연결하여 엔진에 로그인된 계정을 사용할 수 있습니다. 설치된 앱을 신뢰할 수 있는 휴대전화에서만 켜세요.",
+  "Turn On and Reload": "켜고 다시 로드",
+  "Don't Show Again": "다시 표시 안 함",
+  "The Antigravity engine could not be turned on: {0}": "Antigravity 엔진을 켤 수 없습니다: {0}",
+  "The setting Antigravity: Run Engine shows as on, but VSCodroid reads it as off in {0}, so the Google Antigravity engine stays off. VSCodroid reads nothing from that file when it has an error VS Code works around, such as a missing comma, when it is larger than 1 MiB, or when its nesting is more than 64 levels deep. Correct the file, then reload the window.": "Antigravity: Run Engine 설정이 켜짐으로 표시되지만 VSCodroid는 {0}에서 이 설정을 꺼짐으로 읽으므로 Google Antigravity 엔진은 꺼진 상태로 유지됩니다. 이 파일에 VS Code가 우회하는 오류(예: 빠진 쉼표)가 있거나, 파일이 1MiB보다 크거나, 중첩이 64단계보다 깊으면 VSCodroid는 이 파일에서 아무것도 읽지 않습니다. 파일을 수정한 다음 창을 다시 로드하세요."
+}

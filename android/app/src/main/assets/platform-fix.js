@@ -163,7 +163,9 @@ if (process.platform === 'android') {
   /**
    * `base` (a call's environment, or this process's when null) with the interceptor preloaded ahead of anything it
    * preloads already, the variables the interceptor reads and `self`, the program's own path; null when the
-   * interceptor is not a file now, this process already has it, or `base` is not an object.
+   * interceptor is not a file now, this process already has it, or `base` is not an object. The copy takes the keys
+   * `base` inherits as well, as Node reads an environment (for...in): an extension may hand over
+   * Object.create(process.env) with its own changes, and a copy of the own keys alone left the program no PATH.
    */
   function interceptorEnv(base, self) {
     if (!EXEC_PRELOAD || INTERCEPTED || (base != null && typeof base !== 'object')) return null;
@@ -172,7 +174,9 @@ if (process.platform === 'android') {
     } catch (e) {
       return null;
     }
-    var env = Object.assign({}, base || process.env);
+    var from = base || process.env;
+    var env = {};
+    for (var key in from) env[key] = from[key];
     var preloads = typeof env.LD_PRELOAD === 'string' ? env.LD_PRELOAD : '';
     if (preloads.split(/[:\s]+/).indexOf(EXEC_PRELOAD) < 0) env.LD_PRELOAD = preloads ? EXEC_PRELOAD + ':' + preloads : EXEC_PRELOAD;
     Object.keys(INTERCEPTOR_VARS).forEach(function (name) {
@@ -279,8 +283,8 @@ if (process.platform === 'android') {
 
   // The engine's own port answers every app on the phone that can use the network, and the page it
   // serves there hands out the key its calls need, so an app that finds the port can use the account
-  // signed in to the engine. The engine has no option that closes this. So the app runs nothing from
-  // ~/.gemini, where the extension keeps what it downloads, until the person has turned on
+  // signed in to the engine. The engine has no option that closes this. So the app holds back the starts it
+  // sees of anything in ~/.gemini, where the extension keeps what it downloads, until the person has turned on
   // `vscodroid.antigravity.runEngine`, a machine setting the process monitor extension declares and
   // offers when it sees the Antigravity extension. With the setting off such a call is left as it was
   // written and fails with EACCES, as it always did here, and one that writes the linker out in front of
@@ -310,9 +314,10 @@ if (process.platform === 'android') {
   // `"vscodroid.antigravity.runEngine": true`, `"vscodroid.antigravity": {"runEngine": true}` and the fully
   // nested form all name this setting, a later key replaces what an earlier one made, and a key whose
   // parent is a scalar is dropped. The same key inside another object, a language block included, is not
-  // this setting. A file that does not parse turns nothing on. VS Code recovers from some syntax errors (a
-  // missing comma), so the Settings editor can show the box ticked over a file this reads as off, which
-  // keeps the engine down, the safe side of the two.
+  // this setting. A file that does not parse turns nothing on, nor does one past SETTINGS_BYTES or nested past
+  // SETTINGS_DEPTH. VS Code recovers from some syntax errors (a missing comma) and need not share those two
+  // limits, so the Settings editor can show the box ticked over a file this reads as off, which keeps the engine
+  // down, the safe side of the two.
   var ENGINE_SETTING = 'vscodroid.antigravity.runEngine';
   var SETTINGS_BYTES = 1 << 20;
   var SETTINGS_DEPTH = 64;
@@ -422,16 +427,48 @@ if (process.platform === 'android') {
   // engineValue does, so the Settings editor can show it on while the engine stays off, and the extension says so.
   globalThis[Symbol.for('vscodroid.engineGate')] = Object.freeze({ engineTurnedOn: engineTurnedOn, settingsFile: SETTINGS_FILE });
 
-  /** Whether the real path of `file` is ~/.gemini or inside it; an error of any kind says it is not. */
-  function fromGemini(file) {
-    if (!HOME || !path.isAbsolute(file)) return false;
+  /**
+   * The real path of `file`, from the system's resolver where it answers as the JavaScript one does: one call where
+   * the JavaScript one looks at each part of the path in turn, which every word of a long command paid for. The
+   * JavaScript one first resolves the path as text (`..` and a trailing slash), so this does too; the two then
+   * agreed on links, `..` after a link, loops and a FIFO on Linux and macOS. Bionic's resolver was not compared
+   * there, so NATIVE_REALPATH asks both once, on this file's own directory, which a device reaches through the
+   * /data/user/0 link, and a resolver that fails or answers otherwise is not used.
+   */
+  var NATIVE_REALPATH = false;
+  try {
+    NATIVE_REALPATH = fs.realpathSync.native(__dirname) === fs.realpathSync(__dirname);
+  } catch (e) { /* the JavaScript resolver */ }
+
+  function realPathOf(file) {
+    var resolved = path.resolve(file);
+    return NATIVE_REALPATH ? fs.realpathSync.native(resolved) : fs.realpathSync(resolved);
+  }
+
+  /** The real path of ~/.gemini, or null while there is none. Read at each call: the extension makes it later. */
+  function geminiRoot() {
+    if (!HOME) return null;
     try {
-      var real = fs.realpathSync(file);
-      var gemini = fs.realpathSync(path.join(HOME, '.gemini'));
-      return real === gemini || real.indexOf(gemini + '/') === 0;
+      return realPathOf(path.join(HOME, '.gemini'));
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /** Whether the real path of `file` is `root` (geminiRoot) or inside it; an error of any kind says it is not. */
+  function within(root, file) {
+    if (root === null || !path.isAbsolute(file)) return false;
+    try {
+      var real = realPathOf(file);
+      return real === root || real.indexOf(root + '/') === 0;
     } catch (e) {
       return false;
     }
+  }
+
+  /** Whether the real path of `file` is ~/.gemini or inside it; an error of any kind says it is not. */
+  function fromGemini(file) {
+    return within(geminiRoot(), file);
   }
 
   /**
@@ -442,7 +479,9 @@ if (process.platform === 'android') {
    */
   function geminiNamed(words, options, shell) {
     var gemini = HOME ? path.join(HOME, '.gemini') : null;
-    if (!gemini || !fromGemini(gemini)) return null;
+    // Resolved once for the call, not once for each word: a command or an argument list may hold thousands.
+    var root = gemini && path.isAbsolute(gemini) ? geminiRoot() : null;
+    if (root === null) return null;
     var cwd = cwdOf(options);
     var spelled = false;
     for (var i = 0; i < words.length; i++) {
@@ -450,13 +489,13 @@ if (process.platform === 'android') {
       if (shell) word = word.replace(/["']/g, '').replace(/^(?:~|\$\{HOME\}|\$HOME)(?=\/|$)/, HOME);
       if (!word) continue;
       var full = path.resolve(cwd, word);
-      if (fromGemini(full)) return full;
+      if (within(root, full)) return full;
       if (shell && word.indexOf('.gemini') >= 0) spelled = true;
     }
     var env = (options && options.env) || process.env;
     var dirs = typeof env.PATH === 'string' ? env.PATH.split(':') : [];
-    var searched = dirs.some(function (dir) { return dir !== '' && fromGemini(path.resolve(cwd, dir)); });
-    return spelled || searched || fromGemini(cwd) ? gemini : null;
+    var searched = dirs.some(function (dir) { return dir !== '' && within(root, path.resolve(cwd, dir)); });
+    return spelled || searched || within(root, cwd) ? gemini : null;
   }
 
   var WEBVIEW_ORIGIN = 'https://*.vscode-cdn.net';
@@ -753,21 +792,29 @@ if (process.platform === 'android') {
     var tail = rest.slice(listed ? 1 : 0);
     var options = tail[0];
     // Options Node itself refuses are left for Node to refuse.
-    if (options != null && typeof options !== 'object' && typeof options !== 'function') return {};
-    if (options && options.shell) return shellCall(file, rest, tail);
+    if (options != null && (Array.isArray(options) || (typeof options !== 'object' && typeof options !== 'function'))) return {};
+    // Node acts on the options' own properties alone, an inherited cwd, env or shell ignored, so the call is read,
+    // and made when it is rewritten, from a copy of those.
+    if (options && typeof options === 'object') {
+      tail = [Object.assign({}, options)].concat(tail.slice(1));
+      rest = (listed ? [rest[0]] : []).concat(tail);
+    }
+    if (tail[0] && tail[0].shell) return shellCall(file, rest, tail);
     return engineCall(file, rest, relay);
   }
 
   /**
    * startCall for a command run in a shell, which Node makes of the file and the argument list joined by spaces.
-   * It is made as written, with no interceptor, unless the setting refuses it (see ENGINE_SETTING).
+   * It is made as written, with no interceptor, unless the setting refuses it (see ENGINE_SETTING). A command that
+   * does not name the linker is not read further: without it the shell's own start of anything in ~/.gemini is
+   * refused, and reading every command a shell runs would cost each of them a look at every word.
    */
   function shellCall(file, rest, tail) {
     var text = [file].concat(Array.isArray(rest[0]) ? rest[0] : []).join(' ');
+    if (!/linker64/.test(text.replace(/["']/g, ''))) return {};
     var named = geminiNamed(text.split(/[\s;&|()<>`]+/), tail[0], true);
     if (!named || engineTurnedOn()) return {};
     endEarlierHub();
-    if (!/linker64/.test(text.replace(/["']/g, ''))) return {};
     return { call: [named, []].concat(withOptions(tail, { shell: false })) };
   }
 
@@ -860,9 +907,11 @@ if (process.platform === 'android') {
     return realExecFileSync.apply(this, plainCall(arguments));
   };
   childProcess.execSync = function (command, options) {
-    if (options != null && typeof options !== 'object') return realExecSync.apply(this, arguments);
+    // Node runs the command whatever stands in place of the options: it reads their own properties, and a string,
+    // a number or a function has none it uses. So the command is read as it runs, never handed on unread.
+    var read = options !== null && typeof options === 'object' ? Object.assign({}, options) : {};
     // A refusal is a start of what the command names without a shell, which execSync cannot make.
-    var gate = shellCall(command, [options || {}], [options || {}]);
+    var gate = shellCall(command, [read], [read]);
     return gate.call ? realExecFileSync.apply(this, gate.call) : realExecSync.apply(this, arguments);
   };
 }

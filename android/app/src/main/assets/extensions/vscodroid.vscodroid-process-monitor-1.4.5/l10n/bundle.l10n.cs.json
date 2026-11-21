@@ -1,0 +1,7 @@
+{
+  "Google Antigravity is installed, but VSCodroid keeps its engine off. While the engine runs, other apps on this phone can reach it and use the account signed in to it. Turn it on only on a phone whose apps you trust.": "Rozšíření Google Antigravity je nainstalováno, ale VSCodroid nechává jeho jádro vypnuté. Dokud jádro běží, mohou se k němu připojit jiné aplikace v tomto telefonu a používat účet, který je v jádru přihlášený. Zapněte ho jen v telefonu, jehož aplikacím důvěřujete.",
+  "Turn On and Reload": "Zapnout a znovu načíst",
+  "Don't Show Again": "Znovu nezobrazovat",
+  "The Antigravity engine could not be turned on: {0}": "Jádro Antigravity se nepodařilo zapnout: {0}",
+  "The setting Antigravity: Run Engine shows as on, but VSCodroid reads it as off in {0}, so the Google Antigravity engine stays off. VSCodroid reads nothing from that file when it has an error VS Code works around, such as a missing comma, when it is larger than 1 MiB, or when its nesting is more than 64 levels deep. Correct the file, then reload the window.": "Nastavení Antigravity: Run Engine je zobrazeno jako zapnuté, ale VSCodroid ho v souboru {0} čte jako vypnuté, takže jádro Google Antigravity zůstává vypnuté. VSCodroid z tohoto souboru nic nepřečte, pokud obsahuje chybu, kterou VS Code obejde, například chybějící čárku, pokud je větší než 1 MiB nebo pokud má vnoření hlubší než 64 úrovní. Opravte soubor a pak znovu načtěte okno."
+}

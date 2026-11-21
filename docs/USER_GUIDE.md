@@ -677,12 +677,17 @@ Antigravity welcome screen with **Continue with Google**.
 says so and offers **Turn On and Reload**, or **Don't Show Again**, which keeps the notice away until the
 setting has been on once. The same switch is in Settings: search for `run engine` and
 tick **Vscodroid > Antigravity: Run Engine** (it is listed on the **Remote** tab), then run **Developer:
-Reload Window**. Until then VSCodroid runs nothing the extension keeps in `~/.gemini` but the engine's
-version check, however a start of it is written (with the system loader in front of it, or as a shell
-command), and the extension's panel reads `Couldn't load this view` with a `spawn ... EACCES` error, which
-is the engine not being started. If the box is ticked and the panel still shows that error, VSCodroid reads
-the setting as off in its settings file, which happens when the file has an error that VS Code works around,
-such as a missing comma; a notice then names the file to correct. Untick the setting and reload the window
+Reload Window**. Until then VSCodroid holds back the extension's starts of what it keeps in `~/.gemini`,
+other than the engine's version check, including one written with the system loader in front of the
+program and a shell command that names both, and the extension's panel reads `Couldn't load this view`
+with a `spawn ... EACCES` error, which is the engine not being started. Only what a start spells out is
+seen: a program that is told what to run (a shell given a command with `-c`, an interpreter, or `env` in
+front of the loader), or a name a shell command builds from a variable or a pattern, gets past it. The switch
+holds back what an extension starts in the usual way; it is no barrier against an extension that sets out to
+run the engine. If the box is ticked and the panel still shows that error, VSCodroid reads the setting as
+off in its settings file, which happens when the file has an error that VS Code works around, such as a
+missing comma, is larger than 1 MiB, or nests more than 64 levels deep; a notice then names the file to
+correct. Untick the setting and reload the window
 to turn the engine off again: an engine that is running is stopped then. The setting belongs to the phone
 it was turned on on: restoring VSCodroid from a backup, or moving it to a new phone, turns it off again.
 With the engine on, VSCodroid starts it only with the arguments the extension itself gives it, so an
@@ -700,7 +705,8 @@ What to know before using it:
   directly under the app's files directory, such as the engine itself, answered `Permission denied`: the engine
   starts the agent's commands itself, and VSCodroid cannot route those through the system loader. The engine is
   started without the terminal's program loader, as is anything an extension starts that names, runs in or
-  searches `~/.gemini`, so that loader never starts what is kept there. Installed toolchains were not tried.
+  searches `~/.gemini`, so that loader does not start what such a start names there. Installed toolchains
+  were not tried.
 - **Other apps on the phone.** While it runs, the engine listens on a port of `127.0.0.1`, and any app that can
   use the network can open that port. The page the engine serves there includes the key its calls require, so
   such an app can read the signed-in account's name, email address and plan, and should be assumed able to make

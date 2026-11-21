@@ -1,7 +1,0 @@
-{
-  "Google Antigravity is installed, but VSCodroid keeps its engine off. While the engine runs, other apps on this phone can reach it and use the account signed in to it. Turn it on only on a phone whose apps you trust.": "Rozszerzenie Google Antigravity jest zainstalowane, ale VSCodroid trzyma jego silnik wyłączony. Gdy silnik działa, inne aplikacje na tym telefonie mogą się z nim połączyć i korzystać z konta zalogowanego w silniku. Włączaj go tylko na telefonie, którego aplikacjom ufasz.",
-  "Turn On and Reload": "Włącz i załaduj ponownie",
-  "Don't Show Again": "Nie pokazuj ponownie",
-  "The Antigravity engine could not be turned on: {0}": "Nie udało się włączyć silnika Antigravity: {0}",
-  "The setting Antigravity: Run Engine shows as on, but VSCodroid reads it as off in {0}, so the Google Antigravity engine stays off. VS Code works around some errors in that file, such as a missing comma, and VSCodroid does not. Correct the file, then reload the window.": "Ustawienie Antigravity: Run Engine jest pokazane jako włączone, ale VSCodroid odczytuje je w pliku {0} jako wyłączone, więc silnik Google Antigravity pozostaje wyłączony. VS Code omija niektóre błędy w tym pliku, na przykład brakujący przecinek, a VSCodroid nie. Popraw plik, a następnie załaduj okno ponownie."
-}
