@@ -505,8 +505,8 @@ appears; `LD_PRELOAD` itself is deliberately not there, because it would load un
 and everything node forks, which is outside the measured scope. `platform-fix.js` puts it instead
 into a copy of the environment of one kind of extension host start, a program under the data
 directory that it starts through the linker (with `TERMUX_EXEC__PROC_SELF_EXE` naming the program),
-only while the library is a file at `TERMUX__PREFIX/lib` and never for a start that could reach
-`~/.gemini`. A command an extension runs in a shell gets none: there the interceptor would let it run
+only while the library is a file at `TERMUX__PREFIX/lib` and never for a start that names, runs in or
+searches `~/.gemini`. A command an extension runs in a shell gets none: there the interceptor would let it run
 any script or program under the data directory by naming it. `"LD_PRELOAD": null` in the same
 setting is the off switch, and the launch-time insert leaves a present key alone whatever its value, with one
 exception: this app's own path under another Android user's data directory, which a settings

@@ -397,6 +397,46 @@ for (const prefix of [BARE_PREFIX, null]) {
         'the caller\'s options, its environment or the process\'s own environment gained the interceptor');
     checked++;
 }
+// Node reads a call's environment with for...in, keys the object inherits included (an extension may pass
+// Object.create(process.env) with its own changes), and the rest of the options as their own properties only:
+// measured on Node 22 and 24, every start ignores an inherited cwd, stdio, env or shell. A start through the
+// linker hands Node the same, the environment's inherited keys in its copy and the inherited options still out of
+// reach, and the shim decides on what Node acts on: an inherited shell or env is not the call's. JSON cannot carry
+// a prototype, so the main builds the call and the recorder logs what Node reads of it.
+const RECORD_AS_NODE = path.join(tmp, 'record-as-node.js');
+fs.writeFileSync(RECORD_AS_NODE,
+    "const cp = require('child_process');\n" +
+    "const read = (x) => { if (!x || typeof x !== 'object' || Array.isArray(x)) return x; const own = { ...x }; " +
+    "if (own.env) { const env = {}; for (const k in own.env) env[k] = own.env[k]; own.env = env; } return own; };\n" +
+    "['spawn', 'execSync', 'execFileSync'].forEach((how) => { cp[how] = function () { console.log(JSON.stringify([how].concat(Array.prototype.slice.call(arguments).map(read)))); return 'child'; }; });\n");
+const INHERITED_MAIN = path.join(tmp, 'inherited-main.js');
+fs.writeFileSync(INHERITED_MAIN,
+    "const [file, inherits] = JSON.parse(process.argv[2]);\n" +
+    "let options;\n" +
+    "if (inherits === 'env keys') {\n" +
+    "    const env = Object.create({ PATH: '/inherited/bin', FOO: 'bar' });\n    env.OWN = '1';\n" +
+    "    options = Object.create({ cwd: '/inherited/cwd', stdio: 'inherit' });\n    options.env = env;\n" +
+    "} else if (inherits === 'shell') {\n    options = Object.create({ shell: true });\n" +
+    "} else if (inherits === 'cwd') {\n    require('child_process').execSync(file, Object.create({ cwd: '/' }));\n    process.exit(0);\n" +
+    "} else {\n    options = Object.create({ env: { PATH: '/inherited/bin' } });\n}\n" +
+    "const result = require('child_process').spawn(file, ['--flag'], options);\n" +
+    "if (result !== 'child') throw new Error('the return value was lost: ' + result);\n");
+const asNode = (file, inherits, conditions = {}) => spawnedUnder([file, inherits], { record: RECORD_AS_NODE, main: INHERITED_MAIN, ...conditions });
+const inherited = { PATH: '/inherited/bin', FOO: 'bar', OWN: '1' };
+assert.deepStrictEqual(asNode(OUTSIDE, 'env keys'), ['spawn', OUTSIDE, ['--flag'], { env: inherited }], 'a call that is not the linker\'s is not read the way Node reads it');
+assert.deepStrictEqual(
+    asNode(ENGINE, 'env keys'),
+    ['spawn', BIONIC_LINKER, [ENGINE, '--flag'], { env: {
+        ...inherited, LD_PRELOAD: PRELOAD, TERMUX_APP__DATA_DIR: DATA_LINK, TERMUX__PREFIX: PREFIX, TERMUX_EXEC__PROC_SELF_EXE: ENGINE,
+    } }],
+    'a start through the linker lost what its environment inherits, or handed Node an inherited option Node ignores',
+);
+for (const inherits of ['shell', 'env option']) {
+    assert.deepStrictEqual(asNode(OUTSIDE, inherits), ['spawn', OUTSIDE, ['--flag'], {}], `an inherited ${inherits} is not ignored the way Node ignores it`);
+    assert.deepStrictEqual(asNode(ENGINE, inherits), ['spawn', BIONIC_LINKER, [ENGINE, '--flag'], { env: routedEnv(ENGINE) }],
+        `an inherited ${inherits}, which Node ignores, decided how the program was started`);
+}
+checked += 6;
 for (const [label, call, conditions] of [
     ['a musl executable, which needs its own loader', [MUSL, TOOL_ARGS, SPAWN_OPTIONS]],
     ['a static or shared object with no interpreter entry', [STATIC, TOOL_ARGS, SPAWN_OPTIONS]],
@@ -757,8 +797,9 @@ setTimeout(() => { console.error('the driver gave up waiting'); process.exit(1);
     process.exit(0);
 })().catch((e) => { console.error(e); process.exit(1); });
 `);
-// The engine's own port answers any app on the phone, so nothing the Antigravity extension keeps in
-// $HOME/.gemini runs until the person has turned on the machine setting `vscodroid.antigravity.runEngine`.
+// The engine's own port answers any app on the phone, so the starts the shim sees of what the Antigravity
+// extension keeps in $HOME/.gemini are held back until the person has turned on the machine setting
+// `vscodroid.antigravity.runEngine`.
 // Each home here lies inside the data directory, so the linker rule applies, and carries an engine of its
 // own at .gemini/bin/agy, a file and not a link: a link out of the home would take the engine out of the
 // setting's reach. The shim keeps its note of a started engine under the home's .vscodroid as well.
@@ -947,7 +988,8 @@ const ALL_MAIN = path.join(tmp, 'all-main.js');
 fs.writeFileSync(
     ALL_MAIN,
     "const cp = require('child_process');\n" +
-        "const [how, call] = JSON.parse(process.argv[2]);\n" +
+        // { "@url": path } is that path as a file URL, which Node takes for a cwd.
+        "const [how, call] = JSON.parse(process.argv[2], (k, v) => (v && typeof v['@url'] === 'string' ? require('url').pathToFileURL(v['@url']) : v));\n" +
         "const args = call.map((x) => (x === '@callback' ? function () {} : x === '@undefined' ? undefined : x));\n" +
         "if (how === 'promisified') require('util').promisify(cp.execFile)(...args); else cp[how](...args);\n",
 );
@@ -1016,7 +1058,8 @@ for (const [label, call] of [
     checked++;
 }
 
-// With the setting off, nothing in ~/.gemini is run however the call names it. Written out with the linker,
+// With the setting off, a start of something in ~/.gemini is held back in each way the call can spell it out (a
+// program told what to run, or a name a shell builds, is not seen). Written out with the linker,
 // the call is made without it: the program is started directly, which Android refuses with EACCES as it refuses
 // every other start of it, and in each API's own shape. A command run in a shell gets no interceptor, so the
 // shell's own start of something there is refused as well; one that names something in ~/.gemini and also names
@@ -1063,6 +1106,12 @@ for (const [how, call, expected] of [
     assert.deepStrictEqual(callUnder(how, call, { home: OFF_HOME }), expected, `setting off, ${how} of a shell command naming ~/.gemini: ${JSON.stringify(call)}`);
     checked++;
 }
+// The command is read in the directory Node runs it in, not one its options inherit, which Node ignores: run
+// from ~/.gemini/bin, `linker64 ./agy` is the engine.
+assert.deepStrictEqual(asNode('linker64 ./agy --hub', 'cwd', { home: OFF_HOME, cwd: OFF_BIN }),
+    ['execFileSync', path.join(fs.realpathSync(OFF_BIN), 'agy'), [], { shell: false }],
+    'setting off, a command was read from a working directory its options inherit, which Node ignores, and started the engine');
+checked++;
 // A program started through the linker that could reach ~/.gemini gets no interceptor in either state of the
 // setting, so what it would start there is refused as it was before: one that is handed a path there, runs
 // there or searches a PATH directory there, and the engine itself. A shell gets none at any time, these
@@ -1082,6 +1131,9 @@ for (const home of [OFF_HOME, HUB_HOME]) {
         ['spawn', [WRAPPER, ['./agy'], { cwd: bin }], ['spawn', BIONIC_LINKER, [WRAPPER, './agy'], { cwd: bin }]],
         ['spawnSync', [WRAPPER, [], searching], ['spawnSync', BIONIC_LINKER, [WRAPPER], searching]],
         ['execFileSync', [WRAPPER, [path.join(home, '.gemini')]], ['execFileSync', BIONIC_LINKER, [WRAPPER, path.join(home, '.gemini')]]],
+        // Runs there, with arguments that name nothing there: the directory, and the same as a file URL.
+        ['spawn', [WRAPPER, ['--flag'], { cwd: bin }], ['spawn', BIONIC_LINKER, [WRAPPER, '--flag'], { cwd: bin }]],
+        ['spawn', [WRAPPER, ['--flag'], { cwd: { '@url': bin } }], ['spawn', BIONIC_LINKER, [WRAPPER, '--flag'], { cwd: require('url').pathToFileURL(bin).href }]],
     ]) {
         assert.deepStrictEqual(callUnder(how, call, { home }), expected,
             `setting ${home === HUB_HOME ? 'on' : 'off'}, ${how} of ${JSON.stringify(call)}: given the interceptor, which would start what it reaches in ~/.gemini`);
@@ -1106,7 +1158,8 @@ const REAL_MAIN = path.join(tmp, 'real-main.js');
 fs.writeFileSync(
     REAL_MAIN,
     "const cp = require('child_process');\n" +
-        "const [how, call] = JSON.parse(process.argv[2]);\n" +
+        "const [how, raw] = JSON.parse(process.argv[2]);\n" +
+        "const call = raw.map((x) => (x === '@callback' ? function () {} : x));\n" +
         "const done = (what) => { console.log(JSON.stringify(what)); process.exit(0); };\n" +
         "setTimeout(() => done('no answer'), 8000);\n" +
         "try {\n" +
@@ -1132,6 +1185,23 @@ for (const [how, call] of [
     ['spawn', [BIONIC_LINKER, [OFF_ENGINE, '--hub'], { shell: true }]],
 ]) {
     assert.strictEqual(realUnder(how, call), 'EACCES', `setting off, ${how} of ${JSON.stringify(call)} did not fail with EACCES`);
+    checked++;
+}
+// Options Node refuses are left for Node to refuse: made through the linker, the start would succeed where the
+// start as written throws. execSync is the exception: Node runs its command whatever stands in place of the
+// options (it reads their own properties, and a string, a number or a function has none it uses), so the
+// command is read as any other, and with the setting off it does not start the engine through the shell.
+for (const [label, how, call, want] of [
+    ['an Android program with a string for its argument list', 'spawn', [ENGINE, 'x'], 'ERR_INVALID_ARG_TYPE'],
+    ['an Android program with a string for its argument list', 'spawnSync', [ENGINE, 'x'], 'ERR_INVALID_ARG_TYPE'],
+    ['an Android program with a number for its options', 'execFileSync', [ENGINE, [], 5], 'ERR_INVALID_ARG_TYPE'],
+    ['an Android program with a list for its options', 'spawn', [ENGINE, [], []], 'ERR_INVALID_ARG_TYPE'],
+    ['the linker and the engine with a string for the options', 'execSync', ['linker64 ~/.gemini/bin/agy --hub', 'x'], 'EACCES'],
+    ['the linker and the engine with a number for the options', 'execSync', ['linker64 ~/.gemini/bin/agy --hub', 5], 'EACCES'],
+    ['the linker and the engine with a function for the options', 'execSync', ['linker64 ~/.gemini/bin/agy --hub', '@callback'], 'EACCES'],
+]) {
+    const got = realUnder(how, call);
+    assert.strictEqual(got, want, `setting off, ${how} of ${label}: ended in ${got}, wanted ${want}`);
     checked++;
 }
 
@@ -1361,7 +1431,9 @@ if (mode === 'dead') {
     pid = dummy.pid;
 }
 fs.writeFileSync(note, JSON.stringify({ pid: pid, port: 41999 }));
-const started = cp.spawn(engine, call === 'version' ? ['--version'] : ['--hub', '--hub-port=41500']);
+// A shell command that names the linker and the engine, which the setting refuses as it refuses the hub.
+const started = call === 'shell' ? cp.exec('/system/bin/linker64 ' + engine + ' --hub', function () {})
+    : cp.spawn(engine, call === 'version' ? ['--version'] : ['--hub', '--hub-port=41500']);
 started.on('error', () => {});
 const done = (result) => { console.log(JSON.stringify({ result: result })); if (dummy) dummy.kill('SIGKILL'); process.exit(0); };
 if (dummy) {
@@ -1407,6 +1479,14 @@ if (dummy) {
             { env: { ...process.env, ...standInEnv, HOME: home, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 30000 },
         ).trim().split('\n').pop());
         assert.strictEqual(versionRun.result, 'ended by SIGTERM', `the version check left an engine running with the setting off: ${versionRun.result}`);
+        checked++;
+        // So does a shell command that names the linker and the engine, which is refused the same way.
+        const shellRun = JSON.parse(execFileSync(
+            process.execPath,
+            ['--require', FAKE_ANDROID, '--require', FIX, REAP_DRIVER, engineIn(home), 'match', path.join(home, '.vscodroid/antigravity-hub.json'), 'shell'],
+            { env: { ...process.env, ...standInEnv, HOME: home, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 30000 },
+        ).trim().split('\n').pop());
+        assert.strictEqual(shellRun.result, 'ended by SIGTERM', `a refused shell command left an engine running with the setting off: ${shellRun.result}`);
         checked++;
     }
 

@@ -51,7 +51,8 @@ function isStale(snapshot) {
 // on clears it, so a person who turns it off again later is told again.
 //
 // VS Code reads the settings file more leniently than platform-fix.js, which recovers from no syntax error
-// (a missing comma, say) and so keeps the engine off over a file whose box the Settings editor shows ticked.
+// (a missing comma, say) and reads nothing from a file over 1 MiB or nested more than 64 levels deep, and so
+// keeps the engine off over a file whose box the Settings editor shows ticked.
 // The panel then fails with the same spawn error, so this compares the two readings, through what
 // platform-fix.js leaves on the extension host's global, and names the file to correct when they disagree,
 // translated for the same reason as the offer.
@@ -70,8 +71,9 @@ function offerAntigravityEngine() {
         if (gate && !gate.engineTurnedOn()) {
             engineOffered = true;
             vscode.window.showWarningMessage(vscode.l10n.t('The setting Antigravity: Run Engine shows as on, but VSCodroid reads it ' +
-                'as off in {0}, so the Google Antigravity engine stays off. VS Code works around some errors in that file, ' +
-                'such as a missing comma, and VSCodroid does not. Correct the file, then reload the window.', gate.settingsFile));
+                'as off in {0}, so the Google Antigravity engine stays off. VSCodroid reads nothing from that file when it has an ' +
+                'error VS Code works around, such as a missing comma, when it is larger than 1 MiB, or when its nesting is more ' +
+                'than 64 levels deep. Correct the file, then reload the window.', gate.settingsFile));
         }
         return;
     }
