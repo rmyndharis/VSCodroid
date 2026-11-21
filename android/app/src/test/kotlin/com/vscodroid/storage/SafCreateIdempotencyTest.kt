@@ -198,10 +198,9 @@ class SafCreateIdempotencyTest {
 
         val local = File(workspace, "notes.txt")
         assertEquals("the only copy", local.readText())
-        assertEquals(
-            listOf(local.absolutePath),
-            File(filesDir, SafSyncEngine.UPLOADS_IN_FLIGHT_FILE).readLines(),
-        )
+        assertEquals(setOf(local.absolutePath), engine.uploadsInFlight())
+        // No document was made, so the line stands for no bytes of this app's on the device.
+        assertEquals(emptySet<String>(), engine.partlyWrittenUploads())
     }
 
     @Test

@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeFalse
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -990,8 +991,8 @@ class SafQueuedWriteBackTest {
 
     /**
      * A file made while its folder opens is sent once the folder is open, also over a record the open
-     * could not read, where the record the open writes names the file without a digest: such a row
-     * only says the open could not place the file, not that the device has it.
+     * could not read. The open leaves such a file to the watcher: it writes no row for it and does not
+     * say the file stayed in the app, which the watcher then disproves by sending it.
      */
     @Test
     fun `a file made while its folder opens over an unreadable record reaches the device once the watcher starts`() {
@@ -1000,6 +1001,8 @@ class SafQueuedWriteBackTest {
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
         val record = File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
         record.writeText("not a record this build wrote")
+        val notReached = mutableListOf<Int>()
+        engine.onUploadIncomplete = { _, count, _ -> notReached += count }
         val watches = OpenWatches().also { it.install() }
         var made = false
 
@@ -1012,12 +1015,114 @@ class SafQueuedWriteBackTest {
             }
         }
         assertTrue(made, "precondition: the file was made while the folder opened")
-        val row = record.readLines().single { it.startsWith("n.txt\t") }
-        assertNull(SafSyncEngine.splitRecordLine(row).second, "precondition: the record names the file without a digest")
+        assertTrue(record.readLines().none { it.startsWith("n.txt\t") }, "the open kept a file the watcher is to send")
+        assertEquals(emptyList<Int>(), notReached, "the open said a file the watcher sends did not reach the device folder")
         replayWhatTheOpenRecorded()
         drain()
 
         assertEquals("made while it opened", text("n.txt"))
+        assertEquals(emptyList<Int>(), notReached)
+    }
+
+    /**
+     * The first open of a folder, with no record beside its copy, while the person renames a file the open has
+     * just copied. The file the rename made is only in the copy when the open ends, and with no record the open
+     * cannot tell it from a document deleted on the device: it kept it and said it had not reached the device
+     * folder, and the watcher sent it a moment later from what the open recorded.
+     */
+    @Test
+    fun `a file renamed into place while a folder first opens reaches the device and is not announced as kept`() {
+        onDevice("a.txt", "alpha")
+        onDevice("g1.txt", "golf")
+        val notReached = mutableListOf<Int>()
+        engine.onUploadIncomplete = { _, count, _ -> notReached += count }
+        val watches = OpenWatches().also { it.install() }
+        var renamed = false
+
+        openRecording { done, _ ->
+            if (done == 2 && !renamed) {
+                renamed = true
+                assertTrue(File(mirror, "g1.txt").renameTo(File(mirror, "g3.txt")))
+                watches.fire(FileObserver.MOVED_FROM, "g1.txt")
+                watches.fire(FileObserver.MOVED_TO, "g3.txt")
+            }
+        }
+        assertTrue(renamed, "precondition: the file was renamed while the folder opened")
+        assertEquals(emptyList<Int>(), notReached, "the open said a file the watcher sends did not reach the device folder")
+        replayWhatTheOpenRecorded()
+        drain()
+
+        assertEquals("golf", text("g3.txt"), "the renamed file did not reach the device")
+        assertEquals(setOf("a.txt", "g3.txt"), device.keys)
+        assertEquals(emptyList<Int>(), notReached)
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /**
+     * The same file, where the watcher does not send it: the record cannot be read when it starts, so nothing
+     * tells the open's own copies from the person's. The file stays in the app, and the person is told so.
+     */
+    @Test
+    fun `a file renamed into place while a folder first opens is announced when the watcher does not send it`() {
+        onDevice("a.txt", "alpha")
+        onDevice("g1.txt", "golf")
+        val notReached = mutableListOf<Int>()
+        engine.onUploadIncomplete = { _, count, _ -> notReached += count }
+        val watches = OpenWatches().also { it.install() }
+        var renamed = false
+        openRecording { done, _ ->
+            if (done == 2 && !renamed) {
+                renamed = true
+                assertTrue(File(mirror, "g1.txt").renameTo(File(mirror, "g3.txt")))
+                watches.fire(FileObserver.MOVED_FROM, "g1.txt")
+                watches.fire(FileObserver.MOVED_TO, "g3.txt")
+            }
+        }
+        assertEquals(emptyList<Int>(), notReached, "precondition: the open left the file to the watcher")
+        val record = File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+        assertTrue(record.setReadable(false, false))
+        try {
+            assumeFalse(Files.isReadable(record.toPath()), "This account bypasses file read permissions")
+            replayWhatTheOpenRecorded()
+            drain()
+        } finally {
+            record.setReadable(true, true)
+        }
+
+        assertFalse("g3.txt" in device.keys, "precondition: the watcher sent the file")
+        assertEquals("golf", File(mirror, "g3.txt").readText(), "the file did not stay in the app")
+        assertEquals(listOf(1), notReached, "a file that stayed in the app was not told of")
+    }
+
+    /**
+     * A copy the open sets aside beside a folder that replaced its file, where the record names the file without
+     * a digest, is kept inside the app: nothing shows it is the person's work rather than the device's old bytes.
+     * The open's own move of it reaches the open's watch, and the watcher sent it from there.
+     */
+    @Test
+    fun `a copy the open keeps beside the folder that replaced it is not sent when the watcher starts`() {
+        onDevice("keep.txt", "kilo")
+        onDevice("foo", "first draft")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val record = File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+        record.writeText(record.readLines().joinToString("\n") { if (it.startsWith("foo\t")) it.substringBeforeLast('\t') else it })
+        onDevice("foo")
+        val notReached = mutableListOf<Int>()
+        engine.onUploadIncomplete = { _, count, _ -> notReached += count }
+        val watches = OpenWatches().also { it.install() }
+
+        openRecording { _, _ -> }
+        val kept = mirror.list()!!.single { it.startsWith("foo" + SafSyncEngine.LOCAL_COPY_SUFFIX) }
+        // What the kernel reports for the open's own move, which reaches the watch after the fact.
+        watches.fire(FileObserver.MOVED_FROM, "foo")
+        watches.fire(FileObserver.MOVED_TO, kept)
+        watches.fire(FileObserver.CREATE or isDirFlag, "foo")
+        replayWhatTheOpenRecorded()
+        drain()
+
+        assertFalse(kept in device.keys, "the watcher sent a copy the open keeps inside the app")
+        assertEquals("first draft", File(mirror, kept).readText())
+        assertEquals(listOf(1), notReached)
     }
 
     /**

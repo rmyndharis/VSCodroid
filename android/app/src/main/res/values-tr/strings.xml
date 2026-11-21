@@ -346,8 +346,8 @@
          worded like saf_write_back_failed: most of the folder did arrive, so "the only
          copy is inside VSCodroid" would overstate. -->
     <plurals name="saf_upload_incomplete">
-        <item quantity="one">%2$s: bir öğe cihaz klasörüne ulaşmadı.</item>
-        <item quantity="other">%2$s: %1$d öğe cihaz klasörüne ulaşmadı.</item>
+        <item quantity="one">%2$s: bir öğe cihaz klasörüne ulaşmadı. VSCodroid içinde kalır; göndermek için yeniden kaydedin.</item>
+        <item quantity="other">%2$s: %1$d öğe cihaz klasörüne ulaşmadı. VSCodroid içinde kalırlar; göndermek için her birini yeniden kaydedin.</item>
     </plurals>
     <!-- The same folder stopped by the enumeration cap rather than by a refusal. Named
          separately because the cause is a limit this app chose, not the device saying

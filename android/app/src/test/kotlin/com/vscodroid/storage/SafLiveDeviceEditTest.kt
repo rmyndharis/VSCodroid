@@ -130,6 +130,12 @@ class SafLiveDeviceEditTest {
     /** How many of the next `"wt"` streams fail at their first byte, before anything lands. */
     private var failWriteStreams = 0
 
+    /** How many of the next `"wt"` opens the provider answers with no stream at all, so nothing is written. */
+    private var refusedWriteStreams = 0
+
+    /** Where set, a read of the document ends after this many bytes, whatever size the provider reports. */
+    private var readEndsAfter: Int? = null
+
     /**
      * How many of the next write streams truncate the document as `"wt"` does at open and then fail after [cutShortBytes]
      * bytes, leaving the document holding the leading bytes of what was being written.
@@ -224,7 +230,7 @@ class SafLiveDeviceEditTest {
             if (firstArg<Uri>() in gone) throw FileNotFoundException("deleted by another app")
             if (!deviceReadable) throw IOException("offline")
             val text = if (firstArg<Uri>() === uris[OTHER_ID]) otherText!! else deviceText
-            object : ByteArrayInputStream(text.toByteArray()) {
+            object : ByteArrayInputStream(text.toByteArray().let { bytes -> readEndsAfter?.let { bytes.copyOf(minOf(it, bytes.size)) } ?: bytes }) {
                 override fun read(b: ByteArray, off: Int, len: Int) =
                     super.read(b, off, len).also { if (it > 0) bytesRead += it }
 
@@ -233,6 +239,10 @@ class SafLiveDeviceEditTest {
         }
         every { resolver.openOutputStream(any(), "wt") } answers {
             if (firstArg<Uri>() in gone) throw FileNotFoundException("deleted by another app")
+            if (refusedWriteStreams > 0) {
+                refusedWriteStreams--
+                return@answers null
+            }
             if (cutShortStreams > 0) {
                 cutShortStreams--
                 land(ByteArray(0))
@@ -2143,6 +2153,61 @@ class SafLiveDeviceEditTest {
 
         assertEquals(setOf("first save"), deviceCopies().values.toSet(), "another app's edit was not kept")
         assertEquals("first save, long enough, and more", deviceText)
+    }
+
+    /**
+     * A save the provider refused before it wrote anything leaves the journal line of the write, and nothing of
+     * this app's on the device. A document that is then a prefix of the mirror file is what another app left,
+     * here by deleting the end of the text: the line made it read as this app's own cut-short write, and the
+     * next save went over it with nothing kept and nothing said.
+     */
+    @Test
+    fun `a save after one the provider refused before writing keeps what another app cut`() {
+        open()
+        refusedWriteStreams = 2
+        save("v1 and the rest")
+        assertEquals("v1", deviceText, "the fixture's refused save reached the device")
+        editOnDevice("v")
+
+        save("v1 and the rest, again")
+
+        assertEquals(setOf("v"), deviceCopies().values.toSet(), "another app's edit was not kept")
+        assertEquals("v1 and the rest, again", deviceText)
+        assertEquals(1, preservedNotices.size, "the person was not told another app's edit was kept")
+    }
+
+    /** The same line met by the next open of the folder rather than the next save. */
+    @Test
+    fun `an open after a save the provider refused before writing keeps what another app cut`() {
+        open()
+        refusedWriteStreams = 2
+        save("v1 and the rest")
+        editOnDevice("v")
+
+        open()
+
+        assertEquals(setOf("v"), deviceCopies().values.toSet(), "another app's edit was not kept")
+        assertEquals(1, preservedNotices.size, "the person was not told another app's edit was kept")
+    }
+
+    /**
+     * A provider stream that ends before the size the provider reports holds only part of the document. Read to
+     * its end, the part was a prefix of the mirror file, which with this app's own cut-short write in the journal
+     * passed for that write, and the save went over another app's edit.
+     */
+    @Test
+    fun `a device stream that ends before its reported size is not taken for this app's cut-short write`() {
+        open()
+        cutShortBytes = 4
+        cutShortStreams = 2
+        save("first save, long enough to be cut")
+        assertEquals("firs", deviceText)
+        editOnDevice("first edit by another app")
+        readEndsAfter = 4
+
+        save("first save, long enough to be cut, and more")
+
+        assertEquals("first edit by another app", deviceText, "another app's edit was written over")
     }
 
     /**
