@@ -7,6 +7,7 @@ import android.os.StatFs
 import androidx.annotation.StringRes
 import com.vscodroid.BuildConfig
 import com.vscodroid.R
+import android.system.ErrnoException
 import android.system.Os
 import com.google.android.play.core.assetpacks.AssetPackException
 import com.google.android.play.core.assetpacks.AssetPackManagerFactory
@@ -1760,7 +1761,9 @@ class ToolchainManager(private val context: Context) {
                     !toolchainPathsAreOwned(previous, manifest) && !reclaimPartialCopy(name, previous)
                 ) {
                     Logger.w(tag, "Keeping the previous install record for $packName until its files are settled")
-                    fail(packName, ToolchainFailure.STORAGE, transferId)
+                    // Not a lack of room: an unreadable marker, one of another toolchain, or files it names that
+                    // could not be removed. Freeing space changes none of them, so the person is pointed at the log.
+                    fail(packName, ToolchainFailure.INTERNAL, transferId)
                     return false
                 }
             }
@@ -1802,8 +1805,9 @@ class ToolchainManager(private val context: Context) {
         // took the bit decides the repair marker written with the record below.
         val execBitsSet = applyManifestExecBits(manifest)
 
-        // Create symlinks in usr/bin/
-        var linksFailed = false
+        // Create symlinks in usr/bin/. A refused link sets what the failure reports: storage only while
+        // every refused link was refused for room, so one refused for anything else makes it INTERNAL.
+        var failedLink: ToolchainFailure? = null
         val symlinks = manifest.optJSONObject("symlinks")
         if (symlinks != null) {
             val binDir = File(context.filesDir, "usr/bin")
@@ -1823,7 +1827,7 @@ class ToolchainManager(private val context: Context) {
                     Os.symlink(targetAbsolute, linkFile.absolutePath)
                     Logger.d(tag, "Symlink: $linkName -> $target")
                 } catch (e: Exception) {
-                    linksFailed = true
+                    if (failedLink != ToolchainFailure.INTERNAL) failedLink = linkFailure(e)
                     Logger.w(tag, "Failed to create symlink $linkName: ${e.message}")
                 }
             }
@@ -1845,20 +1849,20 @@ class ToolchainManager(private val context: Context) {
                         Os.symlink(targetFile.absolutePath, linkFile.absolutePath)
                         Logger.d(tag, "Lib symlink: $linkName -> $targetName")
                     } catch (e: Exception) {
-                        linksFailed = true
+                        if (failedLink != ToolchainFailure.INTERNAL) failedLink = linkFailure(e)
                         Logger.w(tag, "Failed to create lib symlink $linkName: ${e.message}")
                     }
                 }
             }
         }
-        if (linksFailed) {
+        failedLink?.let { why ->
             // A tree without its links does not run, and recorded as installed nothing would look at it
-            // again: the card would read Installed with only Remove offered. The cause that fits is the
-            // one a copy that cannot finish has, a disk with no room for another entry, so it is
-            // reclaimed and reported the same way and the install is tried again.
+            // again: the card would read Installed with only Remove offered. So it is reclaimed, as a copy
+            // that cannot finish is, and the install is tried again; what the person is told follows the
+            // errno ([linkFailure]).
             Logger.e(tag, "Could not link $packName into usr/")
             if (reclaimPartialCopy(name, manifest)) installMarker(packName).delete()
-            fail(packName, ToolchainFailure.STORAGE, transferId)
+            fail(packName, why, transferId)
             return false
         }
 
@@ -5156,6 +5160,23 @@ enum class ToolchainFailure(@param:StringRes val message: Int) {
     // has already classified as a Play install.
     PLAY_REQUIRED(R.string.toolchain_failed_play),
     INTERNAL(R.string.toolchain_failed_internal),
+}
+
+/**
+ * What a link the install could not make reports: [ToolchainFailure.STORAGE] only for a disk or a quota
+ * with no room for another entry, ENOSPC or EDQUOT, and [ToolchainFailure.INTERNAL] for anything else.
+ *
+ * Every refusal used to be STORAGE, which was wrong for the common other cause: a folder that holds files
+ * at the link's name, which `File.delete` leaves in place, so the link is refused with EEXIST. "Not enough
+ * storage" sent the person to free space, which never helps there.
+ *
+ * Compared with the Linux numbers themselves rather than `OsConstants`, for the reason [isSymlinkMode]
+ * gives: a JVM test reads every `OsConstants` field as 0, so each errno would compare equal to ENOSPC.
+ * ENOSPC is 28 and EDQUOT 122 in the generic Linux table that arm64 uses.
+ */
+internal fun linkFailure(e: Exception): ToolchainFailure = when ((e as? ErrnoException)?.errno) {
+    28, 122 -> ToolchainFailure.STORAGE
+    else -> ToolchainFailure.INTERNAL
 }
 
 /**

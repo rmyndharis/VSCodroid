@@ -106,7 +106,8 @@ class HardwareTypingWiringTest {
             "\"Toggle Extra Key Row\" to shown no longer clears the stand-aside, so the " +
                 "command says the row is shown while it stays put away until a finger lifts",
         )
-        val config = SourceScan.body(activity, "override fun onConfigurationChanged(")
+        // onConfigurationChanged hands everything after the framework's part to configurationChanged.
+        val config = SourceScan.body(activity, "private fun configurationChanged(")
         assertTrue(
             Regex("""newConfig\.keyboard == Configuration\.KEYBOARD_NOKEYS[\s\S]*hiddenForHardwareKeyboard = false""")
                 .containsMatchIn(config),

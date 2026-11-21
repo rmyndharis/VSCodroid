@@ -11,6 +11,7 @@ import io.mockk.mockkObject
 import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -368,6 +369,26 @@ class PublishedResourceRootsTest {
         )
         assertNull(resolveWebviewResource(File(filesDir, "home/.ssh/id_ed25519").path, roots))
         assertNull(resolveWebviewResource(File(filesDir, "home/.bashrc").path, roots))
+    }
+
+    /**
+     * Whatever a root resolves to, it is published only when no location that must
+     * stay unreadable is inside it or holds it, the test the open folder already gets.
+     */
+    @Test
+    fun `no published root overlaps a location that must stay unreadable`() {
+        val context = contextWith(externalDir)
+        val sensitive = sensitiveLocations(context)
+        val overlapping = { root: String -> sensitive.any { it == root || it.startsWith("$root/") || root.startsWith("$it/") } }
+
+        assertEquals(emptyList<String>(), publishedResourceRoots(context).filter(overlapping))
+
+        mockkObject(Logger)
+        every { Logger.w(any(), any(), any()) } just Runs
+        val projects = File(filesDir, "projects").canonicalPath
+        val roots = publishedResourceRoots(context, sensitive + File(filesDir, "projects/app/.env").canonicalPath)
+        assertFalse(projects in roots, "a root that holds a sensitive location was published")
+        assertTrue(File(filesDir, "server").canonicalPath in roots, "the roots that hold none were dropped with it")
     }
 
     /**

@@ -233,7 +233,7 @@ class ToolchainOwnershipLifecycleTest {
                     """"symlinks":{"java":"$newRoot/bin/java"}}""",
             )
         }
-        every { Os.symlink(any(), any()) } throws FileNotFoundException("No space left on device")
+        every { Os.symlink(any(), any()) } throws errno(ENOSPC)
         val m = manager()
 
         assertFalse(install(m, pack))
@@ -241,6 +241,47 @@ class ToolchainOwnershipLifecycleTest {
         assertEquals(listOf(AssetPackStatus.FAILED to ToolchainFailure.STORAGE), reports)
         assertEquals(emptySet<String>(), m.getInstalledToolchains().toSet(), "a tree with no links was recorded as installed")
         assertFalse(File(filesDir, "$newRoot/bin/java").exists(), "the copy was left behind with nothing naming it")
+    }
+
+    /**
+     * A name the pack links into `usr/bin` can be taken by a folder that holds files. `File.delete` leaves such a
+     * folder where it is, and the link is then refused with EEXIST. Freeing space does nothing for that, so the person
+     * is not told to: only a disk or a quota with no room left is a lack of storage.
+     */
+    @Test
+    fun `a link refused because a folder of files holds its name is not reported as a lack of storage`() {
+        val pack = javaPack().also {
+            File(it, "toolchain_java.json").writeText(
+                """{"name":"java","displayName":"Java 21","installRoot":"$newRoot","binaries":["$newRoot/bin/java"],""" +
+                    """"symlinks":{"java":"$newRoot/bin/java"}}""",
+            )
+        }
+        val kept = file("usr/bin/java/notes.txt", "the person's file")
+        every { Os.symlink(any(), any()) } answers {
+            try {
+                Files.createSymbolicLink(File(secondArg<String>()).toPath(), File(firstArg<String>()).toPath())
+            } catch (_: java.nio.file.FileAlreadyExistsException) {
+                throw errno(EEXIST)
+            }
+            Unit
+        }
+        val m = manager()
+
+        assertFalse(install(m, pack))
+
+        assertEquals(listOf(AssetPackStatus.FAILED to ToolchainFailure.INTERNAL), reports)
+        assertEquals(emptySet<String>(), m.getInstalledToolchains().toSet(), "a tree with a missing link was recorded as installed")
+        assertEquals("the person's file", kept.readText(), "the folder at the link's name lost its files")
+    }
+
+    @Test
+    fun `only a refusal for room is a lack of storage`() {
+        assertEquals(ToolchainFailure.STORAGE, linkFailure(errno(ENOSPC)))
+        assertEquals(ToolchainFailure.STORAGE, linkFailure(errno(EDQUOT)))
+        for (other in listOf(EEXIST, EACCES, EROFS)) {
+            assertEquals(ToolchainFailure.INTERNAL, linkFailure(errno(other)), "errno $other was taken for a lack of room")
+        }
+        assertEquals(ToolchainFailure.INTERNAL, linkFailure(java.io.IOException("not an errno")))
     }
 
     @Test
@@ -607,4 +648,21 @@ class ToolchainOwnershipLifecycleTest {
         assertEquals(emptyList<String>(), manager().getInstalledToolchains())
     }
 
+    /**
+     * What `Os` throws on a device. The JVM's stand-in for the class keeps no errno from its constructor and has no
+     * message, so both are put in here.
+     */
+    private fun errno(number: Int): android.system.ErrnoException =
+        mockk<android.system.ErrnoException> { every { message } returns "symlink failed: errno $number" }.also {
+            android.system.ErrnoException::class.java.getField("errno").setInt(it, number)
+        }
+
+    private companion object {
+        // Linux's numbers, as a device reports them.
+        const val EACCES = 13
+        const val EEXIST = 17
+        const val ENOSPC = 28
+        const val EROFS = 30
+        const val EDQUOT = 122
+    }
 }
