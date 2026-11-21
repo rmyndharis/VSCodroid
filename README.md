@@ -179,7 +179,7 @@ flowchart TD
 | Android      | 10 (API 29)                        |
 | Architecture | arm64-v8a                          |
 | WebView      | Chrome 125+                        |
-| RAM          | 4 GB recommended                   |
+| RAM          | 4 GB recommended; the editor server's heap limit is set from it |
 | Storage      | ~800 MB free to install            |
 
 ## 🚀 Getting Started
@@ -246,8 +246,9 @@ adb install android/app/build/outputs/apk/debug/app-debug.apk
 | Extracted, plus Ruby and Java          | ~840 MB              |
 | Extracted, plus Ruby, Java and C/C++   | ~1,120 MB            |
 | + Codex, on top of any of these        | +395 MB              |
-| RAM usage (typical)                    | ~400-700 MB          |
 
+The core figure, which the totals include, is the size of its files; on disk they take more,
+because the filesystem allocates every file and directory in whole blocks.
 The install figure includes the space needed to allocate missing files and directories
 on encrypted f2fs. Setup measures their block rounding and inode blocks from the
 bundled assets, plus 16 MiB for generated files and filesystem metadata, with a minimum reserve of 128 MiB. Existing files and

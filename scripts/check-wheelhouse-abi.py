@@ -93,13 +93,18 @@ def page_problems(manifest, declared):
 
 
 def document_problems(manifest):
-    """Every pinned wheel is named in the documents of DOCUMENTS.
+    """Every pinned wheel is named in the documents of DOCUMENTS, at the version pinned.
 
     The guide's list and the two notice tables were written by hand when each wheel was added, and two
     wheels reached the manifest and the page with neither: a package pip installs from this project's
     release, with its licence, was named nowhere a person reads.
+
+    A substring test was not enough to hold them to it: "the cryptography module", a version the
+    manifest had moved past, or a longer name such as `pycffi` all passed. So the guide and
+    LEGAL_NOTICES.md must give the name as a whole word followed by exactly the pinned version, and
+    NOTICE.md, which gives no versions, must have a table row whose first cell is the name. A version
+    that ends a sentence is still that version; one followed by another digit, component or suffix is not.
     """
-    names = sorted({package["name"] for package in manifest.get("packages", [])})
     problems = []
     for relative in DOCUMENTS:
         path = REPO / relative
@@ -107,8 +112,13 @@ def document_problems(manifest):
             problems.append(f"{relative} is missing")
             continue
         text = path.read_text(encoding="utf-8").lower().replace("_", "-")
-        problems += [f"{relative} does not name {name}" for name in names
-                     if name.lower().replace("_", "-") not in text]
+        for package in sorted(manifest.get("packages", []), key=lambda p: p["name"]):
+            name = re.escape(package["name"].lower().replace("_", "-"))
+            if relative == "NOTICE.md":
+                if not re.search(rf"^\|\s*{name}\s*\|", text, re.M):
+                    problems.append(f"{relative} has no table row for {package['name']}")
+            elif not re.search(rf"(?<![\w-]){name}(?![\w-])[`\s|]*{re.escape(package['version'])}(?!\.?\w)", text):
+                problems.append(f"{relative} does not name {package['name']} {package['version']}")
     return problems
 
 

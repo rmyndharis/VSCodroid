@@ -20,12 +20,20 @@ sentence cannot silently switch its check off: the check fails and says which se
 to look at. A toolchain the registry lists and this file has no label for is a hard
 failure for the same reason.
 
+The free space setup asks for before it unpacks is quoted in seven places. They are held
+to the README's figure, and the README's figure to the APK.
+
 With --apk (the release workflow, after the APK is built) the core figures are also
 compared with the APK: the bytes the app extracts (everything under assets/ except the
 translation bundles, which setup never unpacks) against the documented core size, and
 the size of the APK against the documented core download. The totals above are built
 from the documented core size, so that comparison is what keeps them honest as the
-editor tree grows.
+editor tree grows. The free-space figures are compared with what
+FirstRunSetup.requiredExtractionBytes asks of that APK, worked out the way the app
+works it out, with the app's own constants: a fresh install needs the files, the
+block-rounded allocation of every file and directory plus the working margin (or the
+minimum reserve, if larger), and an update over a complete tree needs room to rewrite
+the largest file plus the minimum reserve.
 """
 
 import argparse
@@ -38,6 +46,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 REGISTRY = ROOT / "android/app/src/main/kotlin/com/vscodroid/setup/ToolchainRegistry.kt"
 MANAGER = ROOT / "android/app/src/main/kotlin/com/vscodroid/setup/ToolchainManager.kt"
+SETUP = ROOT / "android/app/src/main/kotlin/com/vscodroid/setup/FirstRunSetup.kt"
 README = ROOT / "README.md"
 GUIDE = ROOT / "docs/USER_GUIDE.md"
 SRS = ROOT / "docs/02-SRS.md"
@@ -52,6 +61,9 @@ TOTAL_TOLERANCE_MB = 5
 EXTRACTED_TOLERANCE = 0.01
 # The documented core download against the size of the APK.
 DOWNLOAD_TOLERANCE = 0.05
+# The documented free space against what setup asks for. Kept tight: a figure below
+# the demand sends someone to free space, then refuses them and asks for more.
+FREE_SPACE_TOLERANCE = 0.01
 
 
 def fail_now(message):
@@ -102,6 +114,21 @@ def space_buffer():
     if not found:
         fail_now(f"SPACE_BUFFER not found in {MANAGER.relative_to(ROOT)}")
     return int(found.group(1).replace("_", ""))
+
+
+def setup_constants():
+    """{name: bytes} for the extraction constants of FirstRunSetup, each a product of plain numbers."""
+    text = SETUP.read_text(encoding="utf-8")
+    found = {}
+    for name in ("EXTRACTION_SLACK_BYTES", "EXTRACTION_WORKING_MARGIN_BYTES", "EXTRACTION_BLOCK_BYTES"):
+        match = re.search(r"const val %s\s*=\s*((?:\d[\d_]*L?\s*\*\s*)*\d[\d_]*L?)\s*$" % name, text, re.M)
+        if not match:
+            fail_now(f"{name} in {SETUP.relative_to(ROOT)} is not a product of plain numbers")
+        product = 1
+        for factor in match.group(1).split("*"):
+            product *= int(factor.strip().rstrip("L").replace("_", ""))
+        found[name] = product
+    return found
 
 
 class Document:
@@ -197,20 +224,63 @@ def check_documents(figures):
     est, dl = figures["codex"]
     codex_install = whole_mb(max(dl + est, 2 * est) + space_buffer())
     guide.expect(r"which for this one is about ([\d,]+) MB", "Codex install free space", codex_install, TOTAL_TOLERANCE_MB)
+
+    # The README's free-space row is the figure --apk compares with the APK; every other place
+    # that quotes it has to say the same.
+    hit = readme.read(r"^\|\s*Free space required to install\s*\|\s*~([\d,]+) MB", "free space to install")
+    if hit is not None:
+        free = hit[0]
+        readme.expect(r"^\|\s*Storage\s*\|\s*~([\d,]+) MB free to install", "free space to install", free)
+        guide.expect(r"you need about ([\d,]+) MB free for the extraction", "free space to install", free)
+        guide.expect(r"the ~([\d,]+) MB above is what it insists on", "free space to install", free)
+        guide.expect(r"for a complete tree rather than ([\d,]+) MB", "free space to install", free)
+        guide.expect(
+            r"adds a small working margin,\s+which is why it needs about ([\d,]+) MB free before it starts",
+            "free space to install", free,
+        )
+        srs.expect(r"about ([\d,]+) MB free for a fresh", "free space to install", free)
+    # Read here so a rewording fails on every pull request; only the APK can say what it should be.
+    guide.find(r"roughly ([\d,]+) MB for a complete tree", "free space for an update")
     return [readme, guide, srs], readme, guide
 
 
-def check_apk(apk_path, readme, guide):
+def check_apk(apk_path, readme, guide, constants):
     with zipfile.ZipFile(apk_path) as archive:
-        extracted = sum(
-            entry.file_size
-            for entry in archive.infolist()
-            if not entry.is_dir()
-            and entry.filename.startswith("assets/")
-            and not entry.filename.startswith("assets/nls/")
-        )
+        assets = [entry for entry in archive.infolist()
+                  if not entry.is_dir() and entry.filename.startswith("assets/")]
+    unpacked = [entry for entry in assets if not entry.filename.startswith("assets/nls/")]
+    extracted = sum(entry.file_size for entry in unpacked)
     apk_bytes = pathlib.Path(apk_path).stat().st_size
     problems = []
+
+    # What FirstRunSetup.requiredExtractionBytes asks for. A fresh install allocates every file it
+    # writes, block-rounded and with one more block of its own, and every directory: extractionSpace()
+    # charges the same. The largest file is taken over the whole tree, as the Gradle build takes
+    # LARGEST_ASSET_BYTES. The few assets the APK carries that setup never writes (the notices, a
+    # baseline profile) are counted too, which moves the result by well under a megabyte.
+    block = constants["EXTRACTION_BLOCK_BYTES"]
+    slack = constants["EXTRACTION_SLACK_BYTES"]
+    directories = set()
+    for entry in unpacked:
+        parts = entry.filename.split("/")[1:-1]
+        directories.update("/".join(parts[:depth]) for depth in range(1, len(parts) + 1))
+    allocation = block * len(directories) + sum(block + (-entry.file_size) % block for entry in unpacked)
+    demands = (
+        (r"^\|\s*Free space required to install\s*\|\s*~([\d,]+) MB", readme, "free space to install",
+         "a fresh install", extracted + max(slack, allocation + constants["EXTRACTION_WORKING_MARGIN_BYTES"])),
+        (r"roughly ([\d,]+) MB for a complete tree", guide, "free space for an update",
+         "an update", max((entry.file_size for entry in assets), default=0) + slack),
+    )
+    for pattern, document, what, case, demand in demands:
+        hit = document.find(pattern, what)
+        if hit:
+            groups, line = hit
+            documented = number(groups[0])
+            if abs(documented - demand / 1_000_000) > demand / 1_000_000 * FREE_SPACE_TOLERANCE:
+                problems.append(
+                    f"{document.name}:{line}: {what} reads {documented} MB, setup asks {case} for "
+                    f"{demand / 1_000_000:.1f} MB of this APK"
+                )
 
     hit = readme.find(r"^\|\s*Extracted to internal storage \(core\)\s*\|\s*~([\d,]+) MB", "core extraction")
     if hit:
@@ -244,10 +314,11 @@ def main():
     arguments = parser.parse_args()
 
     figures = read_registry()
+    constants = setup_constants()
     documents, readme, guide = check_documents(figures)
     found, note = [], ""
     if arguments.apk:
-        found, extracted, apk_bytes = check_apk(arguments.apk, readme, guide)
+        found, extracted, apk_bytes = check_apk(arguments.apk, readme, guide, constants)
         note = f"; the APK extracts {extracted / 1e6:.1f} MB and is {apk_bytes / 1e6:.1f} MB"
 
     problems = []
