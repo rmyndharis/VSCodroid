@@ -607,6 +607,9 @@ class SafSyncEngine(private val context: Context) {
             }
         }
         val previouslyRecorded: Set<String>? by lazy { previousRecord?.keys }
+        // When the record was last written, read before this open writes it again: a file older than that
+        // was not made in a folder the listing calls empty since then.
+        val recordWrittenAt = File(mirrorDir.path + SYNCED_RECORD_SUFFIX).lastModified()
         // The previous record's line for a path, whatever copy it names, by the path as the
         // record spells it. Built only once a no-clock open finds the two sides apart.
         val previousLineFor: Map<String, String>? by lazy {
@@ -1273,7 +1276,8 @@ class SafSyncEngine(private val context: Context) {
                 safUri,
                 mirrorDir,
                 documents.mapTo(HashSet()) { it.relativePath },
-                { previousRecord?.map { (identity, digest) -> recordLine(identity, digest) }?.toSet() }
+                { previousRecord?.map { (identity, digest) -> recordLine(identity, digest) }?.toSet() },
+                if (documents.isEmpty()) recordWrittenAt else null,
             ) { done, total -> onProgress(filesDone + done, totalFiles + total) }
         } else {
             0
@@ -2348,6 +2352,7 @@ class SafSyncEngine(private val context: Context) {
         mirrorDir: File,
         onDevice: Set<String>,
         previouslyRecorded: () -> Set<String>?,
+        madeAfter: Long?,
         onCandidateDone: (Int, Int) -> Unit,
     ): Int {
         // Filtered inside the walk rather than after it, so that an entry the device
@@ -2395,6 +2400,9 @@ class SafSyncEngine(private val context: Context) {
         // it undoes a deletion with the bytes the device dropped. It waits for an open that reads it.
         val recordedLines = recorded.associateBy { unescapeRecordPath(it.substringBefore('\t')) }
         val candidates = missing.filter { (original, relativePath) ->
+            // Over an empty listing only what was made after the record was written: a copy of a document
+            // the device deleted, whose row an older build dropped, is not told apart from it any other way.
+            if (madeAfter != null && original.lastModified() <= madeAfter) return@filter false
             val line = recordedLines[relativePath] ?: return@filter true
             matchesRecordedCopy(original, relativePath, line) == false &&
                 !isUnprovenCopyOfRecord(mirrorDir, relativePath, line)
