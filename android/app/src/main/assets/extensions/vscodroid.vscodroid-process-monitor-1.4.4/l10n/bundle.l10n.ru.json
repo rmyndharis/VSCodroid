@@ -2,5 +2,6 @@
   "Google Antigravity is installed, but VSCodroid keeps its engine off. While the engine runs, other apps on this phone can reach it and use the account signed in to it. Turn it on only on a phone whose apps you trust.": "Расширение Google Antigravity установлено, но VSCodroid держит его движок выключенным. Пока движок работает, другие приложения на этом телефоне могут подключиться к нему и использовать учётную запись, с которой выполнен вход в движок. Включайте его только на телефоне, приложениям на котором вы доверяете.",
   "Turn On and Reload": "Включить и перезагрузить",
   "Don't Show Again": "Больше не показывать",
-  "The Antigravity engine could not be turned on: {0}": "Не удалось включить движок Antigravity: {0}"
+  "The Antigravity engine could not be turned on: {0}": "Не удалось включить движок Antigravity: {0}",
+  "The setting Antigravity: Run Engine shows as on, but VSCodroid reads it as off in {0}, so the Google Antigravity engine stays off. VS Code works around some errors in that file, such as a missing comma, and VSCodroid does not. Correct the file, then reload the window.": "Параметр Antigravity: Run Engine показан как включённый, но VSCodroid читает его в {0} как выключенный, поэтому движок Google Antigravity остаётся выключенным. VS Code обходит некоторые ошибки в этом файле, например пропущенную запятую, а VSCodroid нет. Исправьте файл, затем перезагрузите окно."
 }

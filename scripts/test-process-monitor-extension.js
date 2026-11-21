@@ -728,6 +728,7 @@ assert.ok(
 // the workbench refuses is said, not dropped; "Don't Show Again" holds across windows until the setting
 // is turned on; and the offer is in the window's language.
 const TURN_ON = 'Turn On and Reload';
+const MISMATCH = 'The setting Antigravity: Run Engine shows as on, but VSCodroid reads it as off in {0}, so the Google Antigravity engine stays off. VS Code works around some errors in that file, such as a missing comma, and VSCodroid does not. Correct the file, then reload the window.';
 const NEVER = "Don't Show Again";
 const DECLINED = 'antigravity.engineOfferDeclined';
 // Recorded only while these cases run, and refused in every one of them: an offer whose promise rejects
@@ -735,7 +736,13 @@ const DECLINED = 'antigravity.engineOfferDeclined';
 const unhandled = [];
 const recordUnhandled = (e) => { unhandled.push(String(e && e.message)); };
 process.on('unhandledRejection', recordUnhandled);
-async function antigravityOffer({ installed, runEngine, answer, installLater = false, state = new Map(), refuseWrite = null, locale = 'en' }) {
+// What platform-fix.js leaves on the extension host's global: its own reading of the setting and the file it
+// reads it from. Absent where the shim is not loaded, as in every activation before these cases.
+const ENGINE_GATE = Symbol.for('vscodroid.engineGate');
+const SETTINGS_FILE = '/data/user/0/com.vscodroid/files/home/.vscodroid/data/Machine/settings.json';
+async function antigravityOffer({ installed, runEngine, answer, installLater = false, state = new Map(), refuseWrite = null, locale = 'en', gateReads = undefined }) {
+    if (gateReads === undefined) delete globalThis[ENGINE_GATE];
+    else globalThis[ENGINE_GATE] = { engineTurnedOn: () => gateReads, settingsFile: SETTINGS_FILE };
     world.installed = new Set(installed && !installLater ? ['google.google-antigravity'] : []);
     world.runEngine = runEngine;
     world.answer = answer;
@@ -783,6 +790,26 @@ async function antigravityOffer({ installed, runEngine, answer, installLater = f
     const on = await antigravityOffer({ installed: true, runEngine: true });
     assert.strictEqual(on.offers.length, 0, 'the offer was made with the setting already on');
 
+    // VS Code reads the settings file more leniently than the gate that starts the engine: a file with an error it
+    // works around (a missing comma) shows the box ticked while the engine stays off, and the extension's panel
+    // then fails with a spawn error that names no setting. So the two readings are compared, and when they
+    // disagree the person is told, once per window, which file to correct. Nothing is said when they agree, nor
+    // where the gate is not there to ask.
+    const agree = await antigravityOffer({ installed: true, runEngine: true, gateReads: true });
+    assert.deepStrictEqual(agree.offers, [], 'a notice was shown with VS Code and the gate both reading the setting as on');
+    const disagree = await antigravityOffer({ installed: true, runEngine: true, gateReads: false });
+    assert.strictEqual(disagree.offers.length, 1, 'VS Code reads the setting as on and the gate as off, and the person was told nothing (or more than once): ' + disagree.offers.length);
+    assert.ok(disagree.offers[0].message.includes(SETTINGS_FILE), 'the notice does not name the file to correct: ' + disagree.offers[0].message);
+    assert.deepStrictEqual([disagree.offers[0].items, disagree.updates, disagree.executed], [[], [], []], 'the notice offered, wrote or ran something');
+    const notInstalled = await antigravityOffer({ installed: false, runEngine: true, gateReads: false });
+    assert.deepStrictEqual(notInstalled.offers, [], 'a notice about the engine was shown with the Antigravity extension not installed');
+    const mismatchDe = await antigravityOffer({ installed: true, runEngine: true, gateReads: false, locale: 'de' });
+    const germanBundle = JSON.parse(fs.readFileSync(path.join(path.dirname(EXTENSION), 'l10n/bundle.l10n.de.json'), 'utf8'));
+    assert.strictEqual(mismatchDe.offers.length, 1);
+    assert.ok(germanBundle[MISMATCH], 'the German bundle has no text for the notice');
+    assert.strictEqual(mismatchDe.offers[0].message, germanBundle[MISMATCH].replace('{0}', SETTINGS_FILE), 'the notice was not shown in German');
+    delete globalThis[ENGINE_GATE];
+
     const dismissed = await antigravityOffer({ installed: true, runEngine: false, answer: undefined });
     assert.strictEqual(dismissed.offers.length, 1, 'the offer was not made once: ' + dismissed.offers.length);
     assert.deepStrictEqual(dismissed.offers[0].items, [TURN_ON, NEVER]);
@@ -823,7 +850,7 @@ async function antigravityOffer({ installed, runEngine, answer, installLater = f
     assert.deepStrictEqual(de.executed, ['workbench.action.reloadWindow'], 'the German button did not turn the engine on');
 
     // Every language the app ships has every string, with its placeholder, and no string the code does not use.
-    const used = [dismissed.offers[0].message, TURN_ON, NEVER, 'The Antigravity engine could not be turned on: {0}'];
+    const used = [dismissed.offers[0].message, TURN_ON, NEVER, 'The Antigravity engine could not be turned on: {0}', MISMATCH];
     assert.ok(refused.errors[0].message.startsWith(used[3].replace('{0}', '')), 'the error text is not the one the bundles translate');
     const bundles = fs.readdirSync(path.join(path.dirname(EXTENSION), 'l10n')).sort();
     const nls = fs.readdirSync(path.dirname(EXTENSION)).filter((f) => /^package\.nls\.[a-z-]+\.json$/.test(f)).map((f) => f.slice(12, -5)).sort();

@@ -1,0 +1,7 @@
+{
+  "Google Antigravity is installed, but VSCodroid keeps its engine off. While the engine runs, other apps on this phone can reach it and use the account signed in to it. Turn it on only on a phone whose apps you trust.": "Google Antigravity 已安裝，但 VSCodroid 讓它的引擎保持關閉。引擎執行時，這支手機上的其他應用程式可以連線到引擎，並使用已登入引擎的帳號。請只在你信任其中所有應用程式的手機上開啟。",
+  "Turn On and Reload": "開啟並重新載入",
+  "Don't Show Again": "不要再顯示",
+  "The Antigravity engine could not be turned on: {0}": "無法開啟 Antigravity 引擎：{0}",
+  "The setting Antigravity: Run Engine shows as on, but VSCodroid reads it as off in {0}, so the Google Antigravity engine stays off. VS Code works around some errors in that file, such as a missing comma, and VSCodroid does not. Correct the file, then reload the window.": "設定 Antigravity: Run Engine 顯示為開啟，但 VSCodroid 從 {0} 讀到的是關閉，所以 Google Antigravity 引擎仍保持關閉。VS Code 會略過這個檔案中的某些錯誤（例如缺少逗號），VSCodroid 不會。請修正該檔案，然後重新載入視窗。"
+}
