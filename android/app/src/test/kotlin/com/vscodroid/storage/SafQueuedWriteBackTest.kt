@@ -72,6 +72,9 @@ class SafQueuedWriteBackTest {
 
     private val isDirFlag = 0x40000000
 
+    /** Run before every answer the provider gives, to put the write-back thread's turn inside an event. */
+    private var onProviderCall: (() -> Unit)? = null
+
     private fun docId(path: String) = if (path.isEmpty()) "root" else "doc:$path"
 
     private fun pathOf(docId: String) = if (docId == "root") "" else docId.removePrefix("doc:")
@@ -110,6 +113,7 @@ class SafQueuedWriteBackTest {
             mockk<Uri>(relaxed = true).also { every { it.toString() } returns "children:${secondArg<String>()}" }
         }
         every { DocumentsContract.buildDocumentUriUsingTree(any(), any()) } answers {
+            onProviderCall?.invoke()
             docUri(secondArg())
         }
         every { DocumentsContract.getDocumentId(any()) } answers {
@@ -143,6 +147,7 @@ class SafQueuedWriteBackTest {
 
         resolver = mockk(relaxed = true)
         every { resolver.query(any(), any(), any(), any(), any()) } answers {
+            onProviderCall?.invoke()
             val target = firstArg<Uri>().toString()
             val rows = if (target.startsWith("children:")) {
                 val parent = pathOf(target.removePrefix("children:"))
@@ -332,6 +337,41 @@ class SafQueuedWriteBackTest {
         drain()
         observe(FileObserver.MOVED_TO or isDirFlag, "lib")
         assertTrue(held.renameTo(File(mirror, "lib")))
+
+        drain()
+
+        assertEquals(setOf("lib", "lib/existing.txt"), device.keys)
+        assertEquals("edited before rename", text("lib/existing.txt"))
+        assertEquals(emptyList<String>(), lost)
+    }
+
+    /**
+     * The same, for a save the write-back thread takes after the rename has claimed its folder and
+     * before the rename job is offered: the claim has taken the folder's entry, so the drop had no
+     * entry to be noted with, and the job was already off the queue, so the offer did not see it.
+     */
+    @Test
+    fun `a save taken after its folder was claimed and before the rename is queued reaches the renamed folder`() {
+        onDevice("old_dir")
+        onDevice("old_dir/existing.txt", "old")
+        inMirror("old_dir/existing.txt", "edited before rename")
+        observe(FileObserver.MODIFY, "old_dir/existing.txt")
+        val held = File(filesDir, "renaming")
+        assertTrue(File(mirror, "old_dir").renameTo(held))
+        observe(FileObserver.MOVED_FROM or isDirFlag, "old_dir")
+        var taken = false
+        // Once the claim has taken the folder's entry, the next answer the provider gives is the old
+        // name being resolved: the write-back thread takes the save there.
+        onProviderCall = {
+            if (!taken && !engine.hasVanishedCandidate(System.currentTimeMillis())) {
+                taken = true
+                drain()
+            }
+        }
+        observe(FileObserver.MOVED_TO or isDirFlag, "lib")
+        onProviderCall = null
+        assertTrue(held.renameTo(File(mirror, "lib")))
+        assertTrue(taken, "the save was not taken inside the event, so the case never reached the window")
 
         drain()
 
