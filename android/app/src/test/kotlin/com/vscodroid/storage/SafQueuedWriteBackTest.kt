@@ -313,6 +313,76 @@ class SafQueuedWriteBackTest {
         assertEquals(emptyList<String>(), lost)
     }
 
+    /**
+     * The write-back thread can take a save while its folder is already renamed away and the
+     * other half of the rename has not been seen yet: the file is gone from its path, so the
+     * job is dropped, and the rename that claims the folder no longer finds it among the
+     * queued saves. The renamed document then held the older bytes until another save or the
+     * next open.
+     */
+    @Test
+    fun `a save taken after its folder moved away reaches the renamed folder`() {
+        onDevice("old_dir")
+        onDevice("old_dir/existing.txt", "old")
+        inMirror("old_dir/existing.txt", "edited before rename")
+        observe(FileObserver.MODIFY, "old_dir/existing.txt")
+        val held = File(filesDir, "renaming")
+        assertTrue(File(mirror, "old_dir").renameTo(held))
+        observe(FileObserver.MOVED_FROM or isDirFlag, "old_dir")
+        drain()
+        observe(FileObserver.MOVED_TO or isDirFlag, "lib")
+        assertTrue(held.renameTo(File(mirror, "lib")))
+
+        drain()
+
+        assertEquals(setOf("lib", "lib/existing.txt"), device.keys)
+        assertEquals("edited before rename", text("lib/existing.txt"))
+        assertEquals(emptyList<String>(), lost)
+    }
+
+    @Test
+    fun `a file made just before its folder moved away is created in the renamed folder`() {
+        onDevice("old_dir")
+        onDevice("old_dir/existing.txt", "old")
+        inMirror("old_dir/existing.txt", "old")
+        inMirror("old_dir/made.txt", "made before rename")
+        observe(FileObserver.CREATE, "old_dir/made.txt")
+        val held = File(filesDir, "renaming")
+        assertTrue(File(mirror, "old_dir").renameTo(held))
+        observe(FileObserver.MOVED_FROM or isDirFlag, "old_dir")
+        drain()
+        observe(FileObserver.MOVED_TO or isDirFlag, "lib")
+        assertTrue(held.renameTo(File(mirror, "lib")))
+
+        drain()
+
+        assertEquals(setOf("lib", "lib/existing.txt", "lib/made.txt"), device.keys)
+        assertEquals("made before rename", text("lib/made.txt"))
+        assertEquals(emptyList<String>(), lost)
+    }
+
+    /** What was dropped for a folder that nobody claimed is not carried to a later, unrelated folder of the same name. */
+    @Test
+    fun `a save dropped for a folder nobody claimed is not replayed into a folder made later`() {
+        onDevice("old_dir")
+        onDevice("old_dir/existing.txt", "old")
+        inMirror("old_dir/existing.txt", "edited before it left")
+        observe(FileObserver.MODIFY, "old_dir/existing.txt")
+        val held = File(filesDir, "gone")
+        assertTrue(File(mirror, "old_dir").renameTo(held))
+        observe(FileObserver.MOVED_FROM or isDirFlag, "old_dir")
+        drain()
+        // the folder is deleted for good, and an unrelated one of the same name is made by hand
+        assertTrue(held.deleteRecursively())
+        inMirror("lib/existing.txt", "someone else's text")
+        observe(FileObserver.CREATE or isDirFlag, "lib")
+
+        drain()
+
+        assertEquals("old", text("old_dir/existing.txt"))
+        assertEquals("someone else's text", text("lib/existing.txt"))
+    }
+
     @Test
     fun `files written into a new folder before its create runs are uploaded once`() {
         // `mkdir lib` and then a burst of files, as a clone or an install makes. The

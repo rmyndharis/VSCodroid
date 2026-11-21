@@ -391,6 +391,15 @@ class SafSyncEngine(private val context: Context) {
      * An unclaimed entry therefore costs the behaviour that would have happened anyway.
      */
     private val vanishedDirectories = mutableListOf<VanishedDirectory>()
+
+    /**
+     * The saves and creates the write-back thread took, after a directory left the mirror, for a
+     * file that was under it, by that directory's absolute path. The file is gone from its path
+     * and the job is dropped, so the rename that claims the directory no longer finds the save
+     * among the queued ones: this is what it adds. Guarded by [vanishedLock], and forgotten
+     * with the directory's entry when nothing claims it.
+     */
+    private val droppedSaves = HashMap<String, MutableList<String>>()
     private val vanishedLock = Any()
 
     // -- Initial Sync --
@@ -4819,6 +4828,7 @@ class SafSyncEngine(private val context: Context) {
         val gone = synchronized(vanishedLock) {
             val taken = vanishedDirectories.filter(predicate)
             vanishedDirectories.removeAll(predicate)
+            taken.forEach { droppedSaves.remove(it.localPath) }
             taken
         }
         gone.forEach { consumeStaleUploadsUnder(File(it.localPath)) }
@@ -5497,7 +5507,10 @@ class SafSyncEngine(private val context: Context) {
         when (job.type) {
             SyncType.MODIFY -> {
                 val localFile = File(job.localPath)
-                if (!localFile.exists()) return
+                if (!localFile.exists()) {
+                    rememberDroppedSave(job.localPath)
+                    return
+                }
                 if (job.safDocUri != null) {
                     // [handleMirrorEvent]'s unread-document guard again, where the write
                     // happens, because a job can outlive the answer it was queued under. A
@@ -5555,6 +5568,7 @@ class SafSyncEngine(private val context: Context) {
             SyncType.CREATE -> {
                 val localFile = File(job.localPath)
                 if (localFile.exists()) createInQueuedParent(job, localFile, access, mirrorRoot)
+                else rememberDroppedSave(job.localPath)
             }
             SyncType.DELETE -> {
                 // A null uri is NOT the same outcome as a refusal, though it used to
@@ -5988,6 +6002,7 @@ class SafSyncEngine(private val context: Context) {
         if (normalizedMove) {
             synchronized(vanishedLock) {
                 vanishedDirectories.removeAll { it.localPath == expectedMove!!.first }
+                droppedSaves.remove(expectedMove!!.first)
             }
             return
         }
@@ -6250,12 +6265,16 @@ class SafSyncEngine(private val context: Context) {
             )
         }
 
+        // Taken whether or not the pair is made, so that nothing is kept for a directory that was claimed.
+        val droppedUnderOld = if (renamedFrom != null) takeDroppedSaves(File(rootDir, renamedFrom).absolutePath) else emptyList()
         val renamedSaves = if (pairedRename) {
             val prefix = File(rootDir, renamedFrom).absolutePath + File.separator
-            target.queue.filter {
+            val queued = target.queue.filter {
                 (it.type == SyncType.MODIFY || it.type == SyncType.CREATE) && it.localPath.startsWith(prefix)
-            }
-                .map { relativePath + "/" + it.localPath.removePrefix(prefix) }.distinct()
+            }.map { it.localPath }
+            // The saves already taken stand in the same list: their files moved with the directory, and the
+            // replay writes whatever the mirror holds at the new path.
+            (queued + droppedUnderOld).map { relativePath + "/" + it.removePrefix(prefix) }.distinct()
         } else emptyList()
         target.queue.offer(
             SyncJob(
@@ -6407,6 +6426,21 @@ class SafSyncEngine(private val context: Context) {
      * Takes the vanished directory a MOVED_TO on [newRelativePath] may be the other half
      * of, or null when none of them can be claimed. A claimed entry is consumed.
      */
+    /** Notes a save or a create dropped for a file that is not at its path, if a directory that left the mirror held it. */
+    private fun rememberDroppedSave(absolutePath: String) {
+        synchronized(vanishedLock) {
+            for (entry in vanishedDirectories) {
+                if (absolutePath.startsWith(entry.localPath + File.separator)) {
+                    droppedSaves.getOrPut(entry.localPath) { ArrayList() } += absolutePath
+                }
+            }
+        }
+    }
+
+    /** The saves dropped for files under [directory], which leaves the record. */
+    private fun takeDroppedSaves(directory: String): List<String> =
+        synchronized(vanishedLock) { droppedSaves.remove(directory).orEmpty() }
+
     private fun claimVanishedDirectory(newRelativePath: String, now: Long): String? =
         synchronized(vanishedLock) {
             val source = renameSourceFor(vanishedDirectories, newRelativePath, now)
