@@ -370,6 +370,7 @@
         <item quantity="many">%2$s: %1$d souboru, mezi nimi %3$s, zůstává jen v aplikaci VSCodroid, protože mohly být smazány ve složce v zařízení. Uložte soubor znovu a odešle se tam.</item>
         <item quantity="other">%2$s: %1$d souborů, mezi nimi %3$s, zůstává jen v aplikaci VSCodroid, protože mohly být smazány ve složce v zařízení. Uložte soubor znovu a odešle se tam.</item>
     </plurals>
+    <string name="saf_open_changes_unsent">%1$s: ne všechny změny provedené během otevírání se dostaly do složky v zařízení. Soubor uložený v té době se odešle, až ho znovu uložíte. Soubor smazaný v té době se při příštím otevření složky objeví znovu a složka přejmenovaná v té době si v zařízení ponechá původní název.</string>
 
     <!-- The Toolchains toolbar's only icon-only control, and the app's only visible
          way back out of that screen. Without it a screen reader announces an

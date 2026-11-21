@@ -228,6 +228,25 @@ class WriteBackNoticeWiringTest {
     }
 
     /**
+     * The replay of what a program changed while a folder opened can fail partway, and what it had not sent then
+     * stays inside the app with nothing on screen to say so. Same ceiling and same anchoring as the cases above.
+     */
+    @Test
+    fun `MainActivity asks to be told when the changes made while a folder opened were not all sent`() {
+        assertTrue(activity.isFile, "MainActivity.kt is not where this test expects it")
+        val source = activity.readText()
+
+        assertTrue(
+            Regex("""(?m)^\s*safManager\.onOpenChangesUnsent\s*\{""").containsMatchIn(source),
+            "nothing wires the notice for a replay that failed, so what it did not send is never mentioned",
+        )
+        assertTrue(
+            Regex("""(?m)^\s*[^/\n]*saf_open_changes_unsent\b""").containsMatchIn(source),
+            "the notice does not name the string that says the changes made while the folder opened did not all go",
+        )
+    }
+
+    /**
      * The throttle belongs to the manager, so one refusing provider is one notice.
      *
      * Asserted as a rule rather than as a constant: the number is a product decision and

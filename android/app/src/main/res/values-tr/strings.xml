@@ -358,6 +358,7 @@
         <item quantity="one">%2$s: %1$d dosya, %3$s, cihaz klasöründe silinmiş olabileceği için yalnızca VSCodroid içinde kalıyor. Oraya göndermek için yeniden kaydedin.</item>
         <item quantity="other">%2$s: %3$s dahil %1$d dosya, cihaz klasöründe silinmiş olabilecekleri için yalnızca VSCodroid içinde kalıyor. Oraya göndermek için bir dosyayı yeniden kaydedin.</item>
     </plurals>
+    <string name="saf_open_changes_unsent">%1$s: açılırken yapılan değişikliklerin hepsi cihaz klasörüne ulaşmadı. O sırada kaydedilen bir dosya, onu yeniden kaydettiğinizde gönderilir. O sırada silinen bir dosya klasör yeniden açıldığında tekrar görünür, o sırada yeniden adlandırılan bir klasör ise cihazda eski adını korur.</string>
 
     <!-- The Toolchains toolbar's only icon-only control, and the app's only visible
          way back out of that screen. Without it a screen reader announces an

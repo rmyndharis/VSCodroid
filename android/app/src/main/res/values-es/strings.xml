@@ -364,6 +364,7 @@
         <item quantity="many">%2$s: %1$d archivos, entre ellos %3$s, solo están en VSCodroid, porque pueden haberse eliminado en la carpeta del dispositivo. Guarda un archivo de nuevo para enviarlo allí.</item>
         <item quantity="other">%2$s: %1$d archivos, entre ellos %3$s, solo están en VSCodroid, porque pueden haberse eliminado en la carpeta del dispositivo. Guarda un archivo de nuevo para enviarlo allí.</item>
     </plurals>
+    <string name="saf_open_changes_unsent">%1$s: no todos los cambios hechos mientras se abría llegaron a la carpeta del dispositivo. Un archivo guardado en ese momento se envía cuando lo vuelves a guardar. Un archivo eliminado en ese momento vuelve a aparecer la próxima vez que se abra la carpeta, y una carpeta renombrada en ese momento conserva su nombre anterior en el dispositivo.</string>
 
     <!-- The Toolchains toolbar's only icon-only control, and the app's only visible
          way back out of that screen. Without it a screen reader announces an

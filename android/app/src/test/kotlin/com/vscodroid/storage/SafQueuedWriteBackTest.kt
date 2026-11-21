@@ -80,6 +80,9 @@ class SafQueuedWriteBackTest {
     /** Run before every answer the provider gives, to put the write-back thread's turn inside an event. */
     private var onProviderCall: (() -> Unit)? = null
 
+    /** Run as a rename reaches the device folder, before it lands there. */
+    private var onRenameCall: (() -> Unit)? = null
+
     private fun docId(path: String) = if (path.isEmpty()) "root" else "doc:$path"
 
     private fun pathOf(docId: String) = if (docId == "root") "" else docId.removePrefix("doc:")
@@ -133,6 +136,7 @@ class SafQueuedWriteBackTest {
             docUri(docId(path))
         }
         every { DocumentsContract.renameDocument(any(), any(), any()) } answers {
+            onRenameCall?.invoke()
             val from = pathOf(secondArg<Uri>())
             val parent = parentOf(from)
             val wanted = if (parent.isEmpty()) thirdArg<String>() else "$parent/${thirdArg<String>()}"
@@ -667,8 +671,9 @@ class SafQueuedWriteBackTest {
 
         verify(exactly = 1) { DocumentsContract.renameDocument(any(), any(), "dirB") }
         assertEquals(setOf("dirB", "dirB/x.txt"), device.keys)
-        // The device cannot be asked to delete what the event could not name, and the
-        // user is told that, rather than the old folder quietly staying under its old name.
+        // Nothing here read the folder's files, so the device cannot be asked to delete what
+        // the event could not name, and the user is told that, rather than the old folder
+        // quietly staying under its old name.
         assertEquals(setOf("dirB/x.txt", "dirB"), refused.toSet())
     }
 
@@ -2029,5 +2034,298 @@ class SafQueuedWriteBackTest {
         val recorded = checkNotNull(engine.takeChangesDuringOpen(mirror)).recorded()
         val departure = recorded.last { it.event == (FileObserver.MOVED_FROM or isDirFlag) && it.file.name == "a" }
         assertFalse(departure.identity == replaced, "the folder that left a was recorded as the one it replaced")
+    }
+
+    /**
+     * The replay of what an open recorded runs on the write-back thread before its loop. An exception in it ended
+     * the thread there: the saves the watcher had held behind the replay were released into a queue nothing
+     * polled, and so was every save after them, for the rest of the session, with nothing said.
+     */
+    @Test
+    fun `a replay that fails still sends the saves made once the watcher starts, and says so once`() {
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } returns 0L
+        onDevice("a.txt", "alpha")
+        onDevice("b.txt", "bravo")
+        onDevice("c.txt", "charlie")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val unsent = mutableListOf<File>()
+        engine.onOpenChangesUnsent = { unsent += it }
+        val kernel = KernelWatches().also { it.install() }
+        var saved = false
+        openRecording { done, _ ->
+            if (done == 3 && !saved) {
+                saved = true
+                inMirror("a.txt", "typed while it opened")
+                kernel.fire(FileObserver.MODIFY, "a.txt")
+            }
+        }
+        assertTrue(saved, "precondition: a save was made while the folder opened")
+        kernel.owner = "watcher"
+        var failed = false
+        onProviderCall = {
+            if (!failed && Thread.currentThread().name == "saf-writeback") {
+                failed = true
+                // Seen while the replay runs, so held behind it.
+                inMirror("b.txt", "saved as the watcher started")
+                kernel.fire(FileObserver.MODIFY, "b.txt")
+                throw IllegalStateException("the provider went away")
+            }
+        }
+
+        engine.startWatching(mirror, treeUri)
+        try {
+            waitFor { failed }
+            assertTrue(failed, "precondition: the replay failed")
+            inMirror("c.txt", "saved after the replay failed")
+            kernel.fire(FileObserver.MODIFY, "c.txt")
+            waitFor { text("b.txt") == "saved as the watcher started" && text("c.txt") == "saved after the replay failed" }
+        } finally {
+            onProviderCall = null
+            engine.shutdown()
+        }
+        assertEquals("saved as the watcher started", text("b.txt"), "a save held behind the failed replay was never sent")
+        assertEquals("saved after the replay failed", text("c.txt"), "a save after the failed replay was never sent")
+        assertEquals(listOf(mirror), unsent, "the failed replay was not said once")
+    }
+
+    /**
+     * The watcher stops its watch of a folder at the folder's departure and starts the watch of its new name at the
+     * arrival. What is made or saved in the folder between the rename on disk and that start raises no event, and
+     * the rename moved only what the device already held: none of it reached the device for the session.
+     */
+    @Test
+    fun `what is made or saved in a folder before the watch of its new name starts reaches the renamed folder`() {
+        onDevice("src")
+        onDevice("src/a.txt", "alpha")
+        onDevice("src/b.txt", "bravo")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        assertTrue(File(mirror, "src").renameTo(File(mirror, "lib")))
+        observe(FileObserver.MOVED_FROM or isDirFlag, "src")
+        // No watch reports these: the folder's old one has gone and its new one has not started.
+        inMirror("lib/a.txt", "saved in between")
+        inMirror("lib/new.txt", "made in between")
+        inMirror("lib/sub/deep.txt", "made in a folder made in between")
+        observe(FileObserver.MOVED_TO or isDirFlag, "lib")
+        writes.clear()
+
+        drain()
+
+        assertEquals(setOf("lib", "lib/a.txt", "lib/b.txt", "lib/new.txt", "lib/sub", "lib/sub/deep.txt"), device.keys)
+        assertEquals("saved in between", text("lib/a.txt"))
+        assertEquals("made in between", text("lib/new.txt"))
+        assertEquals("made in a folder made in between", text("lib/sub/deep.txt"))
+        assertEquals("bravo", text("lib/b.txt"))
+        assertFalse("lib/b.txt" in writes, "a file the rename carried unchanged was sent again")
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /**
+     * A file deleted while its folder opens, after the open had kept the copy it already held and before it had read
+     * the rest. The digest a delete is checked against was taken only once the open had read every file, by opening
+     * each kept copy, and a copy deleted by then gave none: the device kept the file and a notice said another app
+     * had changed it.
+     */
+    @Test
+    fun `a file deleted while its folder opens, after the open kept its copy, is deleted on the device`() {
+        onDevice("a.txt", "alpha")
+        onDevice("b.txt", "bravo")
+        onDevice("c.txt", "charlie")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val kept = mutableListOf<String>()
+        engine.onKeptOnDevice = { file, _, changed -> kept += "${file.name}:$changed" }
+        val watches = OpenWatches().also { it.install() }
+        var deleted = false
+
+        openRecording { done, _ ->
+            if (done == 2 && !deleted) {
+                deleted = true
+                assertTrue(File(mirror, "b.txt").delete())
+                watches.fire(FileObserver.DELETE, "b.txt")
+            }
+        }
+        assertTrue(deleted, "precondition: the file was deleted after the open kept it")
+        replayWhatTheOpenRecorded()
+        drain()
+
+        assertEquals(setOf("a.txt", "c.txt"), device.keys, "the deletion did not reach the device")
+        assertEquals(emptyList<String>(), kept)
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /**
+     * A file deleted in a folder renamed while its folder opens. The replay asked whether the device held the file
+     * under the folder's new name before the rename it queues had reached the device, found nothing, and dropped the
+     * delete: the rename carried the file and the next open brought it back.
+     */
+    @Test
+    fun `a file deleted in a folder renamed while its folder opens is deleted on the device`() {
+        onDevice("0.txt", "zero")
+        onDevice("src")
+        onDevice("src/a.txt", "alpha")
+        onDevice("src/b.txt", "bravo")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val kernel = KernelWatches().also { it.install() }
+        openRecording { _, _ -> }
+        renameWatched(kernel, "src", "lib")
+        assertTrue(File(mirror, "lib/a.txt").delete())
+        kernel.fire(FileObserver.DELETE, "lib/a.txt")
+
+        replayWhatTheOpenRecorded()
+        drain()
+
+        assertEquals(setOf("0.txt", "lib", "lib/b.txt"), device.keys, "the file deleted in the renamed folder is still on the device")
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /**
+     * The same delete seen live, in the poll that also brings the folder's rename. The delete looked its document up
+     * as the event arrived, before the rename queued ahead of it had reached the device, and named nothing: the
+     * device kept the file and a notice said it could not be deleted. Looked up when it runs, it is checked against
+     * the bytes this engine read before the rename, as any delete.
+     */
+    @Test
+    fun `a file deleted in a folder whose rename is still queued is deleted on the device`() {
+        onDevice("src")
+        onDevice("src/a.txt", "alpha")
+        onDevice("src/b.txt", "bravo")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        // mv src lib && rm lib/a.txt, inside one poll.
+        renameFolder("src", "lib")
+        assertTrue(File(mirror, "lib/a.txt").delete())
+        observe(FileObserver.DELETE, "lib/a.txt")
+        drain()
+
+        assertEquals(setOf("lib", "lib/b.txt"), device.keys, "the file deleted in the renamed folder is still on the device")
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /**
+     * Two renames close together, the second inside the folder the first moved. The second looked for its source on
+     * the device as its event arrived, before the first had reached the device, found none, and made the folder
+     * again under its new name: the device kept it under both.
+     */
+    @Test
+    fun `a folder renamed inside a folder whose rename is still queued ends up under its new name only`() {
+        onDevice("a")
+        onDevice("a/sub")
+        onDevice("a/sub/x.txt", "x-ray")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        // mv a b && mv b/sub b/sub2, inside one poll.
+        renameFolder("a", "b")
+        renameFolder("b/sub", "b/sub2")
+        drain()
+
+        assertEquals(setOf("b", "b/sub2", "b/sub2/x.txt"), device.keys)
+        assertEquals("x-ray", text("b/sub2/x.txt"))
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /** The same two renames while the folder opens, sent by the replay once the watcher starts. */
+    @Test
+    fun `a folder renamed inside a folder renamed while its folder opens ends up under its new name only`() {
+        onDevice("0.txt", "zero")
+        onDevice("a")
+        onDevice("a/sub")
+        onDevice("a/sub/x.txt", "x-ray")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val kernel = KernelWatches().also { it.install() }
+        openRecording { _, _ -> }
+        renameWatched(kernel, "a", "b")
+        renameWatched(kernel, "b/sub", "b/sub2")
+
+        replayWhatTheOpenRecorded()
+        drain()
+
+        assertEquals(setOf("0.txt", "b", "b/sub2", "b/sub2/x.txt"), device.keys)
+        assertEquals("x-ray", text("b/sub2/x.txt"))
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /** `mv a b; mv b c` inside one poll: the second rename's source is the first one's destination. */
+    @Test
+    fun `a folder renamed twice before the first rename is sent ends up under its last name only`() {
+        onDevice("a")
+        onDevice("a/x.txt", "x-ray")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        renameFolder("a", "b")
+        renameFolder("b", "c")
+        drain()
+
+        assertEquals(setOf("c", "c/x.txt"), device.keys)
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /**
+     * `mv src lib && rm -r lib` inside one poll, in a folder this engine has read. Neither delete could name a document
+     * when it arrived; looked up when they run, after the rename, they are checked against what the open read.
+     */
+    @Test
+    fun `a folder renamed and then removed with what it holds, before the rename is sent, is removed on the device`() {
+        onDevice("0.txt", "zero")
+        onDevice("src")
+        onDevice("src/a.txt", "alpha")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        renameFolder("src", "lib")
+        assertTrue(File(mirror, "lib").deleteRecursively())
+        observe(FileObserver.DELETE, "lib/a.txt")
+        observe(FileObserver.DELETE or isDirFlag, "lib")
+        drain()
+
+        assertEquals(setOf("0.txt"), device.keys)
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /**
+     * The second rename seen while the first one's job is already running, before it has reached the device. The job
+     * was off the queue then, so nothing said the second rename's source was on its way, and the folder was made again
+     * under its last name beside the one the first rename carried.
+     */
+    @Test
+    fun `a folder renamed again while its first rename is being sent ends up under its last name only`() {
+        onDevice("a")
+        onDevice("a/x.txt", "x-ray")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        renameFolder("a", "b")
+        var movedAgain = false
+        onRenameCall = {
+            if (!movedAgain) {
+                movedAgain = true
+                renameFolder("b", "c")
+            }
+        }
+
+        drain()
+        onRenameCall = null
+
+        assertTrue(movedAgain, "setup failed: the second rename was not seen while the first was being sent")
+        assertEquals(setOf("c", "c/x.txt"), device.keys)
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /**
+     * `mv a b; mv -T b/sub b/sub2` where the device's `a` also holds an empty `sub2`: the second rename's name is free
+     * when its event arrives and taken once the first rename has run. Renamed there, a provider makes up a third name;
+     * the folder's files are sent into the one the device holds instead, as for any rename onto a folder it holds.
+     */
+    @Test
+    fun `a rename whose new name the device gains from a queued rename is sent into that folder`() {
+        onDevice("a")
+        onDevice("a/sub")
+        onDevice("a/sub/x.txt", "x-ray")
+        onDevice("a/sub2")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        renameFolder("a", "b")
+        renameFolder("b/sub", "b/sub2")
+        drain()
+
+        assertEquals("x-ray", text("b/sub2/x.txt"), "the folder's files did not reach the folder holding its new name")
+        assertFalse(device.keys.any { it.startsWith("b/sub2 (") }, "a third name was made up: ${device.keys}")
+        assertEquals(emptyList<String>(), lost + refused)
     }
 }

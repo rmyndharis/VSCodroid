@@ -352,6 +352,7 @@
     <plurals name="saf_files_kept_in_app">
         <item quantity="other">%2$s：包括 %3$s 在內的 %1$d 個檔案可能已在裝置資料夾中刪除，因此只保留在 VSCodroid 內。再次儲存其中某個檔案即可將其傳送到裝置資料夾。</item>
     </plurals>
+    <string name="saf_open_changes_unsent">%1$s：開啟期間所做的變更並未全部送達裝置資料夾。期間儲存的檔案，再次儲存即可傳送。期間刪除的檔案會在下次開啟時再次出現，期間重新命名的資料夾在裝置上仍保留原來的名稱。</string>
 
     <!-- The Toolchains toolbar's only icon-only control, and the app's only visible
          way back out of that screen. Without it a screen reader announces an

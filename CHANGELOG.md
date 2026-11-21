@@ -56,6 +56,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A save made just as a device folder finishes opening, in a folder made or renamed while it opened, reaches that folder on the device instead of being announced as kept inside VSCodroid or missing the rename.
 - A folder moved out of a device folder while it opens is no longer taken for the rename of an unrelated folder arriving within the same second.
 - A save VSCodroid delivers while a device folder's record cannot be read is no longer kept as another app's `.device-` copy at the next open.
+- A failure while sending what a program changed during a device folder's open no longer stops every later save in that folder from reaching the device, and a notice says what may not have been sent.
+- A file a program deletes while its device folder opens, after the open has read it, is deleted on the device instead of being kept there as changed by another app.
+- A file made or saved in a device folder's subfolder just after the subfolder is renamed reaches the device under the new name instead of staying inside VSCodroid.
+- A file deleted in a device folder's subfolder just after the subfolder is renamed, also while the folder opens, is deleted on the device instead of coming back at the next open.
+- A folder renamed twice in quick succession, or renamed inside a folder that was just renamed, ends up on the device under its last name only instead of under both.
 
 ## [1.10.1] - 2026-11-21
 
