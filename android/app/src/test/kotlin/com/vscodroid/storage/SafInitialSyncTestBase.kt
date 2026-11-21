@@ -55,6 +55,9 @@ abstract class SafInitialSyncTestBase {
     /** How many documents the last sync reported as not copied across. */
     protected var notCopied = 0
 
+    /** The counts of files an open said did not reach the device folder, one entry per notice. */
+    protected val didNotReach = mutableListOf<Int>()
+
     protected val record: File get() = File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
 
     protected data class Child(
@@ -177,9 +180,11 @@ abstract class SafInitialSyncTestBase {
     protected fun sync() = runBlocking {
         lost.clear()
         notCopied = 0
+        didNotReach.clear()
         val engine = SafSyncEngine(context)
         engine.onWriteBackFailed = { lost += it.name }
         engine.onDocumentsNotCopied = { count, _ -> notCopied = count }
+        engine.onUploadIncomplete = { _, count, _ -> didNotReach += count }
         engine.initialSync(named("tree"), mirror) { _, _ -> }
         engine
     }

@@ -426,6 +426,9 @@ jobs:
       - name: Check no document offers a withdrawn toolchain
         run: python3 scripts/check-toolchain-claims.py
 
+      - name: Check the documents quote the sizes the registry records
+        run: python3 scripts/check-size-claims.py
+
       # Also in lint.yml, and here for the reason the block's header gives: a tag
       # may name a commit that reached neither pull_request nor push to main, and
       # this was the one committed-source check such a tree could skip. The set
@@ -895,6 +898,13 @@ jobs:
           VSCODROID_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           VSCODROID_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: ./gradlew assembleRelease
+
+      # The core figures the documents quote, against the APK just built: the bytes the
+      # app extracts (assets, without the translation bundles setup never unpacks) and the
+      # size of the download. The totals with toolchains are built on the first of them, so
+      # this is what keeps them honest as the editor tree grows.
+      - name: Check the documented core sizes against the APK
+        run: python3 scripts/check-size-claims.py --apk android/app/build/outputs/apk/release/app-release.apk
 
       # The same gate as above, and this is the run that can see the toolchains.
       # Their manifests are written by "Download toolchain assets" and are

@@ -677,12 +677,19 @@ class SafReconcileDeletionsTest {
         record.writeText("a.txt\nb.txt")
 
         deviceFolderHolding("a.txt" to "kept")
-        sync()
+        val told = mutableListOf<Int>()
+        sync { it.onUploadIncomplete = { _, count, _ -> told += count } }
 
         assertTrue(
             mirrored("b.txt").isFile,
             "an unverifiable record line must never be acted on"
         )
+        // It stays inside the app, neither sent nor removed, and this is the one open that says so: the
+        // rows just written are what make the next open quiet.
+        assertEquals(listOf(1), told, "a file kept unsent was not told of")
+        val toldAgain = mutableListOf<Int>()
+        sync { it.onUploadIncomplete = { _, count, _ -> toldAgain += count } }
+        assertEquals(emptyList<Int>(), toldAgain, "the next open told of the same file again")
         // b.txt is named too, without a digest: nothing proves it is the device's old copy, and
         // with no row the next open would read it as a save the device never got and put a
         // document the device deleted back there.

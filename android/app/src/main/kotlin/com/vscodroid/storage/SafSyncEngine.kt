@@ -2399,15 +2399,22 @@ class SafSyncEngine(private val context: Context) {
         // could not be read is neither yet: a failed read shows no edit, and putting the file back on
         // it undoes a deletion with the bytes the device dropped. It waits for an open that reads it.
         val recordedLines = recorded.associateBy { unescapeRecordPath(it.substringBefore('\t')) }
+        // Over an empty listing only what was made after the record was written: a copy of a document
+        // the device deleted, whose row an older build dropped, is not told apart from it any other way.
+        // What is left out stays in the mirror and is not sent, so it is counted and told of like any
+        // file the device did not get: a file whose time was kept when it was put there (unzip, tar,
+        // cp -p) is left out the same way.
+        val leftOut = if (madeAfter == null) 0 else missing.count { (original, _) -> original.lastModified() <= madeAfter }
         val candidates = missing.filter { (original, relativePath) ->
-            // Over an empty listing only what was made after the record was written: a copy of a document
-            // the device deleted, whose row an older build dropped, is not told apart from it any other way.
             if (madeAfter != null && original.lastModified() <= madeAfter) return@filter false
             val line = recordedLines[relativePath] ?: return@filter true
             matchesRecordedCopy(original, relativePath, line) == false &&
                 !isUnprovenCopyOfRecord(mirrorDir, relativePath, line)
         }
-        if (candidates.isEmpty()) return 0
+        if (candidates.isEmpty()) {
+            if (leftOut > 0) onUploadIncomplete(mirrorDir, leftOut, plan.truncated)
+            return 0
+        }
 
         // Seeded with the root, which [resolveDocumentUri] answers for without asking
         // the provider anything. Every directory this pass resolves or creates is
@@ -2445,7 +2452,7 @@ class SafSyncEngine(private val context: Context) {
         // the walk itself because this is the point where the pass has a stranded file
         // in hand, which is what makes "there may be more below the cap" worth a
         // sentence instead of noise on every open.
-        val lost = candidates.size - made
+        val lost = candidates.size - made + leftOut
         if (lost > 0 || plan.truncated) onUploadIncomplete(mirrorDir, lost, plan.truncated)
         return made
     }
@@ -2611,8 +2618,14 @@ class SafSyncEngine(private val context: Context) {
             ) carried += line
         }
 
-        val unproven = if (usable) emptyList() else unprovenRows(mirrorDir, present)
-        writeSyncedRecord(record, recorded + carried + unproven.filterNot { it.substringBefore('\t') in settled })
+        val unproven = if (usable) emptyList() else {
+            unprovenRows(mirrorDir, present).filterNot { it.substringBefore('\t') in settled }
+        }
+        writeSyncedRecord(record, recorded + carried + unproven)
+        // These files stay inside the app, neither sent nor removed, until each changes: this open could not
+        // tell them from a document the device deleted. Said once, now, because the rows just written are what
+        // make every later open stay quiet about them.
+        if (unproven.isNotEmpty()) onUploadIncomplete(mirrorDir, unproven.size, false)
         return removed
     }
 

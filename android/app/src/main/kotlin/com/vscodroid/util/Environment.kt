@@ -398,11 +398,13 @@ object Environment {
         // `~/projects`, which is written beside the folder and outlives it, so its target is the
         // record of which folder this install uses; a relative link is read from `~`. Os.readlink
         // throws off a device and on anything that is not a link, and both mean the same thing
-        // here: no such record. Read only by the answers below that need it.
+        // here: no such record. Read only by the answers below that need it. Only a link to a folder
+        // called `projects` is a record: the folder is a root the webview serves as a whole, so a link
+        // something re-pointed at `~` or at a folder of keys must not become the answer.
         val link by lazy {
             runCatching {
                 File("$filesDir/home").toPath().resolve(Os.readlink("$filesDir/home/projects")).normalize().toString()
-            }.getOrNull()
+            }.getOrNull()?.takeIf { File(it).name == "projects" }
         }
         // A launch that cannot see shared storage knows nothing new about where the install works,
         // so the record answers. Answering internal made that folder and pointed the link at it,

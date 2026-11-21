@@ -67,15 +67,29 @@ get_assets_dir() {
     echo "$ROOT_DIR/android/toolchain_$1/src/main/assets"
 }
 
-# A figure ToolchainRegistry.kt records for a pack, digits only, or nothing when it
-# records none. Both size gates below read the registry through this, so they cannot
-# come to read it differently.
+# A figure ToolchainRegistry.kt records for a pack, digits only, or nothing when the
+# pack's own entry records none as a plain number. Both size gates below read the
+# registry through this, so they cannot come to read it differently.
+#
+# Each entry is read on its own, from its packName up to the next one, with comments
+# taken out. A search across the whole file carries on into the next pack's entry when
+# this one lacks the field, or names it as a constant or an expression, and then
+# answers with that pack's figure: measured with a Ruby entry whose downloadSize was a
+# constant, it answered with Java's. And a figure quoted in a comment is not the figure.
 recorded_figure() {
     python3 -c "
 import re, sys
 src = open(sys.argv[1]).read()
-m = re.search(r'packName\s*=\s*\"toolchain_%s\".*?%s\s*=\s*([0-9_]+)' % (sys.argv[2], sys.argv[3]),
-              src, re.S)
+src = re.sub(r'/\*.*?\*/', '', src, flags=re.S)
+src = re.sub(r'//[^\n]*', '', src)
+start = re.search(r'packName\s*=\s*\"toolchain_%s\"' % re.escape(sys.argv[2]), src)
+if not start:
+    print('')
+    sys.exit(0)
+rest = src[start.end():]
+following = re.search(r'packName\s*=', rest)
+entry = rest[:following.start()] if following else rest
+m = re.search(r'\b%s\s*=\s*([0-9][0-9_]*)L?\s*[,)]' % re.escape(sys.argv[3]), entry)
 print(m.group(1).replace('_', '') if m else '')
 " "$REGISTRY" "$2" "$1"
 }
@@ -157,6 +171,10 @@ for tc in "${REQUESTED[@]}"; do
 
     echo "--- $tc ---"
 
+    # A ZIP from an earlier run goes first, so that a refusal below, whichever gate it comes
+    # from, leaves no ZIP behind for anyone to attach to a release by hand.
+    rm -f "$zip_file"
+
     # Verify the asset pack has been populated by the download script
     if [ ! -f "$manifest" ]; then
         echo "  SKIP: Manifest not found at $manifest"
@@ -231,9 +249,6 @@ print(sum(-(-os.path.getsize(os.path.join(d, f)) // 4096) * 4096
     else
         echo "  WARNING: python3 not found, so estimatedSize was NOT checked against the tree"
     fi
-
-    # Remove stale ZIP
-    rm -f "$zip_file"
 
     # Create ZIP from the assets directory contents.
     # cd into the assets dir so paths inside the ZIP are relative

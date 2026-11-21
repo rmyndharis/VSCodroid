@@ -49,20 +49,28 @@ object ToolchainRegistry {
          * out of room partway through the copy. The first-run pre-flight is
          * deliberately not among them: it reads what is on disk rather than what
          * a toolchain claims to need, so nothing there consults this. Measure
-         * rather than estimate:
-         * `du -sk android/toolchain_<name>/src/main/assets/usr`, which is the
-         * tree `package-toolchains.sh` archives, and round up.
+         * rather than estimate: the "Unpacked" line `package-toolchains.sh` prints
+         * is the tree it archives in 4 KiB blocks (`du -sk
+         * android/toolchain_<name>/src/main/assets/usr` gives the same), and
+         * this figure is that rounded up with room for the next Termux build:
+         * the script refuses a tree above it.
          */
         val estimatedSize: Long,
         /**
-         * Approximate size of the ZIP fetched over HTTP, in bytes.
+         * Approximate size of the ZIP fetched over HTTP, in bytes: the ZIP
+         * `package-toolchains.sh` builds from the pack, rounded up with room for
+         * the next Termux build. The script refuses a ZIP above it.
          *
          * Measured from the release assets rather than computed: a payload is
          * rebuilt whenever its source moves, so both figures here are
-         * hand-written and go stale the same way. `downloadFile` deliberately
-         * prefers the length the server actually sent and falls back to a
-         * constant only when there is none, so nothing depends on this being
-         * exact; it exists so the picker can say what a download will cost.
+         * hand-written and go stale the same way. The card and the picker quote
+         * it to a person deciding whether to download over mobile data, so
+         * understating it tells them less than the truth. It also enters the
+         * HTTP install's free-space pre-flight ([toolchainInstallBytes] adds it to
+         * the unpacked tree as one of its two terms), so a figure below the ZIP
+         * asks for a little less room than the ZIP needs. `downloadFile`
+         * prefers the length the server actually sent and falls back to this
+         * only when there is none, so a download never depends on it.
          */
         val downloadSize: Long,
         /** Fallback URL for sideloaded installs (no Play Store). Null = Play-only. */
@@ -99,17 +107,18 @@ object ToolchainRegistry {
             displayName = "Ruby",
             shortLabel = "Ruby",
             descriptionRes = R.string.toolchain_ruby_description,
-            // 38,736 KiB measured with `du -sk` over the pack's `usr/` tree,
-            // which is 39.7 MB in 4 KiB blocks. 2,597 files, so the block
-            // rounding is most of the gap between that and the file contents.
-            // Termux moved ruby from 3.4.1 to 4.0.6 and the tree grew past the
-            // 36,000,000 recorded then, which package-toolchains.sh refuses
+            // Measured on the v1.10.0 build (Termux ruby 4.0.10-1): the pack's
+            // `usr/` tree is 39,682,048 bytes in 4 KiB blocks, so block rounding
+            // is most of the gap to the file contents, and the ZIP is 10,971,125
+            // bytes. Termux moved ruby from 3.4.1 to 4.0.6 and the tree grew past
+            // the 36,000,000 recorded then, which package-toolchains.sh refuses
             // rather than shipping a card that admits a device to an install it
-            // cannot finish. It grew again by the 1.9 MB of C headers a native
-            // gem is built against (`usr/include/ruby-4.0.0`), which left 39.0
-            // MB 0.7 MB short. 41,000,000 leaves 1.3 MB for a point release.
+            // cannot finish; it grew again by the C headers a native gem is
+            // built against (`usr/include/ruby-4.0.0`). A point release changes
+            // the ZIP by tens of KB, so both figures leave about 3 percent over
+            // what was measured. Measure again before a release.
             estimatedSize = 41_000_000,
-            downloadSize = 11_000_000,
+            downloadSize = 11_300_000,
             downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_ruby.zip",
         ),
         ToolchainInfo(
@@ -117,17 +126,17 @@ object ToolchainRegistry {
             displayName = "Java 25",
             shortLabel = "Java 25",
             descriptionRes = R.string.toolchain_java_description,
-            // 180,712 KiB measured with `du -sk` over the pack's `usr/` tree,
-            // which is 185.0 MB in 4 KiB blocks, in 340 files. The pack carried
-            // OpenJDK 21 until 25, the current LTS, replaced it, and 25 is 5.5 MB
-            // larger. `download-java.sh` copies with `-RL`, which dereferences the
-            // 205 odd symlinks of `legal/`, and `package-toolchains.sh` refuses a
-            // tree above this figure rather than shipping a card that admits a
-            // device to an install it cannot finish. 192,000,000 leaves 7 MB
+            // Measured on the v1.10.0 build (Termux openjdk-25 25.0.5.1): the pack's
+            // `usr/` tree is 185,065,472 bytes in 4 KiB blocks and the ZIP is
+            // 68,783,186 bytes. The pack carried OpenJDK 21 until 25, the current
+            // LTS, replaced it, and 25 is 5.5 MB larger. `download-java.sh` copies
+            // with `-RL`, which dereferences the symlinks of `legal/`, and
+            // `package-toolchains.sh` refuses a tree or a ZIP above these figures
+            // rather than shipping a card that admits a device to an install it
+            // cannot finish. They leave about 4 percent (tree) and 2 percent (ZIP)
             // for a point release of openjdk-25, which Termux has made before.
-            // The ZIP is 68,770,750 bytes.
             estimatedSize = 192_000_000,
-            downloadSize = 69_000_000,
+            downloadSize = 70_000_000,
             downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_java.zip",
         ),
         ToolchainInfo(
@@ -135,20 +144,19 @@ object ToolchainRegistry {
             displayName = "C/C++",
             shortLabel = "C/C++",
             descriptionRes = R.string.toolchain_cpp_description,
-            // 266,300 KiB measured with `du -sk` over the pack's `usr/` tree,
-            // which is 272,691,200 bytes in 4 KiB blocks and 263.5 MB of file
-            // contents, over 3,793 files. libLLVM.so and libclang-cpp.so are
-            // 196.6 MB of it, the headers 30.9 MB, clangd 18.7 MB and the clang
-            // resource directory 16 MB. 280,000,000 leaves 7 MB for the next
-            // point release of clang: package-toolchains.sh refuses to zip a
-            // tree above this, and a release tag is where that would be found.
+            // Measured on the v1.10.0 build (Termux clang 21.1.8-3): the pack's
+            // `usr/` tree is 272,781,312 bytes in 4 KiB blocks and the ZIP is
+            // 79,112,217 bytes. libLLVM.so and libclang-cpp.so are most of it, then
+            // the headers, clangd and the clang resource directory. The figures
+            // leave about 3 percent for the next point release of clang:
+            // package-toolchains.sh refuses to zip a tree or a ZIP above them, and
+            // a release tag is where that would be found.
             //
             // This is also the largest install pre-flight of the language toolchains. A first
             // install over HTTP holds the staged copy and the one in `usr/` at
             // once, so it asks for about twice this figure plus the buffer.
-            // The ZIP is 79,097,187 bytes.
             estimatedSize = 280_000_000,
-            downloadSize = 80_000_000,
+            downloadSize = 81_000_000,
             downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_cpp.zip",
         ),
         ToolchainInfo(
@@ -156,16 +164,19 @@ object ToolchainRegistry {
             displayName = "Codex",
             shortLabel = "Codex",
             descriptionRes = R.string.toolchain_codex_description,
-            // The pack's `usr/` tree in 4 KiB blocks, in 5 files: the engine at
-            // about 255 MB and its code-mode helper at about 72 MB account for all
-            // but 10 KiB of notices. It was 343.6 MB at the first build, 353.1 MB
-            // in 1.9.0, 354.0 MB with Termux's codex 0.169.1 and about 357.4 MB
-            // with 0.170.0, and it grows by about 4 MB a build. 375,000,000 leaves
-            // 17 MB for newer builds: Termux takes whatever the package is on the
-            // day the pack is built, and package-toolchains.sh refuses a tree above
-            // this. Measure the pack again before a release.
-            estimatedSize = 375_000_000,
-            downloadSize = 146_000_000,
+            // Measured on the v1.10.0 build (Termux codex 0.171.0): the pack's `usr/`
+            // tree is 374,263,808 bytes in 4 KiB blocks, nearly all of it two files,
+            // the engine (298.0 MB) and its code-mode helper (76.2 MB), and the ZIP
+            // is 145,475,266 bytes. Termux took codex through 0.169.1, 0.170.0 and
+            // 0.171.0 in the weeks before 1.10.0 and the step from 0.170.0 added
+            // about 17 MB of tree, so these two figures leave 5 percent over what
+            // was measured, and an earlier version of them, 0.7 MB over, did not
+            // survive that. Termux takes whatever the package is on the day the
+            // pack is built, and package-toolchains.sh refuses a tree or a ZIP
+            // above them at tag time. Measure the pack again before a release: a
+            // larger build can still outgrow them.
+            estimatedSize = 395_000_000,
+            downloadSize = 153_000_000,
             downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_codex.zip",
             offeredInPicker = false,
         ),
