@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-11-21
+
 ### Added
 
 - The Google Antigravity extension starts its engine and shows its panel, once **Vscodroid > Antigravity: Run Engine** is turned on in Settings; the engine is off by default because other apps on the phone can reach it while it runs.
@@ -1546,7 +1548,8 @@ This release represents the cumulative work across milestones M0 through M5, bri
 - Health check polling for server readiness
 - Android intent handling for "Open with VSCodroid"
 
-[Unreleased]: https://github.com/rmyndharis/VSCodroid/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/rmyndharis/VSCodroid/compare/v1.10.0...HEAD
+[1.10.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.6.0...v1.7.0
