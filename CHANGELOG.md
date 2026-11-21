@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A program built for Android that an extension starts by its full path is given the terminal's exec interceptor and its own path, as a terminal gives them, unless the start names, runs in or searches `~/.gemini`.
+- `spawnSync` and `execFileSync` from an extension start such a program through the system loader, as `spawn` and `execFile` do.
+- With **Vscodroid > Antigravity: Run Engine** off, a start of the engine that names the system loader in front of it, or a shell command that does, fails with `EACCES` instead of running the engine.
+- The process monitor warns, naming the file, when Settings shows **Run Engine** on but an error VS Code works around in the settings file keeps the engine off.
+
 ## [1.10.1] - 2026-11-21
 
 ### Fixed

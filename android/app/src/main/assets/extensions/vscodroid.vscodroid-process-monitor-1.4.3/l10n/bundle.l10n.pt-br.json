@@ -1,6 +1,0 @@
-{
-  "Google Antigravity is installed, but VSCodroid keeps its engine off. While the engine runs, other apps on this phone can reach it and use the account signed in to it. Turn it on only on a phone whose apps you trust.": "O Google Antigravity está instalado, mas o VSCodroid mantém o mecanismo dele desativado. Enquanto o mecanismo está em execução, outros aplicativos deste telefone podem acessá-lo e usar a conta conectada ao mecanismo. Ative-o somente em um telefone cujos aplicativos sejam de sua confiança.",
-  "Turn On and Reload": "Ativar e recarregar",
-  "Don't Show Again": "Não mostrar novamente",
-  "The Antigravity engine could not be turned on: {0}": "Não foi possível ativar o mecanismo do Antigravity: {0}"
-}

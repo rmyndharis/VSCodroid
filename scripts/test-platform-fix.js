@@ -273,11 +273,47 @@ fs.mkdirSync(NO_SETTINGS_HOME, { recursive: true });
 const SET_PRELOAD = path.join(tmp, 'set-preload.js');
 fs.writeFileSync(SET_PRELOAD, "if (process.env.FAKE_LD_PRELOAD) process.env.LD_PRELOAD = process.env.FAKE_LD_PRELOAD;\n");
 
-function spawnedUnder(call, { preload = null, dataDir = DATA_LINK, record = RECORD_SPAWN, main = SPAWN_MAIN, cwd = undefined, home = NO_SETTINGS_HOME } = {}) {
-    const env = { ...process.env, HOME: home };
-    delete env.LD_PRELOAD;
+// The exec interceptor a terminal preloads, under the prefix as the app lays it out (filesDir/usr). A program
+// the shim starts through the linker is given it as well, but only while it is a file: Bionic aborts every exec
+// in an environment whose preload is missing. So the runs below get a prefix that
+// holds it unless a case names one that does not.
+const PREFIX = path.join(DATA_LINK, 'files/usr');
+const PRELOAD = put(path.join(PREFIX, 'lib/libtermux-exec.so'), 'elf');
+const BARE_PREFIX = path.join(tmp, 'bare-usr');
+fs.mkdirSync(BARE_PREFIX, { recursive: true });
+
+/** The environment a run's process is started with. */
+// Only what the shim reads, and PATH, so a recorded environment is short enough to read when a case fails and
+// carries nothing of the machine running this.
+function childEnv({ preload = null, dataDir = DATA_LINK, home = NO_SETTINGS_HOME, prefix = PREFIX } = {}) {
+    const env = { PATH: process.env.PATH, HOME: home };
     if (preload !== null) env.FAKE_LD_PRELOAD = preload;
-    if (dataDir === null) delete env.TERMUX_APP__DATA_DIR; else env.TERMUX_APP__DATA_DIR = dataDir;
+    if (dataDir !== null) env.TERMUX_APP__DATA_DIR = dataDir;
+    if (prefix !== null) env.TERMUX__PREFIX = prefix;
+    return env;
+}
+
+// What the system adds to the environment a process is started with, which the process then sees as its own
+// (macOS adds __CF_USER_TEXT_ENCODING).
+const ADDED_BY_SYSTEM = (() => {
+    const given = { PATH: process.env.PATH };
+    const seen = JSON.parse(execFileSync(process.execPath, ['-e', 'console.log(JSON.stringify(process.env))'], { env: given, encoding: 'utf8' }));
+    Object.keys(given).forEach((name) => { delete seen[name]; });
+    return seen;
+})();
+
+/** The environment a run's process sees as its own: what it was started with, marked by the shim with the real platform. */
+const seenEnv = (conditions = {}) => ({ ...childEnv(conditions), ...ADDED_BY_SYSTEM, VSCODROID_REAL_PLATFORM: 'android' });
+
+/**
+ * The environment a start through the linker hands its program, for a call that names none of its own: the
+ * process's own, the interceptor preloaded, and the program's path where the interceptor and the programs that
+ * locate themselves look for it, since the linker names itself.
+ */
+const routedEnv = (file, conditions = {}) => ({ ...seenEnv(conditions), LD_PRELOAD: PRELOAD, TERMUX_EXEC__PROC_SELF_EXE: file });
+
+function spawnedUnder(call, { preload = null, dataDir = DATA_LINK, record = RECORD_SPAWN, main = SPAWN_MAIN, cwd = undefined, home = NO_SETTINGS_HOME, prefix = PREFIX } = {}) {
+    const env = childEnv({ preload, dataDir, home, prefix });
     const out = execFileSync(
         process.execPath,
         ['--require', FAKE_ANDROID, '--require', SET_PRELOAD, '--require', record, '--require', FIX, main, JSON.stringify(call)],
@@ -288,34 +324,79 @@ function spawnedUnder(call, { preload = null, dataDir = DATA_LINK, record = RECO
 const TOOL_ARGS = ['--flag', 'value'];
 const SPAWN_OPTIONS = { cwd: tmp, stdio: ['ignore', 'pipe', 'pipe'] };
 
+// Started through the linker, the program also gets the interceptor and its own path in a copy of the
+// environment: the options' own copy, or options of its own when the call had none.
+const ROUTED = { ...SPAWN_OPTIONS, env: routedEnv(ENGINE) };
 assert.deepStrictEqual(
-    spawnedUnder([ENGINE, TOOL_ARGS, SPAWN_OPTIONS]), [BIONIC_LINKER, [ENGINE, ...TOOL_ARGS], SPAWN_OPTIONS],
-    'a downloaded Android executable was not started through the linker, or its arguments and options changed',
+    spawnedUnder([ENGINE, TOOL_ARGS, SPAWN_OPTIONS]), [BIONIC_LINKER, [ENGINE, ...TOOL_ARGS], ROUTED],
+    'a downloaded Android executable was not started through the linker with the interceptor, or its arguments and options changed',
 );
 assert.deepStrictEqual(
-    spawnedUnder([ENGINE, SPAWN_OPTIONS]), [BIONIC_LINKER, [ENGINE], SPAWN_OPTIONS],
+    spawnedUnder([ENGINE, SPAWN_OPTIONS]), [BIONIC_LINKER, [ENGINE], ROUTED],
     'a call without an argument list lost its options',
 );
-assert.deepStrictEqual(spawnedUnder([ENGINE, TOOL_ARGS]), [BIONIC_LINKER, [ENGINE, ...TOOL_ARGS]], 'a call without options gained one');
-assert.deepStrictEqual(spawnedUnder([ENGINE]), [BIONIC_LINKER, [ENGINE]], 'a bare call was not started through the linker');
-// The real path decides: a link outside the data directory that ends inside it.
+assert.deepStrictEqual(spawnedUnder([ENGINE, TOOL_ARGS]), [BIONIC_LINKER, [ENGINE, ...TOOL_ARGS], { env: routedEnv(ENGINE) }], 'a call without options was given none to carry the interceptor');
+assert.deepStrictEqual(spawnedUnder([ENGINE]), [BIONIC_LINKER, [ENGINE], { env: routedEnv(ENGINE) }], 'a bare call was not started through the linker with the interceptor');
+// The real path decides: a link outside the data directory that ends inside it. Its own path is the one named.
 assert.deepStrictEqual(
-    spawnedUnder([LINK_INTO_DATA, TOOL_ARGS, SPAWN_OPTIONS]), [BIONIC_LINKER, [LINK_INTO_DATA, ...TOOL_ARGS], SPAWN_OPTIONS],
+    spawnedUnder([LINK_INTO_DATA, TOOL_ARGS, SPAWN_OPTIONS]), [BIONIC_LINKER, [LINK_INTO_DATA, ...TOOL_ARGS], { ...SPAWN_OPTIONS, env: routedEnv(LINK_INTO_DATA) }],
     'a link that resolves into the data directory was left alone',
 );
 checked += 5;
 // Node takes null or undefined for the argument list and reads the options after it. A call written that way
 // has to keep its options (cwd, env, stdio), which a rewrite that took the empty slot for them dropped or threw on.
 assert.deepStrictEqual(
-    spawnedUnder([ENGINE, '@undefined', SPAWN_OPTIONS]), [BIONIC_LINKER, [ENGINE], SPAWN_OPTIONS],
+    spawnedUnder([ENGINE, '@undefined', SPAWN_OPTIONS]), [BIONIC_LINKER, [ENGINE], ROUTED],
     'an undefined argument list lost the options that follow it',
 );
 assert.deepStrictEqual(
-    spawnedUnder([ENGINE, null, SPAWN_OPTIONS]), [BIONIC_LINKER, [ENGINE], SPAWN_OPTIONS],
+    spawnedUnder([ENGINE, null, SPAWN_OPTIONS]), [BIONIC_LINKER, [ENGINE], ROUTED],
     'a null argument list lost the options that follow it',
 );
-assert.deepStrictEqual(spawnedUnder([ENGINE, null]), [BIONIC_LINKER, [ENGINE]], 'a null argument list alone was not started through the linker');
+assert.deepStrictEqual(spawnedUnder([ENGINE, null]), [BIONIC_LINKER, [ENGINE], { env: routedEnv(ENGINE) }], 'a null argument list alone was not started through the linker');
 checked += 3;
+// Without the interceptor on disk nothing is added, the program's own path included: an environment that
+// names a preload Bionic cannot map aborts every exec in it, and the path without the interceptor would reach
+// every program below that one, which no exec would correct. The call is then made as it was before.
+for (const prefix of [BARE_PREFIX, null]) {
+    for (const [call, expected] of [
+        [[ENGINE, TOOL_ARGS, SPAWN_OPTIONS], [BIONIC_LINKER, [ENGINE, ...TOOL_ARGS], SPAWN_OPTIONS]],
+        [[ENGINE, TOOL_ARGS], [BIONIC_LINKER, [ENGINE, ...TOOL_ARGS]]],
+        [[ENGINE, null, SPAWN_OPTIONS], [BIONIC_LINKER, [ENGINE], SPAWN_OPTIONS]],
+    ]) {
+        assert.deepStrictEqual(spawnedUnder(call, { prefix }), expected, `${prefix === null ? 'no prefix' : 'no interceptor under the prefix'}: the call gained an environment`);
+        checked++;
+    }
+}
+// A call's own environment is copied and kept: the interceptor goes before any preload it names, the variables
+// the interceptor reads come from this process when the call leaves them out, and a second pass of the same
+// start (the linker already in front, the interceptor already in place) changes nothing.
+{
+    const own = { ...SPAWN_OPTIONS, env: { PATH: '/usr/bin', LD_PRELOAD: '/x/libother.so' } };
+    assert.deepStrictEqual(
+        spawnedUnder([ENGINE, TOOL_ARGS, own]),
+        [BIONIC_LINKER, [ENGINE, ...TOOL_ARGS], { ...SPAWN_OPTIONS, env: {
+            PATH: '/usr/bin', LD_PRELOAD: `${PRELOAD}:/x/libother.so`, TERMUX_APP__DATA_DIR: DATA_LINK, TERMUX__PREFIX: PREFIX, TERMUX_EXEC__PROC_SELF_EXE: ENGINE,
+        } }],
+        'a call with an environment of its own did not keep it, or did not get the interceptor in front of its preload',
+    );
+    const once = spawnedUnder([ENGINE, TOOL_ARGS, SPAWN_OPTIONS]);
+    assert.deepStrictEqual(spawnedUnder(once), once, 'a start already made through the linker with the interceptor changed on a second pass');
+    checked += 2;
+}
+// The caller's options and environment are its own, and the process's environment is the host's: none of them
+// gains the interceptor, so nothing else the extension host starts carries it.
+{
+    const MUTATION_MAIN = path.join(tmp, 'mutation-main.js');
+    fs.writeFileSync(MUTATION_MAIN,
+        "const [file] = JSON.parse(process.argv[2]);\n" +
+        "const env = { PATH: '/usr/bin' };\nconst options = { env };\nconst bare = {};\n" +
+        "require('child_process').spawn(file, ['--flag'], options);\nrequire('child_process').spawn(file, ['--flag'], bare);\n" +
+        "console.log(JSON.stringify([options, bare, process.env.LD_PRELOAD || null, process.env.TERMUX_EXEC__PROC_SELF_EXE || null]));\n");
+    assert.deepStrictEqual(spawnedUnder([ENGINE], { main: MUTATION_MAIN }), [{ env: { PATH: '/usr/bin' } }, {}, null, null],
+        'the caller\'s options, its environment or the process\'s own environment gained the interceptor');
+    checked++;
+}
 for (const [label, call, conditions] of [
     ['a musl executable, which needs its own loader', [MUSL, TOOL_ARGS, SPAWN_OPTIONS]],
     ['a static or shared object with no interpreter entry', [STATIC, TOOL_ARGS, SPAWN_OPTIONS]],
@@ -363,17 +444,22 @@ fs.writeFileSync(
 const execUnder = (how, call) => spawnedUnder([how, call], { record: RECORD_EXEC, main: EXEC_MAIN });
 const CALLBACK = '@callback';
 const VERSION_OPTIONS = { timeout: 5000 };
+// The interceptor goes with these starts too, in a copy of the options, or in options put before the callback
+// when the call has none.
+const VERSION_ROUTED = { ...VERSION_OPTIONS, env: routedEnv(ENGINE) };
+const ENV_ONLY = { env: routedEnv(ENGINE) };
 for (const [label, how, call, expected] of [
-    ['arguments, options and a callback', 'plain', [ENGINE, ['--version'], VERSION_OPTIONS, CALLBACK], [BIONIC_LINKER, [ENGINE, '--version'], VERSION_OPTIONS, null]],
-    ['arguments and a callback', 'plain', [ENGINE, ['--version'], CALLBACK], [BIONIC_LINKER, [ENGINE, '--version'], null]],
-    ['a callback only', 'plain', [ENGINE, CALLBACK], [BIONIC_LINKER, [ENGINE], null]],
-    ['options and a callback, no argument list', 'plain', [ENGINE, VERSION_OPTIONS, CALLBACK], [BIONIC_LINKER, [ENGINE], VERSION_OPTIONS, null]],
-    ['an empty argument list with options', 'plain', [ENGINE, [], VERSION_OPTIONS, CALLBACK], [BIONIC_LINKER, [ENGINE], VERSION_OPTIONS, null]],
-    ['no arguments at all', 'plain', [ENGINE], [BIONIC_LINKER, [ENGINE]]],
-    ['the promisified form, which the extension uses', 'promisified', [ENGINE, ['--version'], VERSION_OPTIONS], [BIONIC_LINKER, [ENGINE, '--version'], VERSION_OPTIONS]],
-    ['a null argument list before options and a callback', 'plain', [ENGINE, null, VERSION_OPTIONS, CALLBACK], [BIONIC_LINKER, [ENGINE], VERSION_OPTIONS, null]],
-    ['an undefined argument list before a callback', 'plain', [ENGINE, '@undefined', CALLBACK], [BIONIC_LINKER, [ENGINE], null]],
-    ['an undefined argument list before options, promisified', 'promisified', [ENGINE, '@undefined', VERSION_OPTIONS], [BIONIC_LINKER, [ENGINE], VERSION_OPTIONS]],
+    ['arguments, options and a callback', 'plain', [ENGINE, ['--version'], VERSION_OPTIONS, CALLBACK], [BIONIC_LINKER, [ENGINE, '--version'], VERSION_ROUTED, null]],
+    ['arguments and a callback', 'plain', [ENGINE, ['--version'], CALLBACK], [BIONIC_LINKER, [ENGINE, '--version'], ENV_ONLY, null]],
+    ['a callback only', 'plain', [ENGINE, CALLBACK], [BIONIC_LINKER, [ENGINE], ENV_ONLY, null]],
+    ['options and a callback, no argument list', 'plain', [ENGINE, VERSION_OPTIONS, CALLBACK], [BIONIC_LINKER, [ENGINE], VERSION_ROUTED, null]],
+    ['an empty argument list with options', 'plain', [ENGINE, [], VERSION_OPTIONS, CALLBACK], [BIONIC_LINKER, [ENGINE], VERSION_ROUTED, null]],
+    ['no arguments at all', 'plain', [ENGINE], [BIONIC_LINKER, [ENGINE], ENV_ONLY]],
+    ['the promisified form, which the extension uses', 'promisified', [ENGINE, ['--version'], VERSION_OPTIONS], [BIONIC_LINKER, [ENGINE, '--version'], VERSION_ROUTED]],
+    ['a null argument list before options and a callback', 'plain', [ENGINE, null, VERSION_OPTIONS, CALLBACK], [BIONIC_LINKER, [ENGINE], VERSION_ROUTED, null]],
+    ['a null options slot before a callback', 'plain', [ENGINE, ['--version'], null, CALLBACK], [BIONIC_LINKER, [ENGINE, '--version'], ENV_ONLY, null]],
+    ['an undefined argument list before a callback', 'plain', [ENGINE, '@undefined', CALLBACK], [BIONIC_LINKER, [ENGINE], ENV_ONLY, null]],
+    ['an undefined argument list before options, promisified', 'promisified', [ENGINE, '@undefined', VERSION_OPTIONS], [BIONIC_LINKER, [ENGINE], VERSION_ROUTED]],
 ]) {
     assert.deepStrictEqual(execUnder(how, call), [how, ...expected], `execFile, ${label}: not started through the linker, or its arguments changed`);
     checked++;
@@ -692,9 +778,16 @@ const HUB_NOTE = path.join(HUB_HOME, '.vscodroid/antigravity-hub.json');
 const OFF_HOME = homeWith(null);
 const OFF_ENGINE = engineIn(OFF_HOME);
 const HUB_ARGS = ['--hub', '--hub-port=41000', '--app_data_dir=antigravity'];
-const throughLinker = (call) => (Array.isArray(call[1])
-    ? [BIONIC_LINKER, [call[0], ...call[1]], ...call.slice(2)]
-    : [BIONIC_LINKER, [call[0]], ...call.slice(1)]);
+// `call` (a program, perhaps an argument list, then options) as the shim makes it through the linker, run
+// from `home`: the program first among the linker's arguments, and the options carrying the interceptor.
+// A program in the home's own ~/.gemini is started without the interceptor, as it always was: the interceptor
+// would start whatever else in ~/.gemini it named.
+const throughLinker = (call, home) => {
+    const [file, ...rest] = call;
+    const args = Array.isArray(rest[0]) ? rest.shift() : [];
+    if (file.startsWith(path.join(home, '.gemini') + '/')) return [BIONIC_LINKER, [file, ...args], ...rest];
+    return [BIONIC_LINKER, [file, ...args], { ...rest[0], env: routedEnv(file, { home }) }, ...rest.slice(1)];
+};
 
 // The file is read as VS Code builds its settings from it: comments and trailing commas out, strings kept,
 // the keys of the root object split at their dots into a tree in file order (so the dotted key, the key
@@ -810,11 +903,11 @@ for (const [label, call] of [
     // The start the relay knows is checked on its own below.
     const on = [call[0].replace(OFF_HOME, HUB_HOME), ...call.slice(1)];
     if (call[0] !== LINK_TO_OFF_ENGINE && !(call[0] === OFF_ENGINE && call[1] === HUB_ARGS)) {
-        assert.deepStrictEqual(spawnedUnder(on, { home: HUB_HOME }), throughLinker(on), `setting on, ${label}: not started through the linker as it was written`);
+        assert.deepStrictEqual(spawnedUnder(on, { home: HUB_HOME }), throughLinker(on, HUB_HOME), `setting on, ${label}: not started through the linker as it was written`);
     }
     checked++;
 }
-assert.deepStrictEqual(spawnedUnder([OFF_ENGINE, ['--version'], SPAWN_OPTIONS], { home: OFF_HOME }), throughLinker([OFF_ENGINE, ['--version'], SPAWN_OPTIONS]),
+assert.deepStrictEqual(spawnedUnder([OFF_ENGINE, ['--version'], SPAWN_OPTIONS], { home: OFF_HOME }), throughLinker([OFF_ENGINE, ['--version'], SPAWN_OPTIONS], OFF_HOME),
     'setting off, the extension\'s check of the engine\'s version was held back, so it downloads the engine again');
 checked++;
 for (const how of ['plain', 'promisified']) {
@@ -824,10 +917,10 @@ for (const how of ['plain', 'promisified']) {
     assert.deepStrictEqual(exec([OFF_ENGINE, ['--hub', '--hub-port=41000'], '@callback'], OFF_HOME).slice(0, 2), [how, OFF_ENGINE], `execFile (${how}) with a callback was started with the setting off`);
     assert.deepStrictEqual(exec([OFF_ENGINE, ['--remote-control'], { timeout: 5000 }], OFF_HOME), [how, OFF_ENGINE, ['--remote-control'], { timeout: 5000 }], `execFile (${how}) of the remote control mode was started with the setting off`);
     const version = [OFF_ENGINE, ['--version'], { timeout: 5000 }];
-    assert.deepStrictEqual(exec(version, OFF_HOME), [how, ...throughLinker(version)], `execFile (${how}) of the engine for its version is held back with the setting off`);
+    assert.deepStrictEqual(exec(version, OFF_HOME), [how, ...throughLinker(version, OFF_HOME)], `execFile (${how}) of the engine for its version is held back with the setting off`);
     // No relay here: an engine started by execFile with the setting on is an ordinary program on the port it was given.
     const onHub = [HUB_ENGINE, ['--hub', '--hub-port=41000'], { timeout: 5000 }];
-    assert.deepStrictEqual(exec(onHub, HUB_HOME), [how, ...throughLinker(onHub)], `execFile (${how}) with the setting on did not go through the linker as it was written`);
+    assert.deepStrictEqual(exec(onHub, HUB_HOME), [how, ...throughLinker(onHub, HUB_HOME)], `execFile (${how}) with the setting on did not go through the linker as it was written`);
     checked += 5;
 }
 
@@ -835,8 +928,225 @@ for (const how of ['plain', 'promisified']) {
 // .gemini/bin/agy: it goes through the linker either way, and gets no relay.
 for (const home of [OFF_HOME, HUB_HOME]) {
     const call = [ENGINE, HUB_ARGS, SPAWN_OPTIONS];
-    assert.deepStrictEqual(spawnedUnder(call, { home }), throughLinker(call), `a program outside $HOME/.gemini was changed by the setting (${home === HUB_HOME ? 'on' : 'off'})`);
+    assert.deepStrictEqual(spawnedUnder(call, { home }), throughLinker(call, home), `a program outside $HOME/.gemini was changed by the setting (${home === HUB_HOME ? 'on' : 'off'})`);
     checked++;
+}
+
+// Every way an extension can start a program, recorded: the asynchronous and synchronous starts, and the two
+// that run a command in a shell. exec reaches the exported execFile with `shell` set and the whole command as
+// the file; execSync and execFileSync reach Node's internal spawnSync, so each is its own case.
+const RECORD_ALL = path.join(tmp, 'record-all.js');
+fs.writeFileSync(
+    RECORD_ALL,
+    "const cp = require('child_process');\n" +
+        "const note = (how) => function () { console.log(JSON.stringify([how].concat(Array.prototype.slice.call(arguments)))); return 'child'; };\n" +
+        "['spawn', 'spawnSync', 'execFile', 'execFileSync', 'execSync'].forEach((how) => { cp[how] = note(how); });\n" +
+        "cp.execFile[require('util').promisify.custom] = note('promisified');\n",
+);
+const ALL_MAIN = path.join(tmp, 'all-main.js');
+fs.writeFileSync(
+    ALL_MAIN,
+    "const cp = require('child_process');\n" +
+        "const [how, call] = JSON.parse(process.argv[2]);\n" +
+        "const args = call.map((x) => (x === '@callback' ? function () {} : x === '@undefined' ? undefined : x));\n" +
+        "if (how === 'promisified') require('util').promisify(cp.execFile)(...args); else cp[how](...args);\n",
+);
+const callUnder = (how, call, conditions = {}) => spawnedUnder([how, call], { record: RECORD_ALL, main: ALL_MAIN, ...conditions });
+
+// The synchronous starts go through the linker as the asynchronous ones do, with the interceptor.
+for (const [how, call, expected] of [
+    ['spawnSync', [ENGINE, TOOL_ARGS, SPAWN_OPTIONS], [BIONIC_LINKER, [ENGINE, ...TOOL_ARGS], ROUTED]],
+    ['spawnSync', [ENGINE], [BIONIC_LINKER, [ENGINE], { env: routedEnv(ENGINE) }]],
+    ['execFileSync', [ENGINE, ['--version']], [BIONIC_LINKER, [ENGINE, '--version'], { env: routedEnv(ENGINE) }]],
+    ['execFileSync', [ENGINE, null, VERSION_OPTIONS], [BIONIC_LINKER, [ENGINE], VERSION_ROUTED]],
+]) {
+    assert.deepStrictEqual(callUnder(how, call), [how, ...expected], `${how}: not started through the linker with the interceptor`);
+    assert.deepStrictEqual(callUnder(how, call, { prefix: BARE_PREFIX }), [how, ...expected.map((x) => (x && x.env ? (({ env, ...rest }) => rest)(x) : x)).filter((x) => !(x && typeof x === 'object' && !Array.isArray(x) && !Object.keys(x).length))],
+        `${how} with no interceptor on disk: the call gained an environment`);
+    checked += 2;
+}
+for (const [how, call] of [
+    ['spawnSync', [MUSL, TOOL_ARGS, SPAWN_OPTIONS]],
+    ['execFileSync', [OUTSIDE, ['--version'], VERSION_OPTIONS]],
+]) {
+    assert.deepStrictEqual(callUnder(how, call), [how, ...call], `${how}: a call that is not the linker's was changed`);
+    checked++;
+}
+
+// A command run in a shell is made as written: no interceptor and no program path, whatever the shell is asked
+// to start, an Android program in the app's storage included. With the interceptor in its environment the
+// shell would start any script or program there that a command names, which Android's refusal of such an exec
+// is what prevents. A program the shim itself starts through the linker, in the same run, gets both.
+for (const [how, call, expected] of [
+    ['exec', ['cc hello.c -o hello', CALLBACK], ['execFile', 'cc hello.c -o hello', { shell: true }, null]],
+    ['exec', [`${ENGINE} --flag`, { cwd: tmp }, CALLBACK], ['execFile', `${ENGINE} --flag`, { cwd: tmp, shell: true }, null]],
+    ['execSync', ['cc hello.c'], ['execSync', 'cc hello.c']],
+    ['execSync', [`${SCRIPT} --flag`, { env: { PATH: '/usr/bin' } }], ['execSync', `${SCRIPT} --flag`, { env: { PATH: '/usr/bin' } }]],
+    ['spawn', [ENGINE, TOOL_ARGS, { shell: true }], ['spawn', ENGINE, TOOL_ARGS, { shell: true }]],
+    ['spawnSync', [`${ENGINE} --flag`, { shell: true }], ['spawnSync', `${ENGINE} --flag`, { shell: true }]],
+    ['execFile', [ENGINE, ['--version'], { shell: true }, CALLBACK], ['execFile', ENGINE, ['--version'], { shell: true }, null]],
+    ['execFileSync', [ENGINE, ['--version'], { shell: '/bin/sh' }], ['execFileSync', ENGINE, ['--version'], { shell: '/bin/sh' }]],
+]) {
+    assert.deepStrictEqual(callUnder(how, call), expected, `${how} in a shell: the shell was given an environment, the interceptor in it`);
+    checked++;
+}
+for (const how of ['spawn', 'spawnSync', 'execFile', 'execFileSync']) {
+    const [, linker, args, options] = callUnder(how, [ENGINE, TOOL_ARGS]);
+    assert.deepStrictEqual([linker, args, options && options.env && options.env.LD_PRELOAD, options && options.env && options.env.TERMUX_EXEC__PROC_SELF_EXE],
+        [BIONIC_LINKER, [ENGINE, ...TOOL_ARGS], PRELOAD, ENGINE], `${how} of an Android program in the app's storage, without a shell: not given the interceptor and its own path`);
+    checked++;
+}
+// The linker written out by the caller is the start of the program after it, and gets what such a start gets.
+// A loader option in front of the program (--list) runs nothing, and a program the linker is not for is left alone.
+for (const [label, call, expected] of [
+    ['the linker by its path', [BIONIC_LINKER, [ENGINE, ...TOOL_ARGS], SPAWN_OPTIONS], [BIONIC_LINKER, [ENGINE, ...TOOL_ARGS], ROUTED]],
+    ['the linker by its name', ['linker64', [ENGINE, ...TOOL_ARGS], SPAWN_OPTIONS], [BIONIC_LINKER, [ENGINE, ...TOOL_ARGS], ROUTED]],
+    ['the linker by its real path', ['/apex/com.android.runtime/bin/linker64', [ENGINE], SPAWN_OPTIONS], [BIONIC_LINKER, [ENGINE], ROUTED]],
+]) {
+    assert.deepStrictEqual(callUnder('spawn', call), ['spawn', ...expected], `${label}: not started as the program after it`);
+    checked++;
+}
+for (const [label, call] of [
+    ['a loader option before the program', [BIONIC_LINKER, ['--list', ENGINE], SPAWN_OPTIONS]],
+    ['a musl program after the linker', [BIONIC_LINKER, [MUSL, ...TOOL_ARGS], SPAWN_OPTIONS]],
+    ['a program outside the data directory after the linker', [BIONIC_LINKER, [OUTSIDE], SPAWN_OPTIONS]],
+    ['the linker with nothing after it', [BIONIC_LINKER, [], SPAWN_OPTIONS]],
+]) {
+    assert.deepStrictEqual(callUnder('spawn', call), ['spawn', ...call], `${label}: the call was changed`);
+    checked++;
+}
+
+// With the setting off, nothing in ~/.gemini is run however the call names it. Written out with the linker,
+// the call is made without it: the program is started directly, which Android refuses with EACCES as it refuses
+// every other start of it, and in each API's own shape. A command run in a shell gets no interceptor, so the
+// shell's own start of something there is refused as well; one that names something in ~/.gemini and also names
+// the linker, which the shell could run, is made as that direct start instead.
+const OFF_BIN = path.join(OFF_HOME, '.gemini/bin');
+for (const [how, call, expected] of [
+    ['spawn', [BIONIC_LINKER, [OFF_ENGINE, ...HUB_ARGS], SPAWN_OPTIONS], [OFF_ENGINE, HUB_ARGS, SPAWN_OPTIONS]],
+    ['spawn', ['linker64', [OFF_ENGINE, '--remote-control']], [OFF_ENGINE, ['--remote-control']]],
+    ['spawn', [BIONIC_LINKER, ['./agy', '--hub'], { cwd: OFF_BIN }], [OFF_ENGINE, ['--hub'], { cwd: OFF_BIN }]],
+    ['spawnSync', [BIONIC_LINKER, [OFF_ENGINE, ...HUB_ARGS], SPAWN_OPTIONS], [OFF_ENGINE, HUB_ARGS, SPAWN_OPTIONS]],
+    ['execFile', [BIONIC_LINKER, [OFF_ENGINE, '--hub'], CALLBACK], [OFF_ENGINE, ['--hub'], null]],
+    ['promisified', [BIONIC_LINKER, [OFF_ENGINE, '--hub'], VERSION_OPTIONS], [OFF_ENGINE, ['--hub'], VERSION_OPTIONS]],
+    ['execFileSync', [BIONIC_LINKER, [AGY_NEXT, '--version']], [AGY_NEXT, ['--version']]],
+]) {
+    assert.deepStrictEqual(callUnder(how, call, { home: OFF_HOME }), [how, ...expected], `setting off, ${how} of the linker with a program in ~/.gemini was not made without the linker`);
+    checked++;
+}
+for (const [how, call] of [
+    ['spawnSync', [OFF_ENGINE, HUB_ARGS, SPAWN_OPTIONS]],
+    ['execFileSync', [OFF_ENGINE, ['--remote-control']]],
+]) {
+    assert.deepStrictEqual(callUnder(how, call, { home: OFF_HOME }), [how, ...call], `setting off, ${how} of a program in ~/.gemini was changed, so it runs`);
+    checked++;
+}
+// The version check is let through whichever way it is written.
+assert.deepStrictEqual(callUnder('spawnSync', [BIONIC_LINKER, [OFF_ENGINE, '--version']], { home: OFF_HOME }),
+    ['spawnSync', BIONIC_LINKER, [OFF_ENGINE, '--version']],
+    'setting off, the version check written with the linker was held back, or given the interceptor');
+checked++;
+for (const [how, call, expected] of [
+    ['exec', [`${OFF_ENGINE} --hub`, CALLBACK], ['execFile', `${OFF_ENGINE} --hub`, { shell: true }, null]],
+    ['execSync', ['~/.gemini/bin/agy --hub'], ['execSync', '~/.gemini/bin/agy --hub']],
+    ['execSync', ['cd "$HOME/.gemini/bin" && ./agy --hub'], ['execSync', 'cd "$HOME/.gemini/bin" && ./agy --hub']],
+    ['spawn', [OFF_ENGINE, ['--hub'], { shell: true }], ['spawn', OFF_ENGINE, ['--hub'], { shell: true }]],
+    ['exec', [`${BIONIC_LINKER} ${OFF_ENGINE} --hub`, CALLBACK], ['execFile', OFF_ENGINE, [], { shell: false }, null]],
+    ['execSync', ['linker64 "$HOME/.gemini/bin/agy" --hub'], ['execFileSync', OFF_ENGINE, [], { shell: false }]],
+    ['execSync', ['cd ~/.gemini/bin; /system/bin/linker64 ./agy'], ['execFileSync', OFF_BIN, [], { shell: false }]],
+    ['execSync', ['X=$HOME/.gem""ini/bin/agy; linker64 $X --hub'], ['execFileSync', path.join(OFF_HOME, '.gemini'), [], { shell: false }]],
+    ['spawn', [BIONIC_LINKER, [OFF_ENGINE, '--hub'], { ...SPAWN_OPTIONS, shell: true }], ['spawn', OFF_ENGINE, [], { ...SPAWN_OPTIONS, shell: false }]],
+    ['spawnSync', [`${BIONIC_LINKER} ${OFF_ENGINE}`, { shell: true }], ['spawnSync', OFF_ENGINE, [], { shell: false }]],
+    ['execFile', [BIONIC_LINKER, [OFF_ENGINE], { shell: true }, CALLBACK], ['execFile', OFF_ENGINE, [], { shell: false }, null]],
+    ['execFileSync', [BIONIC_LINKER, [OFF_ENGINE], { shell: true }], ['execFileSync', OFF_ENGINE, [], { shell: false }]],
+]) {
+    assert.deepStrictEqual(callUnder(how, call, { home: OFF_HOME }), expected, `setting off, ${how} of a shell command naming ~/.gemini: ${JSON.stringify(call)}`);
+    checked++;
+}
+// A program started through the linker that could reach ~/.gemini gets no interceptor in either state of the
+// setting, so what it would start there is refused as it was before: one that is handed a path there, runs
+// there or searches a PATH directory there, and the engine itself. A shell gets none at any time, these
+// included. The setting decides only what is refused; the interceptor is what would let any of these start the
+// engine.
+const WRAPPER = put(path.join(REAL_DATA, 'files/usr/bin/wrapper'), elf64(BIONIC_LINKER));
+for (const home of [OFF_HOME, HUB_HOME]) {
+    const bin = path.join(home, '.gemini/bin');
+    const engine = engineIn(home);
+    const searching = { env: { PATH: `${bin}:/usr/bin` } };
+    for (const [how, call, expected] of [
+        ['execSync', ['agy --hub', searching], ['execSync', 'agy --hub', searching]],
+        ['execSync', ['make', { cwd: bin }], ['execSync', 'make', { cwd: bin }]],
+        ['exec', ['agy --hub', { cwd: bin }, CALLBACK], ['execFile', 'agy --hub', { cwd: bin, shell: true }, null]],
+        ['execSync', [`${engine} --version`], ['execSync', `${engine} --version`]],
+        ['spawn', [WRAPPER, [engine, '--hub']], ['spawn', BIONIC_LINKER, [WRAPPER, engine, '--hub']]],
+        ['spawn', [WRAPPER, ['./agy'], { cwd: bin }], ['spawn', BIONIC_LINKER, [WRAPPER, './agy'], { cwd: bin }]],
+        ['spawnSync', [WRAPPER, [], searching], ['spawnSync', BIONIC_LINKER, [WRAPPER], searching]],
+        ['execFileSync', [WRAPPER, [path.join(home, '.gemini')]], ['execFileSync', BIONIC_LINKER, [WRAPPER, path.join(home, '.gemini')]]],
+    ]) {
+        assert.deepStrictEqual(callUnder(how, call, { home }), expected,
+            `setting ${home === HUB_HOME ? 'on' : 'off'}, ${how} of ${JSON.stringify(call)}: given the interceptor, which would start what it reaches in ~/.gemini`);
+        checked++;
+    }
+}
+// With the setting on, the start written out with the linker is the start the relay knows: its port is swapped,
+// and an argument outside the extension's own keeps it from starting, as it does without the linker.
+{
+    const relayed = callUnder('spawn', [BIONIC_LINKER, [HUB_ENGINE, ...HUB_ARGS], SPAWN_OPTIONS], { home: HUB_HOME });
+    assert.strictEqual(relayed[1], BIONIC_LINKER, 'setting on, the hub written with the linker was not started through it');
+    assert.ok(/^--hub-port=\d+$/.test(relayed[2][2]) && relayed[2][2] !== '--hub-port=41000', `setting on, the hub written with the linker kept the extension's port: ${relayed[2][2]}`);
+    const extra = [HUB_ENGINE, [...HUB_ARGS, '--remote-control'], SPAWN_OPTIONS];
+    assert.deepStrictEqual(callUnder('spawn', [BIONIC_LINKER, [extra[0], ...extra[1]], SPAWN_OPTIONS], { home: HUB_HOME }), ['spawn', ...extra],
+        'setting on, a hub start with an argument the extension does not build, written with the linker, was started');
+    checked += 2;
+}
+
+// The refusals, made for real: each API reports EACCES for the engine, where the linker written out (absent on
+// this host, which is what the start would have run) answered something else.
+const REAL_MAIN = path.join(tmp, 'real-main.js');
+fs.writeFileSync(
+    REAL_MAIN,
+    "const cp = require('child_process');\n" +
+        "const [how, call] = JSON.parse(process.argv[2]);\n" +
+        "const done = (what) => { console.log(JSON.stringify(what)); process.exit(0); };\n" +
+        "setTimeout(() => done('no answer'), 8000);\n" +
+        "try {\n" +
+        "    if (how === 'spawn') { const c = cp.spawn(...call); c.on('error', (e) => done(e.code)); c.on('exit', (code) => done('exit ' + code)); }\n" +
+        "    else if (how === 'spawnSync') { const r = cp.spawnSync(...call); done(r.error ? r.error.code : 'exit ' + r.status); }\n" +
+        "    else if (how === 'execFile' || how === 'exec') cp[how](...call, (e) => done(e ? e.code : 'exit 0'));\n" +
+        "    else { cp[how](...call); done('exit 0'); }\n" +
+        "} catch (e) { done(e.code !== undefined ? e.code : 'exit ' + e.status); }\n",
+);
+const realUnder = (how, call) => JSON.parse(execFileSync(
+    process.execPath,
+    ['--require', FAKE_ANDROID, '--require', FIX, REAL_MAIN, JSON.stringify([how, call])],
+    { env: childEnv({ home: OFF_HOME }), encoding: 'utf8', timeout: 15000, cwd: tmp },
+).trim().split('\n').pop());
+for (const [how, call] of [
+    ['spawn', [BIONIC_LINKER, [OFF_ENGINE, '--hub']]],
+    ['spawnSync', [BIONIC_LINKER, [OFF_ENGINE, '--hub']]],
+    ['execFile', [BIONIC_LINKER, [OFF_ENGINE, '--hub']]],
+    ['execFileSync', [BIONIC_LINKER, [OFF_ENGINE, '--hub'], { stdio: 'ignore' }]],
+    ['exec', [`${BIONIC_LINKER} ${OFF_ENGINE} --hub`]],
+    ['execSync', ['linker64 ~/.gemini/bin/agy --hub', { stdio: 'ignore' }]],
+    ['execSync', ['X=$HOME/.gem""ini/bin/agy; linker64 $X --hub', { stdio: 'ignore' }]],
+    ['spawn', [BIONIC_LINKER, [OFF_ENGINE, '--hub'], { shell: true }]],
+]) {
+    assert.strictEqual(realUnder(how, call), 'EACCES', `setting off, ${how} of ${JSON.stringify(call)} did not fail with EACCES`);
+    checked++;
+}
+
+// The gate's own reading, for the process monitor extension to compare with what VS Code shows: the file it
+// reads, and whether it reads the setting as on. A file VS Code reads with an error it works around (a missing
+// comma) is off here.
+{
+    const GATE_MAIN = path.join(tmp, 'gate-main.js');
+    fs.writeFileSync(GATE_MAIN, "const gate = globalThis[Symbol.for('vscodroid.engineGate')];\nconsole.log(JSON.stringify(gate ? { on: gate.engineTurnedOn(), file: gate.settingsFile } : null));\n");
+    const gateIn = (home) => spawnedUnder([], { main: GATE_MAIN, home });
+    const lenient = homeWith('{\n    "update.mode": "none"\n    "vscodroid.antigravity.runEngine": true\n}\n');
+    assert.deepStrictEqual(gateIn(HUB_HOME), { on: true, file: machineSettings(HUB_HOME) }, 'the gate does not say it reads the setting as on');
+    assert.deepStrictEqual(gateIn(OFF_HOME), { on: false, file: machineSettings(OFF_HOME) }, 'the gate does not say it reads the setting as off');
+    assert.deepStrictEqual(gateIn(lenient), { on: false, file: machineSettings(lenient) }, 'a file with a missing comma read as on');
+    checked += 3;
 }
 
 // The hub start the relay knows, with the setting on: the extension's own arguments, a CSRF token and one

@@ -1,0 +1,7 @@
+{
+  "Google Antigravity is installed, but VSCodroid keeps its engine off. While the engine runs, other apps on this phone can reach it and use the account signed in to it. Turn it on only on a phone whose apps you trust.": "Google Antigravity はインストールされていますが、VSCodroid はそのエンジンをオフにしています。エンジンの実行中は、このスマートフォン上の他のアプリがエンジンに接続し、エンジンにサインインしているアカウントを使用できます。入っているアプリを信頼できるスマートフォンでのみオンにしてください。",
+  "Turn On and Reload": "オンにして再読み込み",
+  "Don't Show Again": "今後は表示しない",
+  "The Antigravity engine could not be turned on: {0}": "Antigravity エンジンをオンにできませんでした: {0}",
+  "The setting Antigravity: Run Engine shows as on, but VSCodroid reads it as off in {0}, so the Google Antigravity engine stays off. VS Code works around some errors in that file, such as a missing comma, and VSCodroid does not. Correct the file, then reload the window.": "設定 Antigravity: Run Engine はオンと表示されていますが、VSCodroid は {0} でこの設定をオフとして読み取るため、Google Antigravity のエンジンはオフのままです。VS Code はこのファイルの一部のエラー (カンマの抜けなど) を回避しますが、VSCodroid は回避しません。ファイルを修正してから、ウィンドウを再読み込みしてください。"
+}

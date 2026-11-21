@@ -12,6 +12,7 @@ import io.mockk.mockk
 import io.mockk.mockkObject
 import io.mockk.mockkStatic
 import io.mockk.unmockkAll
+import org.json.JSONObject
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -20,6 +21,8 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 /**
  * What the exec interceptor is handed, and where it is handed it.
@@ -34,10 +37,12 @@ import java.io.File
  *
  * `LD_PRELOAD` itself is NOT in that environment, and the assertion saying so
  * is the one that carries the scope. The library is delivered through
- * `terminal.integrated.env.linux`, which reaches terminals and tasks and nothing
- * the extension host spawns without a pty; widening it to the server would put
- * it under the extension host, every language server and node itself, which
- * nothing has measured. A well-meant one-row addition beside the three below
+ * `terminal.integrated.env.linux`, which reaches terminals and tasks. What the
+ * extension host starts without a pty gets it only from `platform-fix.js`, per
+ * call and in a copy of that call's environment, and only for a program it
+ * starts through the linker; a command run in a shell gets none. Widening it to
+ * the server would put it under the extension host itself, every language
+ * server and node itself, which nothing has measured. A well-meant one-row addition beside the three below
  * is exactly how that would happen.
  *
  * The rows' values and the shape of the preload path are measured on API 33
@@ -191,6 +196,78 @@ class ExecPreloadEnvTest {
             settingsText().contains("LD_PRELOAD"),
             "the refresh wrote a preload for a file that is not there:\n${settingsText()}",
         )
+    }
+
+    /**
+     * The extension host has no terminal, so `platform-fix.js` hands the interceptor to a program it starts
+     * through the linker itself, finding the file under `TERMUX__PREFIX` from the environment this class
+     * builds, and names the program in `TERMUX_EXEC__PROC_SELF_EXE`. The path is written down twice, once
+     * in each language. A move on either side would leave every such start without the interceptor, or, if
+     * the script named a file that is not there, give it a preload Bionic cannot map, which aborts every
+     * exec below it. So the shipped script runs under Node with the rows built here, an Android program under
+     * the data directory is started, and the preload the start is handed is compared with this path.
+     */
+    @Test
+    fun `an extension's start through the linker is handed the preload this path names`() {
+        every { context.applicationInfo } returns ApplicationInfo().apply {
+            nativeLibraryDir = this@ExecPreloadEnvTest.nativeLibDir
+            dataDir = filesDir.absolutePath
+        }
+        val env = env()
+        File(Environment.getExecPreloadPath(context)).apply { parentFile!!.mkdirs(); writeText("elf") }
+        val program = File(filesDir, "home/tool").apply { parentFile!!.mkdirs(); writeBytes(elfAskingFor("/system/bin/linker64")) }
+        val probe = File(filesDir, "probe").apply { mkdirs() }
+        val android = File(probe, "android.js").apply {
+            writeText("Object.defineProperty(process, 'platform', { value: 'android', configurable: true });\n")
+        }
+        val record = File(probe, "record.js").apply {
+            writeText(
+                "require('child_process').spawn = function (file, args, options) {\n" +
+                    "    const env = (options && options.env) || {};\n" +
+                    "    console.log(JSON.stringify({ file: file, preload: env.LD_PRELOAD || null, self: env.TERMUX_EXEC__PROC_SELF_EXE || null }));\n" +
+                    "};\n",
+            )
+        }
+        val main = File(probe, "main.js").apply { writeText("require('child_process').spawn(process.argv[2], []);\n") }
+        val builder = ProcessBuilder(
+            "node", "--require", android.path, "--require", record.path,
+            "--require", File("src/main/assets/platform-fix.js").absolutePath, main.path, program.absolutePath,
+        )
+        builder.environment().apply {
+            keys.removeAll { it.startsWith("TERMUX") || it == "LD_PRELOAD" || it == "NODE_OPTIONS" }
+            for (name in listOf("HOME", "TERMUX_APP__DATA_DIR", "TERMUX_APP__LEGACY_DATA_DIR", "TERMUX__PREFIX")) {
+                put(name, env.getValue(name))
+            }
+        }
+
+        val (code, output) = finishTestProcess(builder.redirectErrorStream(true).start(), timeoutMillis = 20_000)
+
+        assertEquals(0, code, output)
+        val start = JSONObject(output.trim().lines().last())
+        assertEquals("/system/bin/linker64", start.getString("file"), output)
+        assertEquals(Environment.getExecPreloadPath(context), start.optString("preload"), output)
+        assertEquals(program.absolutePath, start.optString("self"), output)
+    }
+
+    /** An ELF64 little-endian header with one program header, a PT_INTERP naming [interpreter]. */
+    private fun elfAskingFor(interpreter: String): ByteArray {
+        val text = (interpreter + "\u0000").toByteArray(Charsets.ISO_8859_1)
+        return ByteBuffer.allocate(120 + text.size).order(ByteOrder.LITTLE_ENDIAN).apply {
+            put(byteArrayOf(0x7f, 'E'.code.toByte(), 'L'.code.toByte(), 'F'.code.toByte(), 2, 1, 1))
+            putShort(16, 3) // ET_DYN
+            putShort(18, 183) // EM_AARCH64
+            putInt(20, 1)
+            putLong(32, 64) // e_phoff
+            putShort(52, 64) // e_ehsize
+            putShort(54, 56) // e_phentsize
+            putShort(56, 1) // e_phnum
+            putInt(64, 3) // PT_INTERP
+            putInt(68, 4)
+            putLong(72, 120) // p_offset
+            putLong(96, text.size.toLong()) // p_filesz
+            position(120)
+            put(text)
+        }.array()
     }
 
     private fun createDefaultSettings() {

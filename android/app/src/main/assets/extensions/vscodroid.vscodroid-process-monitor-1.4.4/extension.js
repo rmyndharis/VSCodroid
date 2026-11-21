@@ -46,11 +46,18 @@ function isStale(snapshot) {
 // with a spawn error that says nothing about a setting, so this says it, once per window, and offers
 // to turn the setting on. A machine setting, written to the same file the app reads.
 //
-// Translated, unlike this extension's other notices, because it is the one place the person is told
-// what turning the engine on exposes. "Don't Show Again" lasts while the setting stays off: turning it
+// Translated, unlike this extension's notices about processes, because it is the one place the person is
+// told what turning the engine on exposes. "Don't Show Again" lasts while the setting stays off: turning it
 // on clears it, so a person who turns it off again later is told again.
+//
+// VS Code reads the settings file more leniently than platform-fix.js, which recovers from no syntax error
+// (a missing comma, say) and so keeps the engine off over a file whose box the Settings editor shows ticked.
+// The panel then fails with the same spawn error, so this compares the two readings, through what
+// platform-fix.js leaves on the extension host's global, and names the file to correct when they disagree,
+// translated for the same reason as the offer.
 const ANTIGRAVITY = 'Google.google-antigravity';
 const ENGINE_DECLINED = 'antigravity.engineOfferDeclined';
+const ENGINE_GATE = Symbol.for('vscodroid.engineGate');
 let engineOffered = false;
 let globalState;
 
@@ -59,6 +66,13 @@ function offerAntigravityEngine() {
     const config = vscode.workspace.getConfiguration('vscodroid.antigravity');
     if (config.get('runEngine') === true) {
         if (globalState.get(ENGINE_DECLINED)) globalState.update(ENGINE_DECLINED, undefined);
+        const gate = globalThis[ENGINE_GATE];
+        if (gate && !gate.engineTurnedOn()) {
+            engineOffered = true;
+            vscode.window.showWarningMessage(vscode.l10n.t('The setting Antigravity: Run Engine shows as on, but VSCodroid reads it ' +
+                'as off in {0}, so the Google Antigravity engine stays off. VS Code works around some errors in that file, ' +
+                'such as a missing comma, and VSCodroid does not. Correct the file, then reload the window.', gate.settingsFile));
+        }
         return;
     }
     if (globalState.get(ENGINE_DECLINED)) return;

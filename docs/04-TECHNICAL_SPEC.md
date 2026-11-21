@@ -501,9 +501,14 @@ command fails with `execvp(3) failed.: Permission denied` with and without the s
 three variables the library reads (`TERMUX_APP__DATA_DIR`, `TERMUX_APP__LEGACY_DATA_DIR`, both
 spellings needed because `getcwd` reports `/data/data`, and `TERMUX__PREFIX`) sit in the server
 environment (`Environment.buildProcessEnvironment`), where they are inert until the preload
-appears; `LD_PRELOAD` itself is deliberately not there, because anything the extension host spawns
-without a pty is outside the measured scope. `"LD_PRELOAD": null` in the same setting is the off
-switch, and the launch-time insert leaves a present key alone whatever its value, with one
+appears; `LD_PRELOAD` itself is deliberately not there, because it would load under node itself
+and everything node forks, which is outside the measured scope. `platform-fix.js` puts it instead
+into a copy of the environment of one kind of extension host start, a program under the data
+directory that it starts through the linker (with `TERMUX_EXEC__PROC_SELF_EXE` naming the program),
+only while the library is a file at `TERMUX__PREFIX/lib` and never for a start that could reach
+`~/.gemini`. A command an extension runs in a shell gets none: there the interceptor would let it run
+any script or program under the data directory by naming it. `"LD_PRELOAD": null` in the same
+setting is the off switch, and the launch-time insert leaves a present key alone whatever its value, with one
 exception: this app's own path under another Android user's data directory, which a settings
 backup restored into another user carries, is re-pointed (`ensureTerminalPreload`). The git
 extension's helpers are unchanged by the preload. `GIT_ASKPASS`, `SSH_ASKPASS` and `GIT_EDITOR`
