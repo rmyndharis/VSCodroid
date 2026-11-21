@@ -1,12 +1,21 @@
 package com.vscodroid
 
+import android.widget.Toast
 import com.vscodroid.keyboard.KeyboardDismissal
 import com.vscodroid.service.EditorGateway
+import com.vscodroid.service.NodeService
 import com.vscodroid.service.mockEditorGateway
+import com.vscodroid.util.AppNotices
+import com.vscodroid.util.Logger
 import com.vscodroid.webview.DownloadCoordinator
+import io.mockk.Runs
 import io.mockk.every
+import io.mockk.just
 import io.mockk.mockk
+import io.mockk.mockkObject
+import io.mockk.mockkStatic
 import io.mockk.unmockkAll
+import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -21,8 +30,10 @@ import java.lang.reflect.InvocationTargetException
  * `HomePortTest` runs the decision in `ProcessManager`: home kept, the temporary port
  * used for one process, the port handed out once, the release. What it cannot see
  * is the two ends of the wire: the editor load that tells the person, and the stop
- * from the notification that lets the next start go home. Read from the source,
- * because neither is reachable without an activity and a running service.
+ * from the notification that lets the next start go home. The load is run here on an
+ * activity whose framework half is mocked, and the stop in `NodeServiceStopTest`. The
+ * dialog itself is read from the source: androidx's `AlertDialog.Builder` needs a real
+ * context and cannot be built on the JVM.
  */
 class AwayFromHomeWiringTest {
 
@@ -30,29 +41,45 @@ class AwayFromHomeWiringTest {
 
     private val main by lazy { read("src/main/kotlin/com/vscodroid/MainActivity.kt") }
 
+    /**
+     * The editor load, run on an activity whose framework half is mocked, for a start that found home
+     * busy: it asks the service, and shows the dialog with the home port. Never as a toast, which
+     * Android 12 and later cut to two lines, leaving out the port and the way back. A screen that is
+     * going away does not ask at all, so the one notice of the process is not spent on it.
+     */
     @Test
     fun `the editor load tells the person once when the start could not use home`() {
-        val load = SourceScan.body(main, "private fun loadVSCode(")
-        val take = load.indexOf("takeAwayFromHome()")
-        assertTrue(
-            take >= 0,
-            "loadVSCode no longer asks the service whether this start found home busy, so an " +
-                "editor without the person's settings opens with nothing said",
-        )
-        assertTrue(
-            load.indexOf("if (!isFinishing && !isDestroyed)") in 0 until take,
-            "loadVSCode takes the notice without first checking that this activity can still " +
-                "show it, so an activity that is going away spends the one notice of the process",
-        )
-        assertTrue(
-            load.indexOf("showAwayFromHomeNotice(home)") > take,
-            "loadVSCode no longer shows the notice for a start away from home",
-        )
-        assertFalse(
-            load.contains("Toast"),
-            "loadVSCode says it in a toast again; Android 12 and later cut a text toast to two " +
-                "lines, which leaves out the port and the way back",
-        )
+        val screen = mockk<MainActivity>(relaxed = true)
+        val service = mockk<NodeService>(relaxed = true)
+        setField(screen, "tag", "MainActivity")
+        setField(screen, "nodeService", service)
+        mockkObject(Logger)
+        every { Logger.w(any(), any(), any()) } just Runs
+        every { Logger.i(any(), any()) } just Runs
+        mockkObject(AppNotices)
+        mockkStatic(Toast::class)
+        every { screen["loadVSCode"](any<Int>(), any<String>(), isNull<String>()) } answers { callOriginal() }
+        val load = MainActivity::class.java.getDeclaredMethod(
+            "loadVSCode", Int::class.javaPrimitiveType, String::class.java, String::class.java,
+        ).apply { isAccessible = true }
+
+        every { service.takeAwayFromHome() } returns 13337
+        load.invoke(screen, 13340, "/projects", null)
+        verify(exactly = 1) { screen["showAwayFromHomeNotice"](13337) }
+
+        every { service.takeAwayFromHome() } returns 0
+        load.invoke(screen, 13340, "/projects", null)
+        verify(exactly = 1) { screen["showAwayFromHomeNotice"](any<Int>()) }
+
+        every { screen.isFinishing } returns true
+        every { service.takeAwayFromHome() } returns 13337
+        load.invoke(screen, 13340, "/projects", null)
+        verify(exactly = 2) { service.takeAwayFromHome() }
+        verify(exactly = 1) { screen["showAwayFromHomeNotice"](any<Int>()) }
+
+        verify(exactly = 0) { Toast.makeText(any<android.content.Context>(), any<CharSequence>(), any()) }
+        verify(exactly = 0) { AppNotices.showNotice(any(), any<CharSequence>(), any(), any(), any(), any()) }
+        verify(exactly = 0) { AppNotices.showNotice(any(), any<Int>(), any(), any(), any()) }
     }
 
     @Test
@@ -286,20 +313,5 @@ class AwayFromHomeWiringTest {
                 "a later load, an activity recreated in the same process among them, is not told again",
             )
         }
-    }
-
-    @Test
-    fun `a stop from the notification gives up a temporary origin`() {
-        val shutdown = SourceScan.body(
-            read("src/main/kotlin/com/vscodroid/service/NodeService.kt"),
-            "private fun shutdown(",
-        )
-        val stop = shutdown.indexOf("processManager.stopServer()")
-        val release = shutdown.indexOf("processManager.releaseAwayOrigin()")
-        assertTrue(
-            stop >= 0 && release > stop,
-            "shutdown no longer gives up a temporary origin after stopping the server, so " +
-                "opening the editor again in the same process inherits it instead of trying home",
-        )
     }
 }

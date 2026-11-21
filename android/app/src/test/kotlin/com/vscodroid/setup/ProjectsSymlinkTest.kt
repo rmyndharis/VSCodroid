@@ -289,6 +289,38 @@ class ProjectsSymlinkTest {
     }
 
     /**
+     * Two links the name test above lets through, because it reads the target as written and one link deep: a
+     * `projects` folder inside a sensitive one (`~/.claude/projects` holds Claude Code's session logs), and a
+     * `projects` that is itself a link to `~/.ssh`. Either becomes the projects folder on a launch that cannot see
+     * shared storage, and that folder is a root the webview serves as a whole, so it is left out of the published
+     * roots when it overlaps a location that must stay unreadable.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = ["inside .claude", "through a second link to .ssh"])
+    fun `a projects folder that resolves into a sensitive location is not published`(shape: String) {
+        val home = File(filesDir, "home")
+        val named = if (shape == "inside .claude") {
+            File(home, ".claude/projects").apply { assertTrue(mkdirs()) }
+        } else {
+            File(home, ".ssh").mkdirs()
+            File(home, "x").mkdirs()
+            File(home, "x/projects").also { Files.createSymbolicLink(it.toPath(), File(home, ".ssh").toPath()) }
+        }
+        Files.createSymbolicLink(link.toPath(), named.toPath())
+        every { context.getExternalFilesDir(null) } returns null
+        every { context.dataDir } returns filesDir.parentFile
+        every { context.noBackupFilesDir } returns File(filesDir.parentFile, "no_backup")
+        every { context.cacheDir } returns File(filesDir.parentFile, "cache")
+        assertEquals(named.absolutePath, Environment.projectsDirFor(context, 34), "the fixture did not reach the hole")
+
+        val sensitive = com.vscodroid.webview.sensitiveLocations(context)
+        val published = com.vscodroid.webview.publishedResourceRoots(context)
+
+        val exposed = published.filter { root -> sensitive.any { it == root || it.startsWith("$root/") || root.startsWith("$it/") } }
+        assertEquals(emptyList<String>(), exposed, "a root the webview serves as a whole holds a sensitive location")
+    }
+
+    /**
      * The other direction: an install that works in the internal folder, with a folder of that
      * name on shared storage that another app made, stays where it is when its own folder has
      * been deleted (a terminal can), whether the link spells the folder as written or relative to

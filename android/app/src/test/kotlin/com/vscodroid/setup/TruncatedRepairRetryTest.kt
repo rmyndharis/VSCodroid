@@ -414,9 +414,9 @@ class TruncatedRepairRetryTest {
      * A `.bashrc` that is a link is a file the person keeps elsewhere, often in a repository other
      * machines read, and `writeBashrc` writes this device's paths into whatever the link names. A file
      * that opens with this app's header and holds text of its own after it, and has no PROJECTS_DIR line
-     * because they took it out, is theirs: the header proves nothing about what follows it. It is kept
-     * aside and left as it is, where an empty file or the header alone, a cut-short copy of ours, is
-     * still rewritten through the link.
+     * because they took it out, is theirs: the header proves nothing about what follows it. It is left as
+     * it is, where an empty file, the header alone, or a longer copy of ours cut short (every byte of it
+     * the start of what this app writes), is still rewritten through the link.
      */
     @Test
     fun `a linked bashrc that opens with the header and holds text of its own is left alone`() {
@@ -429,6 +429,56 @@ class TruncatedRepairRetryTest {
 
         assertTrue(Files.isSymbolicLink(bashrc.toPath()), "the link was replaced")
         assertEquals(own, target.readText(), "the file the link names was rewritten with this device's paths")
+    }
+
+    /** What this app writes as `.bashrc` today, read back from a file the repair wrote, and the link put back. */
+    private fun ownBashrcText(target: File): String {
+        Files.deleteIfExists(bashrc.toPath())
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+        val ours = bashrc.readText()
+        assertTrue(ours.contains("export PROJECTS_DIR"), "the repair wrote no .bashrc of its own")
+        bashrc.delete()
+        Files.createSymbolicLink(bashrc.toPath(), target.toPath())
+        return ours
+    }
+
+    /**
+     * A copy of this app's own text that a release writing through the link non-atomically left cut short: the
+     * header and the start of the prompt block, and nothing after. Every byte of it is the start of what this app
+     * writes, so none of it can be the person's, and the shell that reads it has no PROJECTS_DIR. It is rewritten
+     * through the link, with what was there kept aside first.
+     */
+    @Test
+    fun `a linked bashrc that is a cut-short copy of ours is rewritten through the link and kept aside`() {
+        val target = File(filesDir, "dotfiles/bashrc").apply { parentFile.mkdirs() }
+        val ours = ownBashrcText(target)
+        val cut = ours.substring(0, ours.indexOf("export PROJECTS_DIR") / 2)
+        assertTrue(cut.startsWith("# VSCodroid bash configuration\n# >>>"), "the cut does not reach the prompt block")
+        target.writeText(cut)
+
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        assertTrue(Files.isSymbolicLink(bashrc.toPath()), "the link was replaced")
+        assertEquals(ours, target.readText(), "a cut-short copy of ours behind a link was not repaired")
+        assertArrayEquals(
+            cut.toByteArray(), File(filesDir, "home/.vscodroid/bashrc.before-repair").readBytes(),
+            "what the link named was not kept aside before it was rewritten",
+        )
+    }
+
+    /** The same cut with one character that is not ours after it can be the person's file, and stays as it is. */
+    @Test
+    fun `a linked bashrc that leaves our text by one character is left alone`() {
+        val target = File(filesDir, "dotfiles/bashrc").apply { parentFile.mkdirs() }
+        val ours = ownBashrcText(target)
+        val at = ours.indexOf("export PROJECTS_DIR") / 2
+        val theirs = ours.substring(0, at) + (if (ours[at] == 'x') 'y' else 'x')
+        target.writeText(theirs)
+
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        assertTrue(Files.isSymbolicLink(bashrc.toPath()), "the link was replaced")
+        assertEquals(theirs, target.readText(), "a file that is not all ours was rewritten")
     }
 
     @Test

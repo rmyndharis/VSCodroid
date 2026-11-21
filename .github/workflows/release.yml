@@ -505,6 +505,7 @@ jobs:
           node scripts/test-key-row-clipboard.js
           node scripts/test-composing-enter.js
           node scripts/test-terminal-typed-characters.js
+          node scripts/test-chord-blur-terminal.js
           node scripts/test-leave-curtain.js
           node scripts/test-full-screen.js
           node scripts/test-status-bar-scroll.js
