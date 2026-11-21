@@ -553,6 +553,9 @@ class SafSyncEngine(private val context: Context) {
         // this app's own interrupted writes, and phase 2 below has to know that
         // before it asks the clock anything.
         val unfinishedUploads = uploadsInFlight().toMutableSet()
+        // Of those, the lines a write may have left bytes under: not one whose every try failed before the
+        // provider was handed a stream ([markUnwritten]). Read only where such a line meets its document.
+        val partlyWritten by lazy { partlyWrittenUploads() }
 
         // Loaded for the same reason and read the same way: what the last sync wrote,
         // as (path, mtime, size) lines, each with the digest of its copy where an open
@@ -568,7 +571,9 @@ class SafSyncEngine(private val context: Context) {
         // no-clock arm that finds the two sides apart, through [previousLineFor]. A seventh
         // is phase 3, which carries a line's digest from it wherever this open took none.
         // Read once here rather than per document; [reconcileDeletions] reads the same file
-        // again in phase 3, after phase 2 may have changed what is on disk.
+        // again in phase 3, after phase 2 may have changed what is on disk. A read that fails
+        // here makes phase 3 write nothing either: what phase 2 carried and vouched for without
+        // the record's digests would replace the ones the record holds.
         //
         // `by lazy`, and it takes both halves to make that true. This was passed to
         // [shouldOverwriteMirror] by value, and Kotlin evaluates arguments before the
@@ -597,8 +602,9 @@ class SafSyncEngine(private val context: Context) {
         // onto it -- the one thing that pass documents as never allowed. The header
         // arrived after a build that wrote records without one, so a record this build
         // cannot verify is in the field and reachable on upgrade.
+        var recordUnreadable = false
         val previousRecord: Map<String, ByteArray?>? by lazy {
-            readSyncedRecord(File(mirrorDir.path + SYNCED_RECORD_SUFFIX)).let { lines ->
+            readSyncedRecord(File(mirrorDir.path + SYNCED_RECORD_SUFFIX)).also { if (it == null) recordUnreadable = true }?.let { lines ->
                 if (lines.firstOrNull() == RECORD_HEADER) {
                     lines.drop(1).associate { splitRecordLine(it) }
                 } else {
@@ -610,6 +616,15 @@ class SafSyncEngine(private val context: Context) {
         // When the record was last written, read before this open writes it again: a file older than that
         // was not made in a folder the listing calls empty since then.
         val recordWrittenAt = File(mirrorDir.path + SYNCED_RECORD_SUFFIX).lastModified()
+        // Written before the app was last updated, so by an earlier build. Builds up to 1.9.0 could drop the row
+        // of a copy, which then read as work only this app had; this build drops no row of a copy it did not
+        // fetch. Only such a record leaves copies that need sorting, and the open that sorts them writes the
+        // record anew. An update time that cannot be read is no evidence of one.
+        val earlierBuildRecord = recordWrittenAt in 1 until packageUpdatedAt
+        // Rows without a digest for the files this open keeps inside the app because it cannot place them: a
+        // copy a kind conflict sets aside where the record names it without a digest, and over an earlier
+        // build's record the older files only the mirror holds. Phase 2b leaves them out and phase 3 writes them.
+        val unplaced = ArrayList<String>()
         // The previous record's line for a path, whatever copy it names, by the path as the
         // record spells it. Built only once a no-clock open finds the two sides apart.
         val previousLineFor: Map<String, String>? by lazy {
@@ -668,10 +683,10 @@ class SafSyncEngine(private val context: Context) {
             }
 
             if (doc.isDirectory) {
-                clearKindConflict(doc, localPath, mirrorDir) { previousRecord }
+                clearKindConflict(doc, localPath, mirrorDir, { previousRecord }) { unplaced += it }
                 localPath.mkdirs()
             } else {
-                clearKindConflict(doc, localPath, mirrorDir) { previousRecord }
+                clearKindConflict(doc, localPath, mirrorDir, { previousRecord }) { unplaced += it }
                 // First, so it covers every arm below: each one either arms `unfetched`,
                 // which blocks writes on its own, leaves the device as enumerated, or
                 // writes it, and the write refreshes this entry.
@@ -721,9 +736,13 @@ class SafSyncEngine(private val context: Context) {
                         // [setAsideDeviceCopy] would keep a `.device-` copy of this
                         // app's own half-written bytes, and phase 2b would then put
                         // that copy on the device.
-                        val ownPartialWrite =
+                        //
+                        // Not for a line whose every try failed before the provider was handed a stream:
+                        // nothing of this app's is on the device then, and a prefix there is what another
+                        // app left, by cutting the end of the text.
+                        val ownPartialWrite = localPath.absolutePath in partlyWritten &&
                             !anotherMirrorWritesDocument(doc.uri, mirrorDir) &&
-                                deviceIsTruncatedMirror(doc.uri, localPath, mirrorDir)
+                            deviceIsTruncatedMirror(doc.uri, localPath, mirrorDir, doc.size)
                         val deviceCopy =
                             if (ownPartialWrite) null else setAsideDeviceCopy(doc, localPath, mirrorDir)
                         if (deviceCopy == DeviceCopyOutcome.IN_FLIGHT) {
@@ -831,7 +850,7 @@ class SafSyncEngine(private val context: Context) {
                     unfetched.add(localPath.absolutePath)
                     val line = identityLine(doc.relativePath, localPath)
                     if (localPath.isFile && previouslyRecorded?.contains(line) != false) recorded += line
-                    else if (isOlderCopyOfGrownDocument(doc, localPath, previousLineFor)) recorded += line
+                    else if (earlierBuildRecord && isOlderCopyOfGrownDocument(doc, localPath) { previousLineFor }) recorded += line
                     // At Logger.i, not d, for the reason the no-clock line below gives:
                     // Logger.d is gated on a debuggable build, so on a release build
                     // the only trace of this document was the count in the summary. The
@@ -1271,6 +1290,23 @@ class SafSyncEngine(private val context: Context) {
         // The tick is added to the phase-2 figures rather than replacing them, so the
         // dialog goes on counting up instead of restarting at one, and the total grows
         // by exactly the work that is left.
+        //
+        // Over a record an earlier build wrote, a file only the mirror holds that is older than the record, with
+        // no row and no line in the upload journal, may be the copy of a document the device deleted whose row
+        // that build dropped: it is kept inside the app with a row of its own, and phase 3 says so. A listing
+        // that is partial or empty cannot sort them, and leaves the record's time as it is for an open that can.
+        if (earlierBuildRecord && enumerationComplete && documents.isNotEmpty()) {
+            previousRecord?.let { previous ->
+                val named = previous.keys.mapTo(HashSet()) { unescapeRecordPath(it.substringBefore('\t')) }
+                unplaced += unprovenRows(mirrorDir, documents.filterNot { it.isDirectory }.mapTo(HashSet()) { it.relativePath }) {
+                    file, path -> path !in named && file.lastModified() <= recordWrittenAt
+                }
+            }
+        }
+        // What did not reach the device, said once for the whole open: phase 2b's shortfall and the files phase 3
+        // keeps inside the app.
+        var notReached = 0
+        var capped = false
         val putBack = if (enumerationComplete && (documents.isNotEmpty() || previousRecord?.isEmpty() == true)) {
             uploadMirrorOnlyDocuments(
                 safUri,
@@ -1278,6 +1314,11 @@ class SafSyncEngine(private val context: Context) {
                 documents.mapTo(HashSet()) { it.relativePath },
                 { previousRecord?.map { (identity, digest) -> recordLine(identity, digest) }?.toSet() },
                 if (documents.isEmpty()) recordWrittenAt else null,
+                unplaced.mapTo(HashSet()) { unescapeRecordPath(it.substringBefore('\t')) },
+                { lost, truncated ->
+                    notReached += lost
+                    capped = capped || truncated
+                },
             ) { done, total -> onProgress(filesDone + done, totalFiles + total) }
         } else {
             0
@@ -1301,7 +1342,8 @@ class SafSyncEngine(private val context: Context) {
         val removed = reconcileDeletions(
             mirrorDir, documents, enumerationComplete,
             recorded.map { recordLine(it, digests[it] ?: previousRecord?.get(it)) },
-        )
+            unplaced, recordUnreadable,
+        ) { notReached += it }
         val clearedPartials = removeRedundantPartials(mirrorDir, documents)
 
         val elapsed = System.currentTimeMillis() - startTime
@@ -1329,6 +1371,7 @@ class SafSyncEngine(private val context: Context) {
             }
             onDocumentsNotCopied(failedCopies, outOfRoom || belowFloor)
         }
+        if (notReached > 0 || capped) onUploadIncomplete(mirrorDir, notReached, capped)
         if ("" !in skippedDirs) unfetched.remove(mirrorDir.absolutePath)
     }
 
@@ -1383,13 +1426,17 @@ class SafSyncEngine(private val context: Context) {
      * next open sent it to the device as work only this app had.
      *
      * Such an entry sits in the directory of the row it was taken for, so the search is one listing of
-     * each directory that holds a row whose document the device no longer lists as a file and whose
-     * copy the mirror no longer holds as that row names it: a folder, a link, a file made there since
-     * or nothing stands at its path. (A file the device replaced with a folder is taken from its name by
-     * the same removal, and the folder is what the open finds there.) An entry goes only when it is a
-     * regular file with the length of such a row and the
-     * SHA-256 of that row's digest: the bytes of a document the device deleted. Anything else stays,
-     * an entry with such a name included, because it may be work, and so does one the device lists:
+     * each directory that holds a row with a digest. Only the directories of rows whose document the
+     * device no longer lists used to be looked at, and a copy the person wrote to while the device listed
+     * the document again, or one a removal could not give a name of its own after the person wrote to it,
+     * stayed under a name that is never sent: [reconcileDeletions] keeps the row of such a copy's document
+     * while the entry stands, so that its directory is looked at. The rows that decide a removal are those
+     * whose document the device no longer lists as a file and whose copy the mirror no longer holds as
+     * that row names it: a folder, a link, a file made there since or nothing stands at its path. (A file
+     * the device replaced with a folder is taken from its name by the same removal, and the folder is what
+     * the open finds there.) An entry goes only when it is a regular file with the length of such a row
+     * and the SHA-256 of that row's digest: the bytes of a document the device deleted. Anything else
+     * stays, an entry with such a name included, because it may be work, and so does one the device lists:
      * an older build sent its copy there, where it is a document like any other. Runs before
      * [uploadMirrorOnlyDocuments], which would send the older name, and while the rows still stand:
      * phase 3 drops them.
@@ -1404,19 +1451,25 @@ class SafSyncEngine(private val context: Context) {
         val onDevice = documents.mapTo(HashSet()) { it.relativePath }
         val filesOnDevice = documents.filterNot { it.isDirectory }.mapTo(HashSet()) { it.relativePath }
         // Every row that has a digest, by its directory, and among them the rows of documents the device
-        // no longer lists. The second decide which folders the pass looks into and what a copy is removed
-        // for; the first, what a copy that is not removed may be: the recorded bytes of a document, which
-        // are no work of the person's.
+        // no longer lists. The first decide which folders the pass looks into and what a copy that is not
+        // removed may be: the recorded bytes of a document, which are no work of the person's; the second,
+        // what a copy is removed for.
         val recordedRows = HashMap<File, MutableList<Pair<Long, ByteArray>>>()
         val goneRows = HashMap<File, MutableList<Pair<Long, ByteArray>>>()
+        // The lengths of the rows without a digest, by directory: an entry of such a length may be the unchanged
+        // copy of one, which nothing proves is new work, and sent it would undo a deletion made on the device.
+        val unprovenLengths = HashMap<File, MutableSet<Long>>()
         for ((identity, digest) in previous) {
-            if (digest == null) continue
             val fields = identity.split('\t')
             val length = fields.getOrNull(2)?.toLongOrNull() ?: continue
             val path = unescapeRecordPath(fields[0])
             if (path.isEmpty()) continue
             val file = File(mirrorDir, path)
             val parent = file.parentFile ?: continue
+            if (digest == null) {
+                unprovenLengths.getOrPut(parent) { HashSet() } += length
+                continue
+            }
             recordedRows.getOrPut(parent) { ArrayList() } += length to digest
             if (path in filesOnDevice) continue
             // A row this build cannot make a path of is left to phase 3, which reads rows the same way.
@@ -1438,7 +1491,8 @@ class SafSyncEngine(private val context: Context) {
             goneRows.getOrPut(parent) { ArrayList() } += length to digest
         }
         var removed = 0
-        for ((directory, rows) in goneRows) {
+        for (directory in recordedRows.keys) {
+            val rows = goneRows[directory].orEmpty()
             val names = directory.list { _, name -> isRemovalCaptureName(name) } ?: continue
             for (name in names) {
                 val capture = File(directory, name)
@@ -1455,7 +1509,7 @@ class SafSyncEngine(private val context: Context) {
                             // one, so these were written after, by the person, and exist nowhere else. Unless they are
                             // the recorded bytes of a document the device lists again, which a removal took before the
                             // device undid the deletion: that copy is no work, and stays where it is.
-                            if (name.endsWith(PARTIAL_SUFFIX)) {
+                            if (name.endsWith(PARTIAL_SUFFIX) && attributes.size() !in unprovenLengths[directory].orEmpty()) {
                                 val recordedAlike = recordedRows[directory].orEmpty().filter { it.first == attributes.size() }
                                 val seen = digest ?: if (recordedAlike.isEmpty()) null else (inboundEntry(selected)?.digest ?: return@use)
                                 if (seen == null || recordedAlike.none { it.second.contentEquals(seen) }) {
@@ -1731,7 +1785,10 @@ class SafSyncEngine(private val context: Context) {
      * what the device replaced, so it follows the device as it does when the device deletes
      * it ([reconcileDeletions] acts on the same evidence); keeping it would put a stale
      * file back on a device folder whose owner replaced it. A mirror folder is never judged
-     * this way, because what a folder holds is not one line of the record.
+     * this way, because what a folder holds is not one line of the record. A file the
+     * record names without a digest is neither shown to be that copy nor shown to be work:
+     * it is set aside, and [keepUnplaced] gets a row without a digest for the set-aside
+     * copy, which keeps it inside the app as the deletion pass keeps such a copy.
      *
      * Failing to do either leaves the old behaviour: the document cannot be made or
      * copied, and the open reports it. The journal line of a failed save of the entry is
@@ -1744,15 +1801,20 @@ class SafSyncEngine(private val context: Context) {
         localPath: File,
         mirrorRoot: File,
         previouslyRecorded: () -> Map<String, ByteArray?>?,
+        keepUnplaced: (String) -> Unit,
     ) {
         try {
             openOutboundPath(localPath, mirrorRoot).use { destination ->
                 val entry = inboundAttributes(destination) ?: return
                 val inTheWay = if (doc.isDirectory) entry.isRegularFile else entry.isDirectory
                 if (!inTheWay) return
+                // A copy the record names without a digest: nothing shows it is the device's old bytes or the
+                // person's work, and set aside it is kept inside the app as a deletion keeps it.
+                var unproven = false
                 if (doc.isDirectory) {
                     val recorded = previouslyRecorded()
                     val identity = identityLine(doc.relativePath, entry.lastModifiedTime().toMillis(), entry.size())
+                    unproven = recorded != null && identity in recorded && recorded[identity] == null
                     if (recorded != null) {
                         // Through the removal a deletion on the device uses, which takes the entry from
                         // its name before it proves its bytes: proved first and unlinked after, a save
@@ -1795,6 +1857,9 @@ class SafSyncEngine(private val context: Context) {
                 requireCurrentParent(destination, localPath, mirrorRoot)
                 val preserved = File(localPath.parentFile, preservedName.toString())
                 notePreservedLocalCopy(preserved)
+                if (unproven) {
+                    keepUnplaced(identityLine(preserved.toRelativeString(mirrorRoot), entry.lastModifiedTime().toMillis(), entry.size()))
+                }
                 if (doc.isDirectory) consumeStaleUploadRecord(localPath.absolutePath)
                 else renameUploadsUnder(localPath, preserved)
                 Logger.i(
@@ -2031,8 +2096,9 @@ class SafSyncEngine(private val context: Context) {
             } else return false
             // A write of this app's own that was cut short left its journal line standing, and the device document holds the leading bytes of the mirror file and nothing
             // else. Nothing is kept by setting those aside: every byte of them is in the file about to be written. The line alone proves nothing about what touched the document
-            // since, so the bytes are read, as the first open does it for the same line (deviceIsTruncatedMirror).
-            if (localFile.absolutePath in uploadsInFlight() && deviceIsTruncatedMirror(docUri, localFile, mirrorRoot)) return false
+            // since, so the bytes are read, as the first open does it for the same line (deviceIsTruncatedMirror). A line whose writes never handed the provider a stream
+            // stands for no bytes of this app's (partlyWrittenUploads), and a size that is 0 or unanswered rules nothing out.
+            if (localFile.absolutePath in partlyWrittenUploads() && deviceIsTruncatedMirror(docUri, localFile, mirrorRoot, now.second)) return false
             setAsideDeviceCopy(
                 DocumentInfo(docUri, "", localFile.name, false, now.second, now.first),
                 localFile,
@@ -2310,7 +2376,13 @@ class SafSyncEngine(private val context: Context) {
      * that file IS put back. It is the same file phase 3 keeps in the mirror for the same
      * reason, so the editor goes on showing it either way; the choice is only whether the
      * device folder shows it too, and a copy the user is still editing belongs where they
-     * can reach it.
+     * can reach it. Over a record an earlier build wrote, which could have dropped the row
+     * of a copy, the older files with no row are [kept] instead: the caller gives them
+     * rows without a digest, and phase 3 writes them and says so.
+     *
+     * A line in the upload journal is the one proof that the device never got a file: a
+     * create or a save of it started and did not land. Such a file is sent whatever its
+     * time, and where its row has no digest, which proves nothing about the device's copy.
      *
      * [previouslyRecorded] is a function for the reason [shouldOverwriteMirror]'s
      * argument is one. Reading the record costs a parse and a live set, and a healthy
@@ -2342,10 +2414,10 @@ class SafSyncEngine(private val context: Context) {
      * on provider work, which is one create and one write per candidate, and lets the
      * walk cover the mirror. Once the cap does bite it is still permanent for that
      * folder until the earlier candidates are put across, since the walk stays
-     * deterministic; the shortfall and the cap share one seam, [onUploadIncomplete],
-     * one notice for the whole pass, and the cap reaches it only with a stranded file
-     * in hand, which past the cap is always. [createChildrenInSaf] announces the cap
-     * either way, because there the copy is work the user just asked for.
+     * deterministic; the shortfall and the cap share one seam, [onShortfall], which the
+     * caller folds into one notice for the whole open, and the cap reaches it only with a
+     * stranded file in hand, which past the cap is always. [createChildrenInSaf] announces
+     * the cap either way, because there the copy is work the user just asked for.
      */
     private fun uploadMirrorOnlyDocuments(
         safUri: Uri,
@@ -2353,6 +2425,8 @@ class SafSyncEngine(private val context: Context) {
         onDevice: Set<String>,
         previouslyRecorded: () -> Set<String>?,
         madeAfter: Long?,
+        kept: Set<String>,
+        onShortfall: (lost: Int, capped: Boolean) -> Unit,
         onCandidateDone: (Int, Int) -> Unit,
     ): Int {
         // Filtered inside the walk rather than after it, so that an entry the device
@@ -2365,7 +2439,7 @@ class SafSyncEngine(private val context: Context) {
         // refuse everything the walk found, and then the entries past the cap are exactly
         // the ones nobody looked at. The log, and not the notice channel: a mirror with
         // more than the cap stranded is rare and the pass is already about to say so
-        // through [onUploadIncomplete] for the files it does have in hand.
+        // through [onShortfall] for the files it does have in hand.
         if (plan.truncated) {
             Logger.w(
                 tag,
@@ -2399,20 +2473,29 @@ class SafSyncEngine(private val context: Context) {
         // could not be read is neither yet: a failed read shows no edit, and putting the file back on
         // it undoes a deletion with the bytes the device dropped. It waits for an open that reads it.
         val recordedLines = recorded.associateBy { unescapeRecordPath(it.substringBefore('\t')) }
-        // Over an empty listing only what was made after the record was written: a copy of a document
-        // the device deleted, whose row an older build dropped, is not told apart from it any other way.
-        // What is left out stays in the mirror and is not sent, so it is counted and told of like any
-        // file the device did not get: a file whose time was kept when it was put there (unzip, tar,
-        // cp -p) is left out the same way.
-        val leftOut = if (madeAfter == null) 0 else missing.count { (original, _) -> original.lastModified() <= madeAfter }
+        // A line in the upload journal says a create or save of the file started and never landed, so the
+        // device never got this version: proof enough to send it where its row has no digest to prove the
+        // device's copy, or where it has no row. A row with a digest that the copy still matches is a deletion
+        // made on the device, whatever was in flight.
+        val unsent = uploadsInFlight()
+        // Over an empty listing, of the files with no row and no such line, only what was made after the
+        // record was written: a copy of a document the device deleted, whose row an older build dropped, is
+        // not told apart from it any other way. What is left out stays in the mirror and is not sent, so it
+        // is counted and told of like any file the device did not get: a file whose time was kept when it
+        // was put there (unzip, tar, cp -p) is left out the same way. [kept] names the files the open keeps
+        // with a row of their own for the same reason, which phase 3 tells of.
+        fun leftOut(original: File, relativePath: String) = relativePath !in recordedLines &&
+            original.absolutePath !in unsent && madeAfter != null && original.lastModified() <= madeAfter
+        val leftOut = missing.count { (original, relativePath) -> leftOut(original, relativePath) }
         val candidates = missing.filter { (original, relativePath) ->
-            if (madeAfter != null && original.lastModified() <= madeAfter) return@filter false
-            val line = recordedLines[relativePath] ?: return@filter true
+            val line = recordedLines[relativePath]
+            if (original.absolutePath in unsent && (line == null || splitRecordLine(line).second == null)) return@filter true
+            if (line == null) return@filter relativePath !in kept && !leftOut(original, relativePath)
             matchesRecordedCopy(original, relativePath, line) == false &&
                 !isUnprovenCopyOfRecord(mirrorDir, relativePath, line)
         }
         if (candidates.isEmpty()) {
-            if (leftOut > 0) onUploadIncomplete(mirrorDir, leftOut, plan.truncated)
+            if (leftOut > 0) onShortfall(leftOut, plan.truncated)
             return 0
         }
 
@@ -2443,7 +2526,7 @@ class SafSyncEngine(private val context: Context) {
             "Put $made of ${candidates.size} file(s) only ${mirrorDir.name} had onto the " +
                 "device folder",
         )
-        // One notice for the pass, not one per file, and spelled exactly as
+        // One notice for the open, not one per file, and spelled exactly as
         // [createChildrenInSaf] spells it for the identical situation. That is the
         // reason [onUploadIncomplete] exists at all: a provider that refuses one create
         // refuses them all, and forty toasts of "the only copy is inside VSCodroid",
@@ -2453,7 +2536,7 @@ class SafSyncEngine(private val context: Context) {
         // in hand, which is what makes "there may be more below the cap" worth a
         // sentence instead of noise on every open.
         val lost = candidates.size - made + leftOut
-        if (lost > 0 || plan.truncated) onUploadIncomplete(mirrorDir, lost, plan.truncated)
+        if (lost > 0 || plan.truncated) onShortfall(lost, plan.truncated)
         return made
     }
 
@@ -2552,26 +2635,41 @@ class SafSyncEngine(private val context: Context) {
      * turning out to be one gap holds for providers that report a time, and only those.
      * MTP, some USB-OTG bridges and some network providers do not.
      *
+     * A record that could not be read, here or by phase 2 ([recordUnreadable]), is left as
+     * it is, and the mirror with it: replaced, every row of a document the device no longer
+     * listed lost its digest, and the copy stayed in the app for good. The files this open
+     * keeps inside the app ([keptRows]) get rows without a digest in either branch, and
+     * [onKept] is told how many, once: the rows are what keep later opens quiet about them.
+     *
      * @return how many files were removed.
      */
     private fun reconcileDeletions(
         mirrorDir: File,
         documents: List<DocumentInfo>,
         enumerationComplete: Boolean,
-        recorded: List<String>
+        recorded: List<String>,
+        unplaced: List<String>,
+        recordUnreadable: Boolean,
+        onKept: (Int) -> Unit,
     ): Int {
+        if (recordUnreadable) {
+            Logger.w(tag, "The record of ${mirrorDir.name} could not be read; leaving it and the mirror as they are")
+            return 0
+        }
         if (!enumerationComplete || documents.isEmpty()) {
             Logger.w(
                 tag,
                 "Enumeration proved nothing: leaving the mirror of ${mirrorDir.name} as it is"
             )
             val record = File(mirrorDir.path + SYNCED_RECORD_SUFFIX)
-            if (recorded.isNotEmpty()) {
-                val previous = readSyncedRecord(record)
-                    .takeIf { it.firstOrNull() == RECORD_HEADER }?.drop(1)
-                    ?: unprovenRows(mirrorDir, documents.filterNot { it.isDirectory }.mapTo(HashSet()) { it.relativePath })
+            if (recorded.isNotEmpty() || unplaced.isNotEmpty()) {
+                val lines = readSyncedRecord(record) ?: return 0
+                val usable = lines.firstOrNull() == RECORD_HEADER
                 val settled = recorded.mapTo(HashSet()) { it.substringBefore('\t') }
-                writeSyncedRecord(record, previous.filterNot { it.substringBefore('\t') in settled } + recorded)
+                val kept = keptRows(mirrorDir, documents, usable, unplaced, settled)
+                val previous = if (usable) lines.drop(1).filterNot { it.substringBefore('\t') in settled } else emptyList()
+                writeSyncedRecord(record, previous + recorded + kept)
+                if (kept.isNotEmpty()) onKept(kept.size)
             } else if (enumerationComplete && !record.exists() && mirrorDir.list()?.isEmpty() == true) {
                 // The first open of a new folder: nothing on the device and nothing in the mirror. A
                 // record is left with its header and no rows. Without one, the files made in the folder
@@ -2590,7 +2688,7 @@ class SafSyncEngine(private val context: Context) {
         val present = documents.filterNot { it.isDirectory }.map { it.relativePath }.toSet()
         var removed = 0
 
-        val lines = readSyncedRecord(record)
+        val lines = readSyncedRecord(record) ?: return 0
         val usable = lines.firstOrNull() == RECORD_HEADER
         val entries = if (usable) {
             lines.drop(1)
@@ -2604,29 +2702,67 @@ class SafSyncEngine(private val context: Context) {
         val carried = ArrayList<String>()
         // What phase 2b put across this open has a new row in [recorded], and an old one carried
         // beside it would speak against it at the next open.
-        val settled by lazy { recorded.mapTo(HashSet()) { it.substringBefore('\t') } }
+        val settled = recorded.mapTo(HashSet()) { it.substringBefore('\t') }
+        val letGo = ArrayList<Pair<String, String>>()
         for (line in entries) {
             val path = unescapeRecordPath(line.substringBefore('\t'))
 
             if (path.isEmpty() || path in present) continue
             val gone = removeRecordedCopy(mirrorDir, path, line)
             if (gone == true) removed++
+            else if (line.substringBefore('\t') in settled) continue
             // A copy that could not be read keeps its row as well. Let go, the row would leave the
             // copy reading as new local work, and the next open would put a deleted document back.
-            else if ((gone == null || isUnprovenCopyOfRecord(mirrorDir, path, line)) &&
-                line.substringBefore('\t') !in settled
-            ) carried += line
+            else if (gone == null || isUnprovenCopyOfRecord(mirrorDir, path, line)) carried += line
+            else letGo += path to line
+        }
+        // So does a row whose copy has left its name while its directory holds an entry named like a removal's
+        // copy: that row is what brings the directory under [discardCutOffRemovalCopies] at the next open, which
+        // removes the copy or gives an edit in it a name that is sent. Asked once every removal of this open has
+        // run, since a removal later in the loop can leave such an entry beside a row met earlier.
+        val holdsRemovalCopy = HashMap<File, Boolean>()
+        for ((path, line) in letGo) {
+            if (awaitsRemovalCopy(mirrorDir, path, line, holdsRemovalCopy)) carried += line
         }
 
-        val unproven = if (usable) emptyList() else {
-            unprovenRows(mirrorDir, present).filterNot { it.substringBefore('\t') in settled }
-        }
-        writeSyncedRecord(record, recorded + carried + unproven)
+        val kept = keptRows(mirrorDir, documents, usable, unplaced, settled)
+        writeSyncedRecord(record, recorded + carried + kept, sorted = true)
         // These files stay inside the app, neither sent nor removed, until each changes: this open could not
         // tell them from a document the device deleted. Said once, now, because the rows just written are what
         // make every later open stay quiet about them.
-        if (unproven.isNotEmpty()) onUploadIncomplete(mirrorDir, unproven.size, false)
+        if (kept.isNotEmpty()) onKept(kept.size)
         return removed
+    }
+
+    /**
+     * The rows without a digest phase 3 writes for the files this open keeps inside the app: [unplaced], and over
+     * a record that is not [usable] every file only the mirror holds ([unprovenRows]), less what this open
+     * [settled] with a row of its own.
+     */
+    private fun keptRows(
+        mirrorDir: File,
+        documents: List<DocumentInfo>,
+        usable: Boolean,
+        unplaced: List<String>,
+        settled: Set<String>,
+    ): List<String> {
+        val unproven = if (usable) emptyList() else {
+            unprovenRows(mirrorDir, documents.filterNot { it.isDirectory }.mapTo(HashSet()) { it.relativePath })
+        }
+        return (unproven + unplaced).filterNot { it.substringBefore('\t') in settled }.distinctBy { it.substringBefore('\t') }
+    }
+
+    /**
+     * Whether the row [line] names a copy that has left its name, with a digest, in a directory that holds an entry
+     * named like a removal's copy ([isRemovalCaptureName]). A removal that took the copy and could neither put it back
+     * nor give an edit in it a name of its own leaves it there, and so does one a process death cut off.
+     */
+    private fun awaitsRemovalCopy(mirrorDir: File, relativePath: String, line: String, seen: MutableMap<File, Boolean>): Boolean {
+        if (splitRecordLine(line).second == null) return false
+        val file = File(mirrorDir, relativePath)
+        if (Files.exists(file.toPath(), LinkOption.NOFOLLOW_LINKS)) return false
+        val directory = file.parentFile ?: return false
+        return seen.getOrPut(directory) { directory.list { _, name -> isRemovalCaptureName(name) }?.isNotEmpty() == true }
     }
 
     /**
@@ -2638,12 +2774,18 @@ class SafSyncEngine(private val context: Context) {
      * document last changed is the person's, and has to go to the device when the document is dropped. A
      * record that names the path in another shape (a copy a save has changed since), a link, a file whose
      * upload is still owed and a document that reports no time are none of this: they get no row.
+     *
+     * Asked only of a record an earlier build wrote. This build lets go the row of a copy that no longer matches
+     * it, the person's edit, and the document changing afterwards made that copy older than it: given a row
+     * without a digest then, the edit was kept inside the app for good once the device deleted the document.
+     * [lines] is read only for a regular file older than the document.
      */
-    private fun isOlderCopyOfGrownDocument(doc: DocumentInfo, localPath: File, lines: Map<String, String>?): Boolean {
-        if (lines == null || escapeRecordPath(doc.relativePath) in lines || doc.lastModified <= 0L) return false
+    private fun isOlderCopyOfGrownDocument(doc: DocumentInfo, localPath: File, lines: () -> Map<String, String>?): Boolean {
+        if (doc.lastModified <= 0L) return false
         return try {
             Files.isRegularFile(localPath.toPath(), LinkOption.NOFOLLOW_LINKS) &&
                 localPath.lastModified() < doc.lastModified &&
+                lines()?.let { escapeRecordPath(doc.relativePath) !in it } == true &&
                 localPath.absolutePath !in uploadsInFlight()
         } catch (_: Exception) {
             false
@@ -2662,14 +2804,21 @@ class SafSyncEngine(private val context: Context) {
      * open as before. So is a file the upload journal names, which says the device never got it: a
      * file made in the editor whose create the device refused is one, and the journal is read only
      * for documents the device lists, so with a row it stayed inside the app for good.
+     *
+     * Over a record an earlier build wrote, only the files [admit] takes: those with no row that are older than
+     * the record, which an earlier build may have dropped the row of.
      */
-    private fun unprovenRows(mirrorDir: File, present: Set<String>): List<String> {
+    private fun unprovenRows(
+        mirrorDir: File,
+        present: Set<String>,
+        admit: (file: File, relativePath: String) -> Boolean = { _, _ -> true },
+    ): List<String> {
         val keptThisOpen = (localPreservedDuringSync.get().orEmpty() + preservedDuringSync.get().orEmpty())
             .mapTo(HashSet()) { it.toRelativeString(mirrorDir) }
         val unsent = uploadsInFlight()
         return uploadPlan(mirrorDir, Int.MAX_VALUE) {
             it.isFile && it.absolutePath !in unsent &&
-                it.toRelativeString(mirrorDir).let { path -> path !in present && path !in keptThisOpen }
+                it.toRelativeString(mirrorDir).let { path -> path !in present && path !in keptThisOpen && admit(it, path) }
         }.entries.map { identityLine(it.toRelativeString(mirrorDir), it) }
     }
 
@@ -2806,15 +2955,25 @@ class SafSyncEngine(private val context: Context) {
      * leave this behind for good, in a directory exported into every terminal as
      * `SAF_MIRRORS_DIR`. `SafStorageManager.reclaimRevokedMirrorsSync` deletes it with
      * the pair it belonged to.
+     *
+     * A record an earlier build wrote keeps its time through the rewrite unless [sorted] says
+     * this write settles the files only the mirror holds, which phase 3 of a complete listing
+     * does ([reconcileDeletions]). The time is what
+     * tells such a record from one this build wrote, and the open that cannot sort them (a
+     * partial or empty listing) or a save delivered meanwhile would otherwise end it: the next
+     * open then sent the copies an earlier build had dropped the rows of.
      */
-    private fun writeSyncedRecord(record: File, recorded: List<String>) {
+    @JvmOverloads
+    private fun writeSyncedRecord(record: File, recorded: List<String>, sorted: Boolean = false) {
         val body = (listOf(RECORD_HEADER) + recorded).joinToString("\n")
         val tmp = File(record.parentFile, record.name + PARTIAL_SUFFIX)
+        val earlier = if (sorted) 0L else record.lastModified().takeIf { it in 1 until packageUpdatedAt } ?: 0L
         try {
             tmp.writeText(body)
             if (!tmp.renameTo(record)) {
                 throw IOException("Could not replace the synced record")
             }
+            if (earlier > 0L) record.setLastModified(earlier)
         } catch (e: Exception) {
             tmp.delete()
             Logger.w(tag, "Could not record the synced set: ${e.message}")
@@ -2835,7 +2994,7 @@ class SafSyncEngine(private val context: Context) {
             return
         }
         val record = File(root + SYNCED_RECORD_SUFFIX)
-        val lines = readSyncedRecord(record)
+        val lines = readSyncedRecord(record) ?: return
         if (lines.firstOrNull() != RECORD_HEADER) return
         val path = escapeRecordPath(relative)
         writeSyncedRecord(
@@ -2926,7 +3085,7 @@ class SafSyncEngine(private val context: Context) {
      * inbound staging lives outside the workspace and has its own cleanup.
      */
     internal fun holdsOnlyVouchedCopies(mirrorDir: File): Boolean {
-        val lines = readSyncedRecord(File(mirrorDir.path + SYNCED_RECORD_SUFFIX))
+        val lines = readSyncedRecord(File(mirrorDir.path + SYNCED_RECORD_SUFFIX)) ?: return false
         if (lines.firstOrNull() != RECORD_HEADER) return false
         val vouched = lines.drop(1).associateBy { it.substringBefore('\t') }
         // A directory the walk could not read leaves the mirror only partly examined,
@@ -2993,8 +3152,10 @@ class SafSyncEngine(private val context: Context) {
     }
 
     /**
-     * The last vouched identities, or none when there is no file to
-     * read or the read failed.
+     * The last vouched identities, none when there is no file to read, or null when the read
+     * failed. A record that could not be read says nothing either way, and read as empty it was
+     * replaced: every row of a document the device no longer listed lost its digest, and the copy
+     * of each stayed in the app for good. A caller that would write the record writes nothing then.
      *
      * The first line is [RECORD_HEADER]; every line after it is `path`, `modification
      * time` and `length` separated by tabs, the path spelled as [escapeRecordPath]
@@ -3003,7 +3164,7 @@ class SafSyncEngine(private val context: Context) {
      * record in a format this build does not know has to be discarded whole and a line
      * it cannot read has to be dropped rather than repaired.
      */
-    private fun readSyncedRecord(record: File): List<String> =
+    private fun readSyncedRecord(record: File): List<String>? =
         if (!record.isFile) {
             emptyList()
         } else {
@@ -3011,7 +3172,7 @@ class SafSyncEngine(private val context: Context) {
                 record.readLines()
             } catch (e: Exception) {
                 Logger.w(tag, "Could not read the synced record: ${e.message}")
-                emptyList()
+                null
             }
         }
 
@@ -3584,6 +3745,18 @@ class SafSyncEngine(private val context: Context) {
             moveHelper?.let { ExclusiveMove.move(it, directory, key, from, to) } ?: ExclusiveMove.Outcome.UNAVAILABLE
         }
 
+    /**
+     * When this package was last installed or updated, or 0 when that cannot be read. A synced record
+     * last written before it was written by an earlier build.
+     */
+    private val packageUpdatedAt: Long by lazy {
+        try {
+            context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime
+        } catch (_: Exception) {
+            0L
+        }
+    }
+
     private val moveHelper: File? by lazy {
         try {
             File(com.vscodroid.util.Environment.getMoveHelperPath(context)).takeIf { it.isFile }
@@ -3892,9 +4065,15 @@ class SafSyncEngine(private val context: Context) {
      * | shorter, bytes agree | true |
      * | shorter, bytes differ | false |
      * | same length, or longer | false |
+     * | the stream ends before a positive [reportedSize] | false |
      *
-     * ⚠️ `doc.size` is deliberately not a parameter here, and a length
-     * pre-check must not come back. `COLUMN_SIZE` is optional, a NULL reads back
+     * The last row is asked of the stream after it ended, never before it is read: a stream that
+     * ends before the size the provider reports holds part of the document, and a part that agreed
+     * with the mirror passed for this app's own cut-short write, so the write went over another
+     * app's edit. A size of 0, which is also what a provider that omits it reports, or one that
+     * was not answered, rules nothing out, for the reason below.
+     *
+     * ⚠️ A length pre-check must not come back. `COLUMN_SIZE` is optional, a NULL reads back
      * as 0 through the cursor, and `walkTree` does not test for it, so a provider
      * that omits it claims 0 for every document it returns. The pre-check this
      * replaced, `deviceSize <= 0L || deviceSize >= localFile.length()`, therefore
@@ -3905,8 +4084,8 @@ class SafSyncEngine(private val context: Context) {
      * which keeps a `.device-` copy of this app's own half-written bytes, and
      * phase 2b then puts that copy in the user's folder, where nothing removes
      * it. The relation is a property of two byte streams and both of them are
-     * open here; a third party's claim about one of them can only add ways to be
-     * wrong.
+     * open here; a third party's claim about one of them is asked only to rule a
+     * prefix out once the stream has ended short of it.
      *
      * The cost is one provider read of at most `min(document, mirror) + 1` bytes,
      * paid a second time by [setAsideDeviceCopy] wherever this answers false.
@@ -3919,7 +4098,7 @@ class SafSyncEngine(private val context: Context) {
      * A read that fails answers false, the safe direction: the caller then
      * preserves the document before replacing it.
      */
-    private fun deviceIsTruncatedMirror(safDocUri: Uri, localFile: File, mirrorRoot: File): Boolean {
+    private fun deviceIsTruncatedMirror(safDocUri: Uri, localFile: File, mirrorRoot: File, reportedSize: Long): Boolean {
         return try {
             openOutboundSource(localFile, mirrorRoot).use { selected ->
                 val matched = withStableDocumentRead(safDocUri) {
@@ -3927,6 +4106,7 @@ class SafSyncEngine(private val context: Context) {
                         selected.input.use { mirror ->
                             val a = ByteArray(COPY_BUFFER_SIZE)
                             val b = ByteArray(COPY_BUFFER_SIZE)
+                            var total = 0L
                             while (true) {
                                 val read = readFully(device, a, a.size)
                                 // The document ended while the two still agreed, so it is
@@ -3934,8 +4114,10 @@ class SafSyncEngine(private val context: Context) {
                                 // it is asked of the stream rather than of
                                 // `localFile.length()`: the mirror is a file an editor may
                                 // be writing while this runs, and a second measurement of
-                                // it can disagree with the bytes just read.
-                                if (read == 0) return@use mirror.read() != -1
+                                // it can disagree with the bytes just read. Unless the
+                                // stream ended short of the size the provider reports.
+                                if (read == 0) return@use (reportedSize <= 0 || total >= reportedSize) && mirror.read() != -1
+                                total += read
                                 // The mirror ran out first, so the document holds more
                                 // than any prefix of it: something else put it there.
                                 if (readFully(mirror, b, read) != read) return@use false
@@ -4198,6 +4380,8 @@ class SafSyncEngine(private val context: Context) {
         var written: ByteArray? = null
         var writtenLength = 0L
         var providerAttempted = false
+        // Whether any try was handed a provider stream: until one is, nothing of this write is on the device.
+        var outputOpened = false
         try {
             var attempts = 0
             while (true) {
@@ -4208,6 +4392,7 @@ class SafSyncEngine(private val context: Context) {
                         providerAttempted = true
                         val count = context.contentResolver.openOutputStream(safDocUri, "wt")
                             ?.use { output ->
+                                outputOpened = true
                                 DigestInputStream(source.input, digest).copyTo(output, COPY_BUFFER_SIZE)
                             }
                         count to source.attributes
@@ -4256,7 +4441,7 @@ class SafSyncEngine(private val context: Context) {
             // By the claim rather than by the path this opened with: a rename of the
             // directory above it moves both records while the stream runs.
             if (landed) clearUploadInFlight(claim)
-            else releaseUploadClaim(claim)
+            else releaseUploadClaim(claim, wroteNothing = !outputOpened)
             // The version a declined delete kept there is replaced once these bytes land.
             if (landed) keptOnDevice.remove(localFile.absolutePath)
             // An attempted output open may leave this app's bytes, whole or truncated.
@@ -4391,6 +4576,11 @@ class SafSyncEngine(private val context: Context) {
      * and false of a directory where most entries did: announcing forty failures with
      * it would overstate forty times, and announcing them one by one is another way of
      * not telling the user anything.
+     *
+     * Also told once per [initialSync], with the mirror ROOT, of the files only the mirror
+     * holds that did not reach the device: those its put-back pass could not land, and
+     * those the open keeps inside the app because it cannot tell them from a document
+     * deleted on the device. Saving such a file again sends it.
      */
     internal var onUploadIncomplete: (File, Int, Boolean) -> Unit = { _, _, _ -> }
 
@@ -4588,24 +4778,52 @@ class SafSyncEngine(private val context: Context) {
      */
     private fun markUploadInFlight(absolutePath: String): UploadClaim? =
         synchronized(uploadJournalLock) {
-            if (!recordUploadIntent(absolutePath)) return@synchronized null
-            UploadClaim(absolutePath).also { uploadClaims.add(it) }
+            val nothingSent = recordUploadIntent(absolutePath) ?: return@synchronized null
+            UploadClaim(absolutePath, nothingSent).also { uploadClaims.add(it) }
         }
 
-    private fun recordUploadIntent(absolutePath: String): Boolean =
+    /**
+     * Writes the journal line of [absolutePath] before anything reaches the provider, and takes off the mark
+     * of a line no write had reached the provider under ([markUnwritten]): this one may, and a process death
+     * in the middle has to leave a line that can stand for a cut-short write.
+     *
+     * Null when the line could not be written; otherwise whether nothing of this file had been handed to the
+     * provider under a line before: there was none, or only a marked one.
+     */
+    private fun recordUploadIntent(absolutePath: String): Boolean? =
         synchronized(uploadJournalLock) {
             try {
                 val journal = uploadJournal()
-                val lines = if (journal.isFile) readUploadJournal(journal) else emptyList()
-                if (absolutePath !in lines) {
-                    rewriteJournal(lines + absolutePath)
+                val (lines, unwritten) = if (journal.isFile) journalEntries(journal) else emptyList<String>() to emptySet()
+                val standing = absolutePath in lines
+                if (!standing || absolutePath in unwritten) {
+                    rewriteJournal(if (standing) lines else lines + absolutePath, unwritten - absolutePath)
                 }
+                !standing || absolutePath in unwritten
             } catch (e: Exception) {
                 Logger.w(tag, "Could not record the upload in flight: ${e.message}")
-                return@synchronized false
+                null
             }
-            true
         }
+
+    /**
+     * Marks the journal line of [absolutePath] as one no write has handed a provider stream: every try under it
+     * failed before the provider was asked for one, or answered with none, or the create of its document did not
+     * happen. The line stays, because the device never got the file and the retry and the open's put-back pass
+     * read it. What the mark changes is the one reading that takes the line for this app's own cut-short write
+     * ([partlyWrittenUploads]): with nothing of this app's on the device, a document that is a prefix of the
+     * mirror file is what another app left, and a save or an open went over it with nothing kept.
+     */
+    private fun markUnwritten(absolutePath: String) = synchronized(uploadJournalLock) {
+        try {
+            val journal = uploadJournal()
+            if (!journal.isFile) return@synchronized
+            val (lines, unwritten) = journalEntries(journal)
+            if (absolutePath in lines && absolutePath !in unwritten) rewriteJournal(lines, unwritten + absolutePath)
+        } catch (e: Exception) {
+            Logger.w(tag, "Could not mark the upload record: ${e.message}")
+        }
+    }
 
     /**
      * Drops this writer's claim, and with it the line only when the mirror file it names
@@ -4643,11 +4861,19 @@ class SafSyncEngine(private val context: Context) {
      * the mirror stands, because that is the edit the next sync retries, and a line
      * another writer holds a claim on is left to that writer's own release, for the
      * reason [clearUploadInFlight] gives.
+     *
+     * A line that stands after a write that [wroteNothing], with no stream handed to it, is
+     * marked ([markUnwritten]) when no write before it under the line had one either.
      */
-    private fun releaseUploadClaim(claim: UploadClaim) = synchronized(uploadJournalLock) {
+    @JvmOverloads
+    private fun releaseUploadClaim(claim: UploadClaim, wroteNothing: Boolean = false) = synchronized(uploadJournalLock) {
         uploadClaims.remove(claim)
-        if (!File(claim.path).exists() && uploadClaims.none { it.path == claim.path }) {
+        if (uploadClaims.any { it.path == claim.path }) return@synchronized
+        if (!File(claim.path).exists()) {
             removeJournalLine(claim.path)
+        } else if (wroteNothing && claim.nothingSentBefore) {
+            // No stream of this write, nor of any before it under the line, reached the provider.
+            markUnwritten(claim.path)
         }
     }
 
@@ -4760,10 +4986,10 @@ class SafSyncEngine(private val context: Context) {
                 // A journal that is not there, and a rewrite with nothing to move, are
                 // both moves that succeeded: there is no line to disagree with the claim.
                 if (journal.isFile) {
-                    val all = readUploadJournal(journal)
-                    val moved =
-                        all.map { if (it.startsWith(old)) new + it.removePrefix(old) else it }
-                    if (moved != all) rewriteJournal(moved)
+                    val (all, unwritten) = journalEntries(journal)
+                    val move = { path: String -> if (path.startsWith(old)) new + path.removePrefix(old) else path }
+                    val moved = all.map(move)
+                    if (moved != all) rewriteJournal(moved, unwritten.mapTo(HashSet(), move))
                 }
             } catch (e: Exception) {
                 Logger.w(tag, "Could not move the upload records of ${from.name}: ${e.message}")
@@ -4915,13 +5141,39 @@ class SafSyncEngine(private val context: Context) {
         }
     }
 
-    /** Reads escaped journals while preserving literal backslashes in older journals. */
-    private fun readUploadJournal(journal: File): List<String> {
-        val lines = journal.readLines()
-        return if (lines.firstOrNull() == UPLOAD_JOURNAL_HEADER) {
-            lines.drop(1).map(::unescapeRecordPath)
-        } else lines
+    /**
+     * The journal lines that may stand for this app's own cut-short write: every line but those [markUnwritten]
+     * marked, whose writes never handed the provider a stream.
+     */
+    internal fun partlyWrittenUploads(): Set<String> = synchronized(uploadJournalLock) {
+        try {
+            val journal = uploadJournal()
+            if (!journal.isFile) return@synchronized emptySet()
+            val (lines, unwritten) = journalEntries(journal)
+            lines.filterTo(HashSet()) { it.isNotBlank() && it !in unwritten }
+        } catch (e: Exception) {
+            Logger.w(tag, "Could not read the upload journal: ${e.message}")
+            emptySet()
+        }
     }
+
+    /** Reads escaped journals while preserving literal backslashes in older journals. */
+    private fun readUploadJournal(journal: File): List<String> = journalEntries(journal).first
+
+    /**
+     * The paths of the journal's lines, and those of them marked [UNWRITTEN_MARK]. A mark is a line of its own,
+     * written only in the escaped form, where no path line can begin with it; a journal with no mark is written
+     * as it always was.
+     */
+    private fun journalEntries(journal: File): Pair<List<String>, Set<String>> {
+        val lines = journal.readLines()
+        if (lines.firstOrNull() != UPLOAD_JOURNAL_HEADER) return lines to emptySet()
+        val (marks, paths) = lines.drop(1).partition { it.startsWith(UNWRITTEN_MARK) }
+        return paths.map(::unescapeRecordPath) to marks.mapTo(HashSet()) { unescapeRecordPath(it.removePrefix(UNWRITTEN_MARK)) }
+    }
+
+    /** The marked paths of the journal as it stands. Caller must hold [uploadJournalLock]. */
+    private fun journalMarks(): Set<String> = uploadJournal().let { if (it.isFile) journalEntries(it).second else emptySet() }
 
     /**
      * Replaces the journal in one step, or leaves the previous content exactly
@@ -4932,16 +5184,18 @@ class SafSyncEngine(private val context: Context) {
      * in the middle, which is the one failure this file exists to remember across.
      * This protects process interruption, without promising persistence after power loss.
      */
-    private fun rewriteJournal(lines: List<String>) {
+    private fun rewriteJournal(lines: List<String>, unwritten: Set<String> = journalMarks()) {
         val journal = uploadJournal()
         if (lines.isEmpty()) {
             journal.delete()
             return
         }
         val tmp = File(journal.parentFile, journal.name + PARTIAL_SUFFIX)
-        val escaped = lines.any { escapeRecordPath(it) != it }
+        // A mark goes with its line and with nothing else, so a line removed takes its mark with it.
+        val marked = lines.filter { it in unwritten }.distinct()
+        val escaped = marked.isNotEmpty() || lines.any { escapeRecordPath(it) != it }
         val body = if (escaped) {
-            listOf(UPLOAD_JOURNAL_HEADER) + lines.map(::escapeRecordPath)
+            listOf(UPLOAD_JOURNAL_HEADER) + lines.map(::escapeRecordPath) + marked.map { UNWRITTEN_MARK + escapeRecordPath(it) }
         } else lines
         tmp.writeText(body.joinToString("\n"))
         if (!tmp.renameTo(journal)) {
@@ -5042,18 +5296,26 @@ class SafSyncEngine(private val context: Context) {
                 // A new empty document must already have recoverable local bytes.
                 if (localFile.isFile) openOutboundSource(localFile, mirrorRoot).use { }
                 else validateOutboundDirectory(localFile, mirrorRoot)
-                if (localFile.isFile && !recordUploadIntent(localFile.absolutePath)) {
-                    announceLost(localFile)
-                    return null
-                }
+                val nothingSent = localFile.isFile &&
+                    (recordUploadIntent(localFile.absolutePath) ?: run {
+                        announceLost(localFile)
+                        return null
+                    })
                 val mimeType = if (localFile.isDirectory) {
                     DocumentsContract.Document.MIME_TYPE_DIR
                 } else {
                     CREATED_FILE_MIME_TYPE
                 }
-                DocumentsContract.createDocument(
-                    context.contentResolver, parentSafUri, mimeType, localFile.name
-                )
+                var made: Uri? = null
+                try {
+                    made = DocumentsContract.createDocument(
+                        context.contentResolver, parentSafUri, mimeType, localFile.name
+                    )
+                } finally {
+                    // No document was made, so nothing of this file reached the device under its line.
+                    if (made == null && nothingSent) markUnwritten(localFile.absolutePath)
+                }
+                made
             } ?: return null
 
             // The device folder decides what the file is called and the mirror follows;
@@ -5231,7 +5493,7 @@ class SafSyncEngine(private val context: Context) {
         val owner = session
         var followed = false
         if (renamed != null && !renamed.exists() &&
-            (localFile.isDirectory || recordUploadIntent(renamed.absolutePath))
+            (localFile.isDirectory || recordUploadIntent(renamed.absolutePath) != null)
         ) {
             val identity = if (localFile.isDirectory) runCatching {
                 Files.readAttributes(localFile.toPath(), BasicFileAttributes::class.java,
@@ -6573,6 +6835,9 @@ class SafSyncEngine(private val context: Context) {
         internal var defaultUsableSpaceOf: (File) -> Long = { it.usableSpace }
 
         private const val UPLOAD_JOURNAL_HEADER = "#vscodroid-saf-uploads 1"
+
+        /** What a journal line of a write that never handed the provider a stream is marked with; see [markUnwritten]. */
+        private const val UNWRITTEN_MARK = "unwritten\t"
         private const val COPY_BUFFER_SIZE = 8192
         private const val WRITEBACK_POLL_MS = 200L
 
@@ -7924,8 +8189,11 @@ internal data class VanishedDirectory(
  * writers of one path hold two claims and each must retire only its own.
  *
  * Read and written only under the journal lock, which is what makes a plain var safe here.
+ *
+ * [nothingSentBefore] is whether no write under the journal line had been handed a provider
+ * stream before this one ([SafSyncEngine.markUnwritten]).
  */
-private class UploadClaim(var path: String)
+private class UploadClaim(var path: String, val nothingSentBefore: Boolean = false)
 
 private data class InboundScratchKey(val parent: Any, val name: String)
 

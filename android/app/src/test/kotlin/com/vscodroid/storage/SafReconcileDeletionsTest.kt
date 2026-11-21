@@ -956,14 +956,16 @@ class SafReconcileDeletionsTest {
         }
         val reconcile = SafSyncEngine::class.java.getDeclaredMethod(
             "reconcileDeletions", File::class.java, List::class.java,
-            Boolean::class.javaPrimitiveType, List::class.java,
+            Boolean::class.javaPrimitiveType, List::class.java, List::class.java,
+            Boolean::class.javaPrimitiveType, Function1::class.java,
         ).apply { isAccessible = true }
 
         val engine = SafSyncEngine(context)
         val announced = mutableListOf<File>()
         engine.onLocalCopiesPreserved = { announced += it }
         reconcile.invoke(engine, mirror,
-            listOf(DocumentInfo(uriFor("keep"), "keep", "keep.txt", false, 1, DEVICE_TIME)), true, emptyList<String>())
+            listOf(DocumentInfo(uriFor("keep"), "keep", "keep.txt", false, 1, DEVICE_TIME)), true, emptyList<String>(),
+            emptyList<String>(), false, { _: Int -> })
 
         assertTrue(changed.get(), "the deletion never verified the recorded copy")
         if (shape == "redirect") {

@@ -423,11 +423,13 @@ class SafUploadInterruptionTest {
         deliver(android.os.FileObserver.MODIFY, "notes.txt")
 
         assertEquals(
-            listOf(File(mirror, "notes.txt").absolutePath),
-            journal.readLines(),
+            setOf(File(mirror, "notes.txt").absolutePath),
+            engine.uploadsInFlight(),
             "the one fact that separates a truncated copy from a device edit is " +
                 "whether an upload to it never finished, and that fact lives here"
         )
+        // The provider handed no stream, so nothing of this write is on the device to be taken for one.
+        assertEquals(emptySet<String>(), engine.partlyWrittenUploads())
     }
 
     @Test
@@ -460,7 +462,7 @@ class SafUploadInterruptionTest {
 
         deliver(android.os.FileObserver.MODIFY, "notes.txt")
         assertEquals(
-            listOf(local.absolutePath), journal.readLines(),
+            setOf(local.absolutePath), engine.uploadsInFlight(),
             "the failed write-back must record the edit that never reached the device",
         )
 

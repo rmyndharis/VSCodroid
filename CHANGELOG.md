@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- At the first open of a device folder after an update, a file only the app's copy holds that is older than the folder's record is kept inside the app with a notice, instead of putting a document deleted on the device back there.
+- A file whose save or creation never reached the device folder is sent at the next open, even where an empty folder or an earlier open had kept it inside the app.
+- An edit of a file over 50 MiB that the app could not send reaches the device folder once the device deletes the file.
+- An open that cannot read the folder's record no longer rewrites it, which kept copies of documents deleted on the device inside the app for good.
+- An open that lists a folder only in part says when it keeps files inside the app because it cannot read the folder's record.
+- A file the app cannot vouch for, where the device replaced it with a folder, stays inside the app with a notice instead of being sent into the device folder.
+- An edit left in a copy that a removal had taken is kept under a name of its own and sent to the device folder.
+- A save after one the device folder refused before writing anything keeps a shortened device file as a `.device-` copy instead of writing over it.
+- A save no longer writes over another app's edit when the device file's read ends before its reported size.
+- The notice for files that did not reach the device folder says they stay in VSCodroid and that saving one again sends it.
+
 ## [1.10.1] - 2026-11-21
 
 ### Fixed

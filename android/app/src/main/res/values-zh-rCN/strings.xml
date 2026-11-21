@@ -341,7 +341,7 @@
          worded like saf_write_back_failed: most of the folder did arrive, so "the only
          copy is inside VSCodroid" would overstate. -->
     <plurals name="saf_upload_incomplete">
-        <item quantity="other">%2$s：有 %1$d 个项目未能写入设备文件夹。</item>
+        <item quantity="other">%2$s：有 %1$d 个项目未能写入设备文件夹。它们保留在 VSCodroid 内；再次保存即可发送。</item>
     </plurals>
     <!-- The same folder stopped by the enumeration cap rather than by a refusal. Named
          separately because the cause is a limit this app chose, not the device saying

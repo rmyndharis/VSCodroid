@@ -10,6 +10,7 @@ import io.mockk.mockkObject
 import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -95,5 +96,38 @@ class SafLiveUploadClaimTest {
         call("consumeStaleUploadRecord", path)
 
         assertEquals(emptySet<String>(), engine.uploadsInFlight(), "a stale line nobody is writing was kept")
+    }
+
+    /**
+     * A line whose write never handed the provider a stream is marked, so it is not taken for this app's own
+     * cut-short write. Every rewrite of the journal for another line has to keep that mark, and a folder renamed
+     * in the editor carries it to the new path: dropped, the line stood for a write that left bytes again, and a
+     * prefix another app left was written over.
+     */
+    @Test
+    fun `a line no write reached the provider under keeps its mark through the journal's other changes`() {
+        mirrorFileExists()
+        val other = File(filesDir, "saf-mirrors/abc123def456/other.md").apply { writeText("another edit") }.absolutePath
+        val claim = checkNotNull(call("markUploadInFlight", path)) { "the journal refused the line" }
+        call("releaseUploadClaim", claim, true)
+        call("releaseUploadClaim", checkNotNull(call("markUploadInFlight", other)))
+        assertEquals(setOf(path, other), engine.uploadsInFlight())
+        assertEquals(setOf(other), engine.partlyWrittenUploads(), "the line of a write that reached no provider was not marked")
+
+        File(other).delete()
+        call("consumeStaleUploadRecord", other)
+        assertEquals(setOf(path), engine.uploadsInFlight())
+        assertEquals(emptySet<String>(), engine.partlyWrittenUploads(), "removing another line took the mark")
+
+        val folder = File(path).parentFile!!
+        val renamed = File(folder.parentFile, "renamed")
+        assertTrue(folder.renameTo(renamed))
+        engine.renameUploadsUnder(folder, renamed)
+        val moved = File(renamed, File(path).name).absolutePath
+        assertEquals(setOf(moved), engine.uploadsInFlight())
+        assertEquals(emptySet<String>(), engine.partlyWrittenUploads(), "the mark did not move with its line")
+
+        call("releaseUploadClaim", checkNotNull(call("markUploadInFlight", moved)))
+        assertEquals(setOf(moved), engine.partlyWrittenUploads(), "a write that may have reached the provider left the mark on")
     }
 }

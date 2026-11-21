@@ -2,6 +2,8 @@ package com.vscodroid.storage
 
 import android.content.ContentResolver
 import android.content.Context
+import android.content.pm.PackageInfo
+import android.content.pm.PackageManager
 import android.database.Cursor
 import android.net.Uri
 import android.os.Bundle
@@ -21,6 +23,7 @@ import org.junit.jupiter.api.io.TempDir
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.security.MessageDigest
 
 /**
  * A device folder with real structure behind a [ContentResolver], and an `initialSync` to
@@ -190,6 +193,48 @@ abstract class SafInitialSyncTestBase {
     }
 
     protected fun mirrorFile(name: String) = File(mirror, name)
+
+    /**
+     * The app was updated after the last open wrote [record]: the package's update time is later than the
+     * record's, which is how an open tells a record an earlier build wrote from one this build wrote. The record
+     * is dated a minute before an update a second ago, so a record an open writes from here on is this build's;
+     * a case that times files against the record does so after this.
+     */
+    protected fun updatedSinceLastOpen() {
+        val updatedAt = System.currentTimeMillis() - 1_000
+        check(record.setLastModified(updatedAt - 60_000)) { "could not date the record before the update" }
+        val info = PackageInfo().apply { lastUpdateTime = updatedAt }
+        val packages = mockk<PackageManager>(relaxed = true)
+        every { packages.getPackageInfo(any<String>(), any<Int>()) } returns info
+        every { context.packageManager } returns packages
+    }
+
+    /** Runs [then] each time the engine has read a file holding [contents] through to its digest. */
+    protected fun afterReading(contents: String, then: () -> Unit) {
+        mockkStatic(MessageDigest::class)
+        every { MessageDigest.getInstance("SHA-256") } answers {
+            val real = callOriginal()
+            val read = ByteArrayOutputStream()
+            object : MessageDigest("SHA-256") {
+                override fun engineUpdate(input: Byte) {
+                    read.write(input.toInt())
+                    real.update(input)
+                }
+                override fun engineUpdate(input: ByteArray, offset: Int, length: Int) {
+                    read.write(input, offset, length)
+                    real.update(input, offset, length)
+                }
+                override fun engineReset() {
+                    read.reset()
+                    real.reset()
+                }
+                override fun engineDigest(): ByteArray {
+                    if (read.toString() == contents) then()
+                    return real.digest()
+                }
+            }
+        }
+    }
 
     protected companion object {
         /** Old enough that no mirror file is ever kept merely for being newer. */

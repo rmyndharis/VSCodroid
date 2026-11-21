@@ -348,10 +348,13 @@
          rather than naming them, because the failure is usually folder-wide and forty
          separate notices is another way of telling the user nothing. Deliberately not
          worded like saf_write_back_failed: most of the folder did arrive, so "the only
-         copy is inside VSCodroid" would overstate. -->
+         copy is inside VSCodroid" would overstate. Also said once when a folder opens, for
+         the files only the app's copy holds that the open could not send or keeps inside
+         the app because it cannot tell them from a document deleted on the device. Saving
+         such a file again sends it, which is what the second sentence tells the user. -->
     <plurals name="saf_upload_incomplete">
-        <item quantity="one">%2$s: one item did not reach the device folder.</item>
-        <item quantity="other">%2$s: %1$d items did not reach the device folder.</item>
+        <item quantity="one">%2$s: one item did not reach the device folder. It stays in VSCodroid; save it again to send it.</item>
+        <item quantity="other">%2$s: %1$d items did not reach the device folder. They stay in VSCodroid; save each one again to send it.</item>
     </plurals>
     <!-- The same folder stopped by the enumeration cap rather than by a refusal. Named
          separately because the cause is a limit this app chose, not the device saying

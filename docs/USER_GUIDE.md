@@ -122,7 +122,9 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   next time you open the folder. Until then a notice says the
   file exists only inside VSCodroid. A file in the editor that you have not changed
   since VSCodroid copied it, where the device now holds a folder, is not kept: the
-  folder replaces it. If you open a folder again while a large
+  folder replaces it; one that VSCodroid cannot tell from such a copy is kept
+  beside the folder in the editor only, with a notice, until you save it again.
+  If you open a folder again while a large
   save to it is still being written, the open does not wait for it: it says
   the folder is still syncing, saving carries on, and your later saves wait up
   to two minutes and are sent after that one.
@@ -148,6 +150,17 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   deletes of existing device documents under that directory are held back.
   Your edits stay inside VSCodroid until you reopen the folder successfully
   and save again; the unread device version is kept.
+- A file that only VSCodroid's copy of a device folder holds, such as one made in
+  the terminal while the folder was closed, is put in the device folder the next
+  time you open it. Where VSCodroid cannot tell such a file from one deleted in
+  the device folder, it keeps the file inside VSCodroid rather than put a deleted
+  file back, and a notice says how many files did not reach the device folder.
+  That happens when its record of the folder is missing; at the first opening
+  after an update, for a file older than the last opening before it; and while a
+  folder that has been empty at every opening still is, for a file older than the
+  last opening (as `unzip` or `cp -p` leave its time). A file whose save or
+  creation in the editor did not finish is sent. Save a kept file again in the
+  editor to send it.
 - Device-folder copies stay inside VSCodroid after their folder permission is
   removed. Use **VSCodroid: Manage Device Folder Storage** to see and remove them.
   Copies may contain files that never reached the device folder. Save anything

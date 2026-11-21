@@ -349,9 +349,9 @@
          worded like saf_write_back_failed: most of the folder did arrive, so "the only
          copy is inside VSCodroid" would overstate. -->
     <plurals name="saf_upload_incomplete">
-        <item quantity="one">%2$s: un elemento no llegó a la carpeta del dispositivo.</item>
-        <item quantity="many">%2$s: %1$d elementos no llegaron a la carpeta del dispositivo.</item>
-        <item quantity="other">%2$s: %1$d elementos no llegaron a la carpeta del dispositivo.</item>
+        <item quantity="one">%2$s: un elemento no llegó a la carpeta del dispositivo. Se queda en VSCodroid; guárdalo de nuevo para enviarlo.</item>
+        <item quantity="many">%2$s: %1$d elementos no llegaron a la carpeta del dispositivo. Se quedan en VSCodroid; guarda cada uno de nuevo para enviarlo.</item>
+        <item quantity="other">%2$s: %1$d elementos no llegaron a la carpeta del dispositivo. Se quedan en VSCodroid; guarda cada uno de nuevo para enviarlo.</item>
     </plurals>
     <!-- The same folder stopped by the enumeration cap rather than by a refusal. Named
          separately because the cause is a limit this app chose, not the device saying
