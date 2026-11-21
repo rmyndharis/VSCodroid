@@ -400,7 +400,9 @@ object Environment {
         // throws off a device and on anything that is not a link, and both mean the same thing
         // here: no such record. Read only by the answers below that need it. Only a link to a folder
         // called `projects` is a record: the folder is a root the webview serves as a whole, so a link
-        // something re-pointed at `~` or at a folder of keys must not become the answer.
+        // something re-pointed at `~` or at a folder of keys must not become the answer. The name is
+        // read as written and one link deep, so a `projects` inside a folder of keys, or one that is
+        // itself a link to one, still passes; publishedResourceRoots leaves such a folder unserved.
         val link by lazy {
             runCatching {
                 File("$filesDir/home").toPath().resolve(Os.readlink("$filesDir/home/projects")).normalize().toString()

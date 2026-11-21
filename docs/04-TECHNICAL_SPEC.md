@@ -1530,8 +1530,10 @@ and visible again 150 to 650 ms later, and on an API 36 emulator with `hw.keyboa
 reports no keyboard as a phone does, the hold the hook writes at the first report took the
 keyboard down at the turn to landscape and kept it down, where with the hook replaced by a
 function that did nothing it stayed up. `KeyboardDismissal` therefore calls the hook half a
-second after the report, and not if the keyboard is visible by then or a change of
-configuration explains the report: any report within two seconds of it, and where a turn
+second after the report, and not if the keyboard is visible by then or a turn explains the
+report. A turn is a change of configuration that changes the screen's orientation, size or
+layout (`isScreenTurn`); a change of navigation device, night mode or keyboard alone is not
+one. It explains any report within two seconds of it, and where a turn
 found the keyboard up and the app refocuses the editor for it, one until `AFTER_REFOCUS_MS`
 after that refocus (`TURN_CAP_MS` after the turn at most). With the focus in a plain text box
 (Quick Open, the find box: the page answers `none` and the app calls `noRefocus`) the app

@@ -25,6 +25,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.Executor
 import androidx.core.content.edit
 import android.annotation.SuppressLint
 
@@ -60,11 +61,12 @@ data class StartupNotice(val message: String, val terminal: Boolean, val topic: 
  * any bound clients because it is started as a foreground service.
  *
  * Threading: the state this service keeps for itself, namely [restartCount],
- * [lastReadyAt], [isServiceRunning], [launchJob], [runId], [failureRaised] and
- * [startupNotice], is touched only from [serviceScope]'s dispatcher, which is
- * the main thread. Service lifecycle callbacks already arrive there; the one
- * caller that does not is the watchdog, and [setupProcessCallbacks] hands its
- * report to the scope rather than acting on the watchdog thread.
+ * [lastReadyAt], [isServiceRunning], [launchJob], [runId], [failureRaised],
+ * [startupNotice] and [stopInFlight], is touched only on the main thread, which
+ * is [serviceScope]'s dispatcher. Service lifecycle callbacks already arrive
+ * there; the callers that do not are the watchdog, whose report
+ * [setupProcessCallbacks] hands to the scope, and the stop thread, whose end
+ * [shutdown] hands to the main executor.
  */
 // InlinedApi: FOREGROUND_SERVICE_TYPE_SPECIAL_USE is an int constant that the
 // compiler inlines, so no field is looked up at run time and no release below 34
@@ -146,6 +148,9 @@ class NodeService : Service() {
 
     private var startupNotice: StartupNotice? = null
 
+    /** Whether the stop the notification asked for is still ending the server off the main thread. See [shutdown]. */
+    private var stopInFlight = false
+
     /**
      * Invoked when the server is healthy and accepting connections. `sameServer` is
      * [ProcessManager.continuesAnnouncedServer], read at the announcement.
@@ -223,7 +228,9 @@ class NodeService : Service() {
 
             StartCommand.SERVE -> {
                 isServiceRunning = true
-                launchServer()
+                // A stop still ending the last server would have this start refused as one
+                // already running; [stopEnded] launches it once that stop is over.
+                if (!stopInFlight) launchServer()
                 START_STICKY
             }
 
@@ -252,6 +259,10 @@ class NodeService : Service() {
                     // path: the hold is already irrelevant and the card is the
                     // server's.
                     START_STICKY
+                } else if (stopInFlight) {
+                    // The stop still running takes the card down when it ends; leaving the
+                    // foreground now would leave its processes to a service on its way out.
+                    START_NOT_STICKY
                 } else {
                     Logger.i(tag, "First-run setup is done; giving the hold back")
                     ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
@@ -502,10 +513,20 @@ class NodeService : Service() {
      * log line and nothing else. That second stop is not merely tolerated: it is
      * what reaps a process spawned inside the window below.
      *
-     * The client is told last. Everything here runs on the main thread, and
-     * `MainActivity` answers this callback with `runOnUiThread`, which on the
-     * main thread runs inline, so the notification is taken down and the service
-     * is stopped before anything the activity does can re-enter.
+     * Ending the processes runs on a thread of its own ([stopOffMainThread]), and
+     * the rest in [stopEnded], on the main thread, once that has returned. It can
+     * take seconds: a second for the bootstrap's own exit, the scan for an editor
+     * it left, 300 ms for each such editor's SIGTERM, and up to two seconds for the
+     * gateway to give up a temporary origin. On the main thread that froze the
+     * screen for as long, and a touch in it waited for the system's input timeout.
+     * The foreground card stays up until then, so the system does not cache and
+     * freeze the process with the stop half done. [serviceScope] cannot carry it:
+     * [onDestroy] cancels that.
+     *
+     * The client is told last, in [stopEnded]. `MainActivity` answers that callback
+     * with `runOnUiThread`, which on the main thread runs inline, so the
+     * notification is taken down and the service is stopped before anything the
+     * activity does can re-enter.
      */
     private fun shutdown() {
         Logger.i(tag, "Stop requested from the notification")
@@ -520,10 +541,38 @@ class NodeService : Service() {
         // Without this, stopping during a crash loop and starting again gave
         // whatever was left of the previous run's allowance.
         endFailureEpisode()
-        processManager.stopServer()
-        // A temporary origin, taken because home was busy, goes with the stop: the
-        // process outlives the service, and opening the editor again must try home.
-        processManager.releaseAwayOrigin()
+        // A second Stop while the first is still ending the server: that one finishes the job.
+        if (stopInFlight) return
+        stopInFlight = true
+        val processes = processManager
+        stopOffMainThread(
+            stop = {
+                processes.stopServer()
+                // A temporary origin, taken because home was busy, goes with the stop: the
+                // process outlives the service, and opening the editor again must try home.
+                processes.releaseAwayOrigin()
+            },
+            onMain = mainExecutor,
+            ended = ::stopEnded,
+        )
+    }
+
+    /**
+     * The rest of [shutdown], on the main thread once the server is down.
+     *
+     * A start that arrived meanwhile was answered in the foreground and found
+     * [isServiceRunning] false, so it set it and left its launch to this: a launch
+     * then would have found the old server still running and been refused. It
+     * owns the card and the service now, so nothing is taken down and its server
+     * is launched. Setup's hold is not such a start: setup runs only before the
+     * first server of a process.
+     */
+    private fun stopEnded() {
+        stopInFlight = false
+        if (isServiceRunning) {
+            launchServer()
+            return
+        }
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         removeNotification()
         stopSelf()
@@ -1647,6 +1696,24 @@ internal fun startCommand(
     serviceRunning -> StartCommand.ALREADY_SERVING
     promote() -> StartCommand.SERVE
     else -> StartCommand.STAND_DOWN
+}
+
+/**
+ * Runs [stop] on a thread of its own and then [ended] through [onMain], also when
+ * [stop] throws: the service is still to be stopped, and a throw left on that
+ * thread would end the process. [NodeService.shutdown] says why the stop leaves
+ * the main thread.
+ */
+internal fun stopOffMainThread(stop: () -> Unit, onMain: Executor, ended: () -> Unit) {
+    Thread({
+        try {
+            stop()
+        } catch (e: Exception) {
+            Logger.e("NodeService", "Stopping the server failed", e)
+        } finally {
+            onMain.execute(ended)
+        }
+    }, "server-stop").start()
 }
 
 /** What a crash report gets. */

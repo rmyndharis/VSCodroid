@@ -71,8 +71,18 @@ import androidx.core.net.toUri
  * is that nothing here needs to know, which is what keeps this correct when the
  * layout underneath changes. A root that cannot be canonicalised is dropped,
  * costing that root its resources and granting nothing.
+ *
+ * So is a root that overlaps one of [sensitive], tested as [workspaceRootOrNull]
+ * tests the open folder, after canonicalising. The projects folder is the one that
+ * can: [Environment.getProjectsDir] follows `~/projects` when it cannot see shared
+ * storage, and reads the link's target by its name, as written and one link deep, so
+ * a `~/.claude/projects` or a `projects` that is itself a link to `~/.ssh` passed
+ * that test and was published whole.
  */
-internal fun publishedResourceRoots(context: Context): List<String> = listOf(
+internal fun publishedResourceRoots(
+    context: Context,
+    sensitive: List<String> = sensitiveLocations(context),
+): List<String> = listOf(
     // Built-in extensions ship inside the server tree, so this is what
     // markdown preview, the notebook renderers and Simple Browser load their
     // own assets from.
@@ -85,7 +95,11 @@ internal fun publishedResourceRoots(context: Context): List<String> = listOf(
     // first load would otherwise be refused.
     Environment.getProjectsDir(context),
     Environment.getSafMirrorsDir(context),
-).mapNotNull(::canonicalOrNull)
+).mapNotNull(::canonicalOrNull).filter { root ->
+    val safe = sensitive.none { overlaps(root, it) }
+    if (!safe) Logger.w("WebViewClient", "Not published as a resource root, it overlaps a sensitive location: $root")
+    safe
+}
 
 /**
  * What the interceptor decided about one webview resource request.
