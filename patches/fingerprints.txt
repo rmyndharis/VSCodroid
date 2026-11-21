@@ -421,6 +421,9 @@
 0050 flag and count after an applied edit|out/vs/code/browser/workbench/workbench.js|this._afterAppliedEdit(
 # The test for one letter written over a reopened word of more than one unit.
 0050 one unit written over a reopened word|out/vs/code/browser/workbench/workbench.js|this._isOneUnitOverWord(
+0050 letter over the last letter of a reopened word|out/vs/code/browser/workbench/workbench.js|this._isLetterOverLastLetter(
+0050 earlier word grown by the letter|out/vs/code/browser/workbench/workbench.js|this._isGrowthOfEarlierWord(
+0050 stale letter typed at the caret|out/vs/code/browser/workbench/workbench.js|this._typeStaleLetter(
 # The restart count is kept for one version of the model and starts again when the model changes.
 0050 restart count belongs to a version of the model|out/vs/code/browser/workbench/workbench.js|this._refusalRestartsVersion
 # The wait that ends the restart count: the time of the last counted restart, compared when the next update is judged.

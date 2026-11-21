@@ -53,7 +53,7 @@
  * a quick suggestion by another.
  *
  * NEGATIVE CONTROL, measured on the 1.139.1 tree with Node 22.23.2. Against upstream's
- * files, with no patch applied, 116 of the 130 cases fail. Each of these single edits to a
+ * files, with no patch applied, 126 of the 140 cases fail. Each of these single edits to a
  * copy of a patched file fails at least one case:
  *
  *   0046  the body of the blur listener removed; the composing clause dropped from the
@@ -78,7 +78,13 @@
  *         time of a restart not taken, or taken at every update that is judged;
  *         the count started again at every cursor event; the clamp past the bound removed, or only the cut of its start; the typed
  *         flag never set, and not cleared at compositionstart; the restart after a
- *         refusal not forced; the buffer not written back at a refusal.
+ *         refusal not forced; the buffer not written back at a refusal; the call of
+ *         `_typeStaleLetter` removed, or its letter taken as the whole text of a grown word;
+ *         `_isLetterOverLastLetter` without its test for the other case, without its
+ *         guard for a composition that typed, widened to any letter or to digits;
+ *         `_isGrowthOfEarlierWord` allowed to touch the caret, or without the caret asked
+ *         after the written text; the version the count belongs to not taken over after a
+ *         stale letter.
  *   0051  `_caretUnmoved` answering false; its single-caret test removed; the count of
  *         carets not taken when the others are dropped.
  *   0052  the bounds test of `_onListTap` removed.
@@ -632,6 +638,8 @@ const page = (text, carets, options) => new Page(android, text, carets, options)
 
 // What a refusal leaves: the text and the caret as they were, no edit, one restart more.
 const refused = (text, caret, restarts = 1) => ({ text, carets: [caret], version: 1, restarts, buffer: text, bufferCaret: caret });
+// What a stale letter leaves: the letter typed at the caret as one edit, the buffer written back to it, and one restart more.
+const typedAtCaret = (text, caret, restarts = 1) => ({ text, carets: [caret], version: 2, restarts, buffer: text, bufferCaret: caret });
 // What an applied update leaves, with no restart unless said.
 const applied = (text, caret, restarts = 0) => ({ text, carets: [caret].flat(), restarts });
 
@@ -919,25 +927,25 @@ check('0050 second rule: a doubled word taken back is applied', async () => {
     return [p.state(), applied('two', 3)];
 });
 
-check('0050 fourth rule: one letter written over a reopened word is refused', async () => {
+check('0050 fourth rule: one letter written over a reopened word is typed at the caret', async () => {
     const p = page('line two', [8]);
     await p.compose();
     await p.update('x', 5, 8);
-    return [p.state(), refused('line two', 8)];
+    return [p.state(), typedAtCaret('line twox', 9)];
 });
 
 check('0050 fourth rule: the same with the caret inside the word', async () => {
     const p = page('alpha beta Charlie delta', [22]);
     await p.compose();
     await p.update('z', 19, 24);
-    return [p.state(), refused('alpha beta Charlie delta', 22)];
+    return [p.state(), typedAtCaret('alpha beta Charlie delzta', 23)];
 });
 
 check('0050 fourth rule: a letter outside the basic plane is one letter', async () => {
     const p = page('line two', [8]);
     await p.compose();
     await p.update('\u{1D431}', 5, 8);
-    return [p.state(), refused('line two', 8)];
+    return [p.state(), typedAtCaret('line two\u{1D431}', 10)];
 });
 
 check('0050 fourth rule: an emoji the strip offers for the reopened word is not a letter and is applied', async () => {
@@ -1089,11 +1097,11 @@ check('0050: a refusal leaves every cursor where it was', async () => {
     return [p.state(), { text: 'line two\nline two', carets: [8, 17], version: 1, restarts: 1 }];
 });
 
-check('0050 known limit: the letter written over one reopened letter is applied, as a Hangul step is', async () => {
+check('0050 the letter written over the last letter of a reopened word is typed at the caret', async () => {
     const p = page('line two', [8]);
     await p.compose();
     await p.update('x', 7, 8);
-    return [p.state(), applied('line twx', 8)];
+    return [p.state(), typedAtCaret('line twox', 9)];
 });
 
 // --- 0050: what follows a refusal ---
@@ -1582,11 +1590,11 @@ check('0050 a longer suggestion taken on a reopened word is applied', async () =
     await p.update('twos', 5, 8);
     return [p.state(), applied('line twos', 9)];
 });
-check('0050 one letter over a reopened word that starts with that letter is refused', async () => {
+check('0050 one letter over a reopened word that starts with that letter is typed at the caret', async () => {
     const p = page('line xyz', [8]);
     await p.compose();
     await p.update('x', 5, 8);
-    return [p.state(), refused('line xyz', 8)];
+    return [p.state(), typedAtCaret('line xyzx', 9)];
 });
 check('0050 in a composition that typed, one letter over an earlier longer range is refused', async () => {
     const p = page('line two', [8]);
@@ -1602,11 +1610,11 @@ check('0050 the one-letter-over-a-word shape with no composition open is applied
     await p.update('x', 5, 8);
     return [p.state(), applied('line x', 6)];
 });
-check('0050 one digit over a reopened word is refused', async () => {
+check('0050 one digit over a reopened word is typed at the caret', async () => {
     const p = page('line two', [8]);
     await p.compose();
     await p.update('7', 5, 8);
-    return [p.state(), refused('line two', 8)];
+    return [p.state(), typedAtCaret('line two7', 9)];
 });
 check('0050 after a typed composition has ended, the write the ninth rule refuses is applied', async () => {
     const p = page('abc line two', [12]);
@@ -1688,11 +1696,74 @@ check('0050 the tail drop of the first word of the buffer is refused', async () 
     await p.update('twz', 0, 5, 3);
     return [p.state(), refused('twzox line', 3)];
 });
-check('0050 one letter over the reopened first word of the buffer is refused', async () => {
+check('0050 one letter over the reopened first word of the buffer is typed at the caret', async () => {
     const p = page('two', [3]);
     await p.compose();
     await p.update('x', 0, 3);
-    return [p.state(), refused('two', 3)];
+    return [p.state(), typedAtCaret('twox', 4)];
+});
+check('0050 recorded on Gboard 10.8, API 31: the letter over the whole reopened word is typed at the caret', async () => {
+    const p = page('toa tob to', [10]);
+    await p.compose();
+    await p.update('c', 8, 10);
+    return [p.state(), typedAtCaret('toa tob toc', 11)];
+});
+check('0050 recorded on Gboard 10.8, API 31: the letter over the last letter of the reopened word is typed at the caret', async () => {
+    const p = page('toe to tog to', [13]);
+    await p.compose();
+    await p.update('h', 12, 13, 13);
+    return [p.state(), typedAtCaret('toe to tog toh', 14)];
+});
+check('0050 recorded on Gboard 10.8, API 31, and Gboard 12.4, API 33: an earlier word grown by the letter is typed at the caret', async () => {
+    const p = page('tob to tod to', [13]);
+    await p.compose();
+    await p.update('toe', 4, 6);
+    return [p.state(), typedAtCaret('tob to tod toe', 14)];
+});
+check('0050 a letter over the last letter in the other case is the same letter and is applied', async () => {
+    const p = page('line two', [8]);
+    await p.compose();
+    await p.update('O', 7, 8, 8);
+    return [p.state(), applied('line twO', 8)];
+});
+check('0050 a digit over the last digit of a reopened number is applied', async () => {
+    const p = page('line 21', [7]);
+    await p.compose();
+    await p.update('3', 6, 7, 7);
+    return [p.state(), applied('line 23', 7)];
+});
+check('0050 a kana over the last kana of a reopened word is applied, as a 12-key keyboard toggles one', async () => {
+    const p = page('\u3044', [1]);
+    await p.compose();
+    await p.update('\u3042', 0, 1, 1);
+    return [p.state(), applied('\u3042', 1)];
+});
+check('0050 in a composition that typed, a letter over the last letter is applied', async () => {
+    const p = page('line two', [8]);
+    await p.compose();
+    await p.update('twos', 5, 8);
+    await p.update('t', 8, 9, 9);
+    return [p.state(), applied('line twot', 9)];
+});
+check('0050 an earlier word grown by a letter with the caret moved by the growth is a completion and is applied', async () => {
+    const p = page('tob ther ', [9]);
+    await p.compose();
+    await p.update('there', 4, 8, 10);
+    return [p.state(), applied('tob there ', 10)];
+});
+check('0050 a growth of the word under the caret is typing and is applied', async () => {
+    const p = page('tob to', [6]);
+    await p.compose();
+    await p.update('toe', 4, 6);
+    return [p.state(), applied('tob toe', 7)];
+});
+check('0050 bound: six stale letters are typed for one run of refusals, and the seventh write is applied as it came', async () => {
+    const p = page('line two', [8]);
+    for (let i = 0; i < 7; i++) {
+        await p.compose();
+        await p.update('x', 5, p.state().text.length);
+    }
+    return [p.state(), { text: 'line x', carets: [6], restarts: 6 }];
 });
 check('0054 an uppercase and a titlecase final letter arm one each', async () => {
     const model = suggestModel(android, false);

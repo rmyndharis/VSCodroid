@@ -513,30 +513,51 @@ one unit ahead of the buffer is refused where it was applied. 15 of the
 40 updates are such (13 in recordings made without this patch, 2 with
 an earlier form of it), none on the later forms.
 
-What the patch does not do. After the screen turns, the next letter
-typed can be lost, or can replace the last letter of the word at the
-caret (line twx where line twox was typed); a person sees either at once
-and types the letter again, and nothing else of the text is touched. It
-happens when the keyboard has reopened the word at the caret and then
-writes the letter alone over it. Over the whole word that is the fourth
-rule's shape: the update is refused, input restarts and the letter is
-lost. Over the last letter it is one letter written over one letter with
-the caret asked right after it, which no rule refuses, because a Hangul
-or kana step has that shape: the letter replaces the last letter of the
-word. Counted in runs on an API 31 emulator with Gboard 10.8 that turn
-the screen to landscape and back and type one letter about eight seconds
-later, on builds that did not type the letter themselves, and among the
-runs in which the keyboard had a range open at that letter: 4 of 105 on
-a line reached by a tap (3.8%, one in 26; the exact 95% interval is 1.0
-to 9.5%) and 2 of 107 on a new line made with Enter under other text
-(1.9%, one in 54; the exact 95% interval is 0.2 to 6.6%), over the whole
-reopened word in 3 and over its last letter in 3. The last batch of
-those, on this patch as it is, had 2 of the 4: two of fourteen runs on a
-line reached by a tap lost the letter, and none of fourteen on a new
-line. With Gboard 12.4 on an API 33 emulator the same steps ended right
-in 30 runs of 30, twenty on the nine rules and ten on this patch as it
-is. On the test build above, which typed the letter itself, the new-line
-runs gave 5 of 43 and the runs with a tap 0 of 42.
+The letter typed after the screen turns. A keyboard that reopened the
+word at the caret goes on from a composition it kept from before the
+turn, so the next letter arrives as a write into that composition and
+not at the caret. Three such writes were recorded: the letter alone over
+the whole reopened word (x over 5..8, the caret asked at 6, the fourth
+rule's shape, which the rule refused and which lost the letter), on
+Gboard 10.8 on an API 31 emulator and, in the recordings above, on
+Gboard 12.4; the letter over the last letter of the word (x over 7..8,
+the caret kept at 8, which no rule refused and which left line twx where
+line twox was typed), on Gboard 10.8; and an earlier word with the same
+text, grown by the letter (toe over 4..6, the caret asked at 7, in a
+line holding tob to tod to with the caret at its end, which put the
+letter into the earlier word and moved the caret into it), on Gboard
+10.8 and on Gboard 12.4 on an API 33 emulator (WebView 134 on both
+emulators). In each the range and the text are those of the old
+composition and the letter is the only new part, typed at the caret by
+the person. An update of one of these shapes is now refused as before,
+the letter is typed at the caret as one edit, and input restarts, so the
+keyboard reads line twox and the caret after the x.
+
+The last two shapes are told from honest updates by what they say. The
+letter over the last letter has the caret kept, a range of one unit that
+ends at the caret, two different letters of the basic Latin alphabet and
+a composition that has typed nothing: a Hangul or kana step writes a
+letter of its own script, a letter over itself in the other case is the
+same letter, and a keyboard that cycles a letter does it in a
+composition that has typed. The earlier word's range ends before the
+caret without touching it, its text is the range's own text and one
+letter more, and the caret is asked right after the written text: a
+correction of the word before a space asks for the caret to move by the
+change in length, and the word under the caret touches it. The count of
+forced restarts goes on across the letters typed this way: six in a row,
+with nothing else typed and less than half a minute between them, are
+followed by a write that is applied as it comes. The letter typed is the
+one the keyboard wrote. In 5 of the 645 runs of the batches below it was
+not the key that was tapped, 3 of them in plain typing, which no rule
+here sees.
+
+What the patch does not do. A letter that the keyboard never sends is
+not typed: no update carried it in 3 of 212 runs without this patch and
+in 2 of 103 with it, on Gboard 10.8, and in 4 of 40 runs on Gboard 12.4
+while a second emulator ran on the host, and in none of the 70 runs on a
+quiet host, with the patch or without it. The editor has nothing to type
+then. A stale write of another shape is judged by the rules above, as
+before.
 
 Nor does the patch remember what it refused. The restart ends the
 composition, and the update that comes next is judged on its own: if the
@@ -666,6 +687,41 @@ emulator with Gboard 12.4 the turn and a letter were right in 10 runs of
 10 with it, the keyboard writing the word and the letter together each
 time.
 
+With the letter typed at the caret, the turn and one letter, typed 0.4,
+0.7, 1.0 and 1.5 s after the keyboard was back, were run on a fresh word
+of two letters, on the published server and on this patch (one
+workbench.js swapped into the same debug build); the batches with an
+earlier word and with the word alone cleared the line before each run,
+the batches on a line that grew did not. Gboard 10.8, API 31: with an
+earlier word of the same text in front of the new one (to to), 8 of 50
+runs without the patch put the letter into the earlier word and none of
+40 with it, the stale write coming in 5 of those 40 and typed at the
+caret each time; with the word alone, 0 of 42 and 0 of 30. On a line
+that grew by a word at every run, 8 of 120 runs without the patch lost
+the letter or damaged the line (the letter over the whole word in 2,
+over the last letter in 1, an earlier word in 2, a letter never sent in
+1, and 2 after the line was already damaged) and none of 33 with it was
+damaged (one letter was never sent), the three shapes coming once each
+and typed at the caret. Gboard 12.4, API 33: with the earlier word, 4 of
+40 runs without the patch put the letter into it; with the patch none of
+40 on a quiet host (no stale write came in that batch) and none of 40 on
+a host running a second emulator, where the stale write came in 7 and
+was typed at the caret; with the word alone, 0 of 30 without it and 0 of
+60 with it.
+
+The honest neighbours, on the build with this patch and the one after it
+(0054): five runs each of seven sequences, with the line cleared before
+each, on Gboard 12.4, API 33, and on Gboard 10.8, API 31. A sentence
+typed (hello world); a Backspace at the end of a word; two Backspaces; a
+letter typed inside a word after the caret was moved with two Left keys
+(helxlo); a word typed, the screen turned and two letters typed
+(wordst); and, which tested nothing, teh and Space, and i and Space,
+because the keyboard offered no correction in the editor and the text
+stayed as typed. All 70 runs ended with the text expected. Not run on a
+device: a one-letter pick from the strip over a reopened word, a
+correction on Space that the keyboard makes, a Korean or a Japanese
+keyboard.
+
 Other keyboards, on the nine rules: on the API 33 emulator with Gboard
 12.4, which composes English words, twenty runs of the turn and a letter
 were right, and fifteen runs of the rules' honest neighbours were right
@@ -677,7 +733,7 @@ and Japanese lines typed, converted and turned came out as typed in 224
 updates with no refusal.
 
 diff --git a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
-index babfbb09..a7e0ec2a 100644
+index babfbb09..49f78cc4 100644
 --- a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
 +++ b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
 @@ -87,9 +87,22 @@ export class NativeEditContext extends AbstractEditContext {
@@ -747,7 +803,7 @@ index babfbb09..a7e0ec2a 100644
  			this._focusTracker.pause();
  			domNode.blur();
  			domNode.focus();
-@@ -544,6 +569,56 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -544,6 +569,60 @@ export class NativeEditContext extends AbstractEditContext {
  		}
  		const selectionEndOffset = this._previousEditContextSelection.endExclusive;
  		const selectionStartOffset = this._previousEditContextSelection.start;
@@ -764,7 +820,8 @@ index babfbb09..a7e0ec2a 100644
 +		// update: six restarts forced by different updates, under different rules, spend it as six forced by the same update do. Refusals that go on leave the person with input
 +		// that does nothing until something else is typed, so the update is passed, as the editor without this patch passes it, and the count starts again when the model's version moves
 +		// or half a minute passes with no forced restart.
-+		if (this._refusalRestarts < 6 && (this._isBeyondBuffer(e) || this._isRememberedWordRewrite(e, selectionStartOffset, selectionEndOffset) || this._isTailDropOnReopen(e, selectionStartOffset, selectionEndOffset) ||
++		const staleLetter = this._refusalRestarts < 6 ? this._staleLetter(e, selectionStartOffset, selectionEndOffset) : undefined;
++		if (this._refusalRestarts < 6 && (staleLetter !== undefined || this._isBeyondBuffer(e) || this._isRememberedWordRewrite(e, selectionStartOffset, selectionEndOffset) || this._isTailDropOnReopen(e, selectionStartOffset, selectionEndOffset) ||
 +			this._isOneUnitOverWord(e, selectionStartOffset, selectionEndOffset) ||
 +			this._isStaleWriteAfterCaret(e, selectionStartOffset, selectionEndOffset) || this._isGrowthAfterCaret(e, selectionStartOffset, selectionEndOffset) ||
 +			this._isUntypedWriteKeepingCaret(e, selectionStartOffset, selectionEndOffset) ||
@@ -787,6 +844,9 @@ index babfbb09..a7e0ec2a 100644
 +				this._applyingInputMethodEdit = applyingInput;
 +			}
 +			this._restartInputIfUnheard(oldText, this._previousEditContextSelection, true, true);
++			if (staleLetter !== undefined) {
++				this._typeStaleLetter(viewController, staleLetter);
++			}
 +			return;
 +		}
 +		// Past the bound an update that names text beyond the buffer is applied as far as the buffer goes: its range is cut at the end of the buffer, so the typed edit below replaces no unit that the buffer does not hold. The start
@@ -804,7 +864,7 @@ index babfbb09..a7e0ec2a 100644
  		this._previousEditContextSelection = new OffsetRange(e.selectionStart, e.selectionEnd);
  
  		// With several cursors, an update that reaches outside the primary selection is about the
-@@ -570,6 +645,7 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -570,6 +649,7 @@ export class NativeEditContext extends AbstractEditContext {
  				this._expectedCaretOffset = e.selectionStart;
  				this._onType(viewController, input);
  				this._expectedCaretOffset = undefined;
@@ -812,7 +872,7 @@ index babfbb09..a7e0ec2a 100644
  				return;
  			}
  			this._dismissOtherCursors();
-@@ -633,6 +709,174 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -633,6 +713,226 @@ export class NativeEditContext extends AbstractEditContext {
  		this._expectedCaretOffset = e.selectionStart === e.selectionEnd ? e.selectionStart : undefined;
  		this._onType(viewController, typeInput);
  		this._expectedCaretOffset = undefined;
@@ -882,6 +942,58 @@ index babfbb09..a7e0ec2a 100644
 +		}
 +		const old = this._previousEditContextText.slice(e.updateRangeStart, e.updateRangeEnd);
 +		return !(Array.from(old).length === Array.from(e.text).length + 1 && old.startsWith(e.text));
++	}
++
++	// The letter a person typed, when the update the keyboard sent for it is one of the stale writes that carry one: written over the whole word it reopened
++	// (_isOneUnitOverWord), over the last letter of it (_isLetterOverLastLetter), or onto an earlier word that it grew by that letter (_isGrowthOfEarlierWord). The range
++	// and the text the keyboard wrote are from a composition it kept from before the turn, and the letter is the only part of the update that is new: it is typed at the
++	// caret, where the person typed it, and the update is refused as it was, so that the keyboard reads the text again.
++	private _staleLetter(e: ITextUpdateEvent, selectionStartOffset: number, selectionEndOffset: number): string | undefined {
++		if (this._isOneUnitOverWord(e, selectionStartOffset, selectionEndOffset) || this._isLetterOverLastLetter(e, selectionStartOffset, selectionEndOffset)) {
++			return e.text;
++		}
++		return this._isGrowthOfEarlierWord(e, selectionStartOffset, selectionEndOffset) ? e.text.slice(this._previousEditContextText.slice(e.updateRangeStart, e.updateRangeEnd).length) : undefined;
++	}
++
++	// The letter is typed with the model's version as the only witness: an editor that discards the edit (a read-only one) leaves the composition as untyped as it was. The
++	// restart bound keeps its count: the version it belongs to moves with the letter and is taken over here, where _afterAppliedEdit would start the count again, so a keyboard
++	// that sends the same stale write after every restart is typed at six times and then passed, as one that is refused is.
++	private _typeStaleLetter(viewController: ViewController, letter: string): void {
++		const versionBefore = this._context.viewModel.model.getVersionId();
++		this._onType(viewController, { text: letter, replacePrevCharCnt: 0, replaceNextCharCnt: 0, positionDelta: 0 });
++		const versionAfter = this._context.viewModel.model.getVersionId();
++		if (versionAfter !== versionBefore) {
++			this._compositionTyped = true;
++			this._refusalRestartsVersion = versionAfter;
++		}
++	}
++
++	// A letter of the basic Latin alphabet written over the last letter before the caret, a different letter, with the caret asked to stay where it was, as the first update of a
++	// composition that has typed nothing: Gboard 10.8 reopened only the last letter of line two (the range 7..8) and wrote the next letter typed, x, over it, and the line became twx. A
++	// keyboard that cycles a letter does it in a composition that has typed, a kana toggled by a 12-key keyboard is not a basic Latin letter, and a letter written over itself in the
++	// other case is the same letter.
++	private _isLetterOverLastLetter(e: ITextUpdateEvent, selectionStartOffset: number, selectionEndOffset: number): boolean {
++		if (!isAndroid || !this._compositionOpen || this._compositionTyped || selectionStartOffset !== selectionEndOffset ||
++			e.selectionStart !== selectionStartOffset || e.selectionEnd !== selectionStartOffset ||
++			e.updateRangeEnd !== selectionStartOffset || e.updateRangeStart !== selectionStartOffset - 1 || selectionStartOffset > this._previousEditContextText.length) {
++			return false;
++		}
++		const old = this._previousEditContextText.slice(e.updateRangeStart, e.updateRangeEnd);
++		return /^[A-Za-z]$/.test(e.text) && /^[A-Za-z]$/.test(old) && e.text.toLowerCase() !== old.toLowerCase();
++	}
++
++	// A word BEFORE the caret that the keyboard grew by one letter and asked the caret to follow: it kept the composition of an earlier word with the same text (the line holds
++	// tob to tod to with the caret at its end, and the keyboard wrote toe over 4..6 with the caret asked at 7, which put the letter into the earlier word and moved the caret
++	// into it). The range ends before the caret and does not touch it, which no honest update does with the caret moved to its own end: a correction of the word before a space
++	// asks for the caret to move by the change in length, and the word under the caret touches it. Judged only as the first update of a composition that has typed nothing.
++	private _isGrowthOfEarlierWord(e: ITextUpdateEvent, selectionStartOffset: number, selectionEndOffset: number): boolean {
++		if (!isAndroid || !this._compositionOpen || this._compositionTyped || selectionStartOffset !== selectionEndOffset || e.selectionStart !== e.selectionEnd ||
++			!(e.updateRangeStart >= 0 && e.updateRangeStart < e.updateRangeEnd && e.updateRangeEnd < selectionStartOffset && selectionStartOffset <= this._previousEditContextText.length)) {
++			return false;
++		}
++		const old = this._previousEditContextText.slice(e.updateRangeStart, e.updateRangeEnd);
++		return Array.from(e.text).length === Array.from(old).length + 1 && e.text.startsWith(old) && this._isOneLetter(e.text.slice(old.length)) &&
++			e.selectionStart === e.updateRangeStart + e.text.length;
 +	}
 +
 +	// Whether the text is one letter or digit of an alphabet: one code point (an emoji or another character outside the basic plane is one, though it is two units long), and
@@ -987,7 +1099,7 @@ index babfbb09..a7e0ec2a 100644
  	}
  
  	// Whether the update changes no text. It replaces nothing with nothing, or its text is the cached
-@@ -755,6 +999,15 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -755,6 +1055,15 @@ export class NativeEditContext extends AbstractEditContext {
  		this._applyingInputMethodEdit = false;
  	}
  

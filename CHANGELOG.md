@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A file made in a device folder that is still empty, whose creation was cut short when the app was killed, is sent at the next open instead of waiting for another file to appear there.
 - A Backspace on a word of two letters from outside the Basic Multilingual Plane, such as Adlam or Osage, that a keyboard reopened is applied at once instead of being refused six times first.
 - The editor's limit of six refused keyboard writes starts again after half a minute without one, so refusals at separate moments no longer add up until a stale write is applied and doubles a word.
+- After the screen is turned, the first letter typed on a keyboard that underlines words, such as Gboard 10.8, is typed at the caret instead of being lost, replacing the last letter of the word, or going into an earlier word with the same text.
 - Suggestions appear while a word is typed on a keyboard that underlines it, such as Gboard; they used to wait until the keyboard was put away or the editor was tapped.
 - Clear Caches no longer unlinks the sockets in the editor's temporary directory, so git sign-in prompts and the `vscodroid` command keep working until the next restart.
 - The first-run toolchain picker is marked answered when the downloads it started have ended, so a start that ends in the middle of them shows it again instead of dropping the packs not yet fetched, and a screen made again while they run does not ask a second time.
