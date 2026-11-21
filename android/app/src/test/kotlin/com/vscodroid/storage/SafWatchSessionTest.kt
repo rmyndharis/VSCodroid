@@ -240,4 +240,19 @@ class SafWatchSessionTest {
         assertNotSame(closing, engine.session, "the next folder reuses the closed folder's session")
         assertTrue(engine.session.queue.isEmpty(), "the next folder starts holding old jobs")
     }
+
+    /**
+     * A stop with no drain left to send them clears the queued saves, and the file then stays inside the
+     * app until the folder is opened again. Said only in the log, so the editor showed it as saved.
+     */
+    @Test
+    fun `a save a stop clears from the queue is announced`() {
+        val announced = mutableListOf<String>()
+        engine.onWriteBackFailed = { announced += it.name }
+        engine.session.queue.offer(saveOf("unsent.txt"))
+
+        engine.stopWatching()
+
+        assertEquals(listOf("unsent.txt"), announced)
+    }
 }
