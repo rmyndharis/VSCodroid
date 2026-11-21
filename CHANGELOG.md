@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The Codex toolchain card quotes a 146 MB download, up from 134 MB, which is what its pack weighs.
+- The release build refuses a toolchain ZIP that is larger than the download size the card quotes for it.
+
 ## [1.10.0] - 2026-11-21
 
 ### Added

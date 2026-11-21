@@ -23,7 +23,7 @@ set -euo pipefail
 #   toolchain-zips/toolchain_ruby.zip  (~11 MB)
 #   toolchain-zips/toolchain_java.zip  (~69 MB)
 #   toolchain-zips/toolchain_cpp.zip   (~79 MB)
-#   toolchain-zips/toolchain_codex.zip (~134 MB)
+#   toolchain-zips/toolchain_codex.zip (~146 MB)
 #
 # The ZIPs are intended to be attached to GitHub Releases so that sideloaded
 # APK users (not from Play Store) can download toolchains manually. The app's
@@ -65,6 +65,19 @@ fi
 
 get_assets_dir() {
     echo "$ROOT_DIR/android/toolchain_$1/src/main/assets"
+}
+
+# A figure ToolchainRegistry.kt records for a pack, digits only, or nothing when it
+# records none. Both size gates below read the registry through this, so they cannot
+# come to read it differently.
+recorded_figure() {
+    python3 -c "
+import re, sys
+src = open(sys.argv[1]).read()
+m = re.search(r'packName\s*=\s*\"toolchain_%s\".*?%s\s*=\s*([0-9_]+)' % (sys.argv[2], sys.argv[3]),
+              src, re.S)
+print(m.group(1).replace('_', '') if m else '')
+" "$REGISTRY" "$2" "$1"
 }
 
 # --- Parse arguments ---
@@ -202,13 +215,7 @@ root = sys.argv[1]
 print(sum(-(-os.path.getsize(os.path.join(d, f)) // 4096) * 4096
           for d, _, fs in os.walk(root) for f in fs))
 " "$usr_dir")
-        recorded=$(python3 -c "
-import re, sys
-src = open(sys.argv[1]).read()
-m = re.search(r'packName\s*=\s*\"toolchain_%s\".*?estimatedSize\s*=\s*([0-9_]+)' % sys.argv[2],
-              src, re.S)
-print(m.group(1).replace('_', '') if m else '')
-" "$REGISTRY" "$tc")
+        recorded=$(recorded_figure estimatedSize "$tc")
         if [ -z "$recorded" ]; then
             echo "  ERROR: ToolchainRegistry.kt records no estimatedSize for toolchain_$tc" >&2
             exit 1
@@ -241,6 +248,32 @@ print(m.group(1).replace('_', '') if m else '')
     PACKAGED=$((PACKAGED + 1))
 
     echo "  Output: toolchain_$tc.zip (${zip_mb} MB)"
+
+    # The recorded download size is the other figure the card quotes, to a person
+    # deciding whether to fetch this over mobile data, so the same direction costs
+    # them: a figure below the ZIP says it is smaller than it is. Nothing compared it
+    # with the ZIP, and Codex's said 134 MB for a ZIP of 145.5 MB when 1.10.0 shipped.
+    # Decimal bytes, which is what the card formats. A ZIP this refuses is removed, so
+    # it cannot be attached to a release by hand.
+    if command -v python3 > /dev/null 2>&1; then
+        recorded_download=$(recorded_figure downloadSize "$tc")
+        if [ -z "$recorded_download" ]; then
+            echo "  ERROR: ToolchainRegistry.kt records no downloadSize for toolchain_$tc" >&2
+            rm -f "$zip_file"
+            exit 1
+        fi
+        echo "  Download: $zip_bytes bytes (recorded $recorded_download)"
+        if [ "$zip_bytes" -gt "$recorded_download" ]; then
+            echo "  ERROR: the ZIP is larger than the downloadSize ToolchainRegistry.kt" >&2
+            echo "         records for it. The card quotes that figure to a person deciding" >&2
+            echo "         whether to download it over mobile data, so it must not be below" >&2
+            echo "         what ships. Raise it to at least $zip_bytes." >&2
+            rm -f "$zip_file"
+            exit 1
+        fi
+    else
+        echo "  WARNING: python3 not found, so downloadSize was NOT checked against the ZIP"
+    fi
     echo ""
 done
 

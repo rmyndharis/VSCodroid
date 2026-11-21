@@ -1062,6 +1062,50 @@ esac
                 else:
                     self.assertIn(message, result["stderr"], result)
 
+    def test_toolchain_zip_is_held_to_the_sizes_the_registry_records(self):
+        """The card quotes both figures, and a figure below what ships costs the person choosing."""
+        registry = (
+            "ToolchainInfo(\n"
+            "    packName = \"toolchain_ruby\",\n"
+            "    estimatedSize = %s,\n"
+            "    downloadSize = %s,\n"
+            ")\n"
+        )
+
+        def package(estimated, download):
+            with tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                script = root / "scripts" / "package-toolchains.sh"
+                script.parent.mkdir()
+                shutil.copy(SOURCE / "scripts" / "package-toolchains.sh", script)
+                write(root / "android/app/src/main/kotlin/com/vscodroid/setup/ToolchainRegistry.kt",
+                      registry % (estimated, download))
+                assets = root / "android" / "toolchain_ruby" / "src" / "main" / "assets"
+                write(assets / "toolchain_ruby.json", '{"version": "1"}')
+                (assets / "usr" / "lib").mkdir(parents=True)
+                (assets / "usr" / "lib" / "blob").write_bytes(os.urandom(300_000))
+                result = run(["bash", str(script), "ruby"], root)
+                result["zip"] = (root / "toolchain-zips" / "toolchain_ruby.zip").exists()
+                return result
+
+        within = package("1_000_000", "1_000_000")
+        self.assertEqual(within["status"], 0, within)
+        self.assertTrue(within["zip"])
+        self.assertIn("Download:", within["stdout"])
+
+        small_zip = package("1_000_000", "1_000")
+        self.assertEqual(small_zip["status"], 1, small_zip)
+        self.assertIn("downloadSize", small_zip["stderr"])
+        self.assertFalse(small_zip["zip"], "a ZIP the gate refused was left to be attached to a release")
+
+        small_tree = package("1_000", "1_000_000")
+        self.assertEqual(small_tree["status"], 1, small_tree)
+        self.assertIn("estimatedSize", small_tree["stderr"])
+
+        unrecorded = package("1_000_000", "oops")
+        self.assertEqual(unrecorded["status"], 1, unrecorded)
+        self.assertIn("records no downloadSize", unrecorded["stderr"])
+
     def test_site_live_data_holds_only_what_was_checked(self):
         source = SOURCE / "scripts/fetch-site-live.py"
         module = types.ModuleType("fixture_site_live")
