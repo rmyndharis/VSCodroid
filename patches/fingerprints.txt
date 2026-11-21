@@ -424,16 +424,22 @@
 0050 letter over the last letter of a reopened word|out/vs/code/browser/workbench/workbench.js|this._isLetterOverLastLetter(
 0050 earlier word grown by the letter|out/vs/code/browser/workbench/workbench.js|this._isGrowthOfEarlierWord(
 0050 stale letter typed at the caret|out/vs/code/browser/workbench/workbench.js|this._typeStaleLetter(
+# The range of the last stale letter typed at the caret, kept with the version of the model and the caret the letter left, so that the next letter sent over it is typed at the caret too.
+0050 range of a stale letter kept for the next letter|out/vs/code/browser/workbench/workbench.js|this._staleLetterRange
+# The primary selection the letter left, kept with that range: once the caret has moved, the same offsets can name another word or another line, and the range is not read.
+0050 range of a stale letter kept with the caret the letter left|out/vs/code/browser/workbench/workbench.js|selection: this._primarySelection, start:
+# A Backspace on a word of two letters writes the first letter over both: a deletion, passed by the test of one unit over a word and not taken for the next letter over the range of a stale letter.
+0050 Backspace on two letters, where both tests read it|out/vs/code/browser/workbench/workbench.js x2|.text).length + 1 &&
+# The test for a keyboard taking back a correction the editor applied for it, which has the shape of a stale letter and is not one.
+0050 correction taken back|out/vs/code/browser/workbench/workbench.js|this._takesBackReplacement(
+# The letter over the last letter is told from the one it replaces by its base letter: the letter without the accents that NFD takes off, case aside, judged only when it is basic Latin.
+0050 base letters without their accents|out/vs/code/browser/workbench/workbench.js|.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
 # The restart count is kept for one version of the model and starts again when the model changes.
 0050 restart count belongs to a version of the model|out/vs/code/browser/workbench/workbench.js|this._refusalRestartsVersion
 # The wait that ends the restart count: the time of the last counted restart, compared when the next update is judged.
 0050 restart count ends after a wait|out/vs/code/browser/workbench/workbench.js|performance.now() - this._refusalRestartsAt
 # The letter test: one letter or digit of an alphabet, counted in code points.
 0050 one letter of an alphabet|out/vs/code/browser/workbench/workbench.js|this._isOneLetter(
-# The test for a remembered word written over text that lies wholly after the caret while the caret is asked to stay.
-0050 stale write over text after the caret|out/vs/code/browser/workbench/workbench.js|this._isStaleWriteAfterCaret(
-# The test for the range's own text written back with units added at its end while the caret is asked to stay at that end.
-0050 growth of the range's text after the caret|out/vs/code/browser/workbench/workbench.js|this._isGrowthAfterCaret(
 # The test for an update that replaces text with a text that is not the range's own and asks for the caret to stay where it was, which is not the end of what it writes, with nothing typed in the composition.
 0050 untyped write keeping the caret|out/vs/code/browser/workbench/workbench.js|this._isUntypedWriteKeepingCaret(
 # The test for an update that inserts text at the caret, in a composition that has typed nothing, and asks for the caret to stay where it was, which is before the text it inserts.
