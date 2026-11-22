@@ -1551,7 +1551,9 @@ class FirstRunSetup(
      */
     fun setupGitCore() {
         val config = File(context.filesDir, "usr/etc/gitconfig")
-        if (!config.exists() || config.length() == 0L) {
+        // A file of NULs counts as empty (see isLeftBlank): git refuses a config it cannot parse, so every git
+        // command failed. Whitespace does not: git reads it as a config with nothing in it, which may be chosen.
+        if (!config.exists() || runCatching { config.readText().all { it == '\u0000' } }.getOrDefault(false)) {
             config.parentFile?.mkdirs()
             writeAtomically(config, { Logger.w(tag, it) }) { out ->
                 out.write("[core]\n\tpager = cat\n".toByteArray())
@@ -1951,8 +1953,14 @@ class FirstRunSetup(
             // is what GIT_SSH_COMMAND passes with -F, and without its absolute
             // IdentityFile and UserKnownHostsFile the Termux ssh resolves ~ to
             // its own compiled-in prefix, which is not a path this app can read.
-            if (!writeAtomically(sshConfig) { it.write(content.toByteArray()) }) {
-                throw IOException("could not write $sshConfig")
+            // Through a link, as createBashrc writes: a config kept in a dotfiles
+            // folder and linked here was replaced by a copy, which ssh then read
+            // while the person's own file came back beside it unread.
+            if (!writeAtomically(sshConfig, throughLink = true) { it.write(content.toByteArray()) }) {
+                // Not thrown for a link into a folder that has gone, for the reason createBashrc gives.
+                if (!Files.isSymbolicLink(sshConfig.toPath())) throw IOException("could not write $sshConfig")
+                Logger.w(tag, linkedFileUnwritten(sshConfig))
+                return
             }
             try {
                 Os.chmod(sshConfig.absolutePath, 384) // 0600
@@ -2223,16 +2231,17 @@ class FirstRunSetup(
      * the repair. A file is only cleared on evidence that cannot be a choice
      * someone made:
      *
-     *  - empty. Nobody means to have a zero-byte `.bashrc` or `settings.json`,
-     *    and it is the shape an ENOSPC most often leaves.
+     *  - empty, or nothing but NUL bytes and whitespace. Nobody means to have a
+     *    zero-byte `.bashrc` or `settings.json`, and it is the shape an ENOSPC
+     *    most often leaves; the NULs are what a power loss leaves on f2fs, the
+     *    file's length with none of its text.
      *  - a `.bashrc` that still opens with the header this app writes but has
      *    lost the `PROJECTS_DIR` export that always followed it. Someone
      *    replacing our file writes their own; someone editing it does not
      *    usually keep our first line and delete our third. Text after the
      *    header is kept aside first. When `.bashrc` is a link, the file it
      *    names is kept elsewhere and may be read by other machines, so it is
-     *    rewritten only when it is the header alone or every byte of it is the
-     *    start of what this app writes.
+     *    rewritten only when it is the header alone.
      *
      * A partial file that is neither -- one that got far enough to look
      * plausible -- is left alone, and that is deliberate. It cannot be told
@@ -2313,7 +2322,7 @@ class FirstRunSetup(
             // and a decoder turns every byte that is not UTF-8 into U+FFFD.
             val bytes = runCatching { bashrc.readBytes() }.getOrNull()
             val text = bytes?.let { String(it, Charsets.UTF_8) }
-            val emptied = text != null && text.isBlank()
+            val emptied = text != null && isLeftBlank(text)
             val headerWithoutBody = text != null &&
                 text.startsWith(BASHRC_HEADER) &&
                 !text.contains("export PROJECTS_DIR")
@@ -2321,12 +2330,8 @@ class FirstRunSetup(
             // person's own or a longer cut, and the header proves nothing about it.
             val beyondHeader = headerWithoutBody && text.orEmpty().removePrefix(BASHRC_HEADER).isNotBlank()
             // And a link is the file they keep elsewhere, often in a repository other machines read:
-            // the rewrite would put this device's paths into what the link names. Left as it is, unless
-            // every byte of it is the start of what this app writes: that is a copy of ours cut short,
-            // which an older release writing through the link left on a full disk, and nothing of the
-            // person's is in it. It is kept aside below like any text after the header.
-            val theirs = beyondHeader && Files.isSymbolicLink(bashrc.toPath()) &&
-                !isStartOf(bytes ?: ByteArray(0), bashrcText().toByteArray())
+            // the rewrite would put this device's paths into what the link names. Left as it is.
+            val theirs = beyondHeader && Files.isSymbolicLink(bashrc.toPath())
             if ((emptied || headerWithoutBody) && !theirs) {
                 // Written OVER, never deleted first. Deleting is what satisfied
                 // createBashrc's `!exists()` guard, and it is also what let this
@@ -2424,7 +2429,7 @@ class FirstRunSetup(
 
         val settings = File(Environment.getMachineSettingsPath(context))
         val linkedSettingsGone = Files.isSymbolicLink(settings.toPath()) && !settings.exists()
-        if (settings.isFile && settings.length() == 0L) {
+        if (settings.isFile && runCatching { isLeftBlank(settings.readText()) }.getOrDefault(false)) {
             // Replaced rather than deleted and rewritten, for the reason above.
             // Deleting a zero-byte file frees nothing, so the disk that emptied
             // it is still full when the rewrite runs.
@@ -2973,15 +2978,15 @@ __vscodroid_pip_explain() {
             null
         }
         if (existing == content) return
-        // Blank is ours: it is what a first write cut short by power loss leaves,
-        // as zero bytes or, on f2fs, as NULs.
-        val blank = existing != null && existing.all { it == '\u0000' || it.isWhitespace() }
+        // Blank is ours, as it is for .bashrc and settings.json.
+        val blank = existing != null && isLeftBlank(existing)
         if (existing != null && !blank && !existing.startsWith(PIP_CONF_HEADER)) {
             Logger.i(tag, "Left ${conf.path} alone: it was not written by this app")
             return
         }
         conf.parentFile?.mkdirs()
-        if (writeAtomically(conf) { it.write(content.toByteArray()) }) {
+        // Through a link, as every file here a person may keep elsewhere is written.
+        if (writeAtomically(conf, throughLink = true) { it.write(content.toByteArray()) }) {
             Logger.i(tag, "Pointed pip at the wheelhouse")
         } else {
             Logger.w(tag, "Could not write pip.conf; pip keeps whatever it had")
@@ -3161,6 +3166,16 @@ claude() {
         migrateSettingsToMachinePath()
 
         val settingsFile = File(Environment.getMachineSettingsPath(context))
+        // Read, decided and written under the lock its write takes, as the
+        // withdrawal of a restored engine consent is. This runs beside setup
+        // and outside its lock, and a withdrawal that landed between the read
+        // and the write here was undone by it, for good: nothing withdraws a
+        // consent again once setup has completed.
+        holdingWriteLock(settingsFile) { refreshSettings(settingsFile) }
+    }
+
+    /** The body of [updateSettingsNativeLibPaths], run under the lock on [settingsFile]. */
+    private fun refreshSettings(settingsFile: File) {
         if (!settingsFile.exists()) return
 
         // Two passes over one document, written once. They are separate
@@ -3488,7 +3503,7 @@ claude() {
         return writeAtomically(bashrc, throughLink = true) { it.write(text) }
     }
 
-    /** What [writeBashrc] writes, which [repairTruncatedSetupFiles] also reads a cut-short copy against. */
+    /** What [writeBashrc] writes. */
     private fun bashrcText(): String {
         val projectsDir = Environment.getProjectsDir(context)
         val safMirrorsDir = Environment.getSafMirrorsDir(context)
@@ -3524,9 +3539,12 @@ claude() {
             // npm/npx/claude while the editor's own terminals (non-login) and
             // `bash -c` (BASH_ENV) are unaffected. Throwing reaches
             // runSetupLocked's catch, and the Retry it offers then starts from
-            // an absent file rather than a truncated one.
-            if (!writeAtomically(bashProfile) { it.write(content.toByteArray()) }) {
-                throw IOException("could not write $bashProfile")
+            // an absent file rather than a truncated one. Through a link, as
+            // createBashrc writes, and not thrown for one into a folder that has
+            // gone, for the reason it gives.
+            if (!writeAtomically(bashProfile, throughLink = true) { it.write(content.toByteArray()) }) {
+                if (!Files.isSymbolicLink(bashProfile.toPath())) throw IOException("could not write $bashProfile")
+                Logger.w(tag, linkedFileUnwritten(bashProfile))
             }
         }
     }
@@ -3548,8 +3566,9 @@ claude() {
             // .bash_profile beside it: what is lost is the mouse, the colours
             // and the scrollback, and tmux starts perfectly well without them,
             // so failing the whole unpack over five options would cost the user
-            // more than the options are worth.
-            if (!writeAtomically(tmuxConf) { it.write(content.toByteArray()) }) {
+            // more than the options are worth. Through a link, as createBashrc
+            // writes, so one to a file kept elsewhere stays a link.
+            if (!writeAtomically(tmuxConf, throughLink = true) { it.write(content.toByteArray()) }) {
                 Logger.w(tag, "Could not write $tmuxConf; tmux will run with its own defaults")
             }
         }
@@ -3605,12 +3624,16 @@ claude() {
      */
     internal fun withdrawRestoredEngineConsent() {
         val settingsFile = File(Environment.getMachineSettingsPath(context))
-        if (!settingsFile.exists()) return
-        val updated = withEngineConsentWithdrawn(settingsFile.readText()) ?: return
-        if (!writeAtomically(settingsFile, throughLink = true) { it.write(updated.toByteArray()) }) {
-            throw IOException("could not write $settingsFile")
+        // From the read to the write under the lock [updateSettingsNativeLibPaths] holds, so a
+        // refresh from a second launch cannot write back what it read before this.
+        holdingWriteLock(settingsFile) {
+            if (!settingsFile.exists()) return@holdingWriteLock
+            val updated = withEngineConsentWithdrawn(settingsFile.readText()) ?: return@holdingWriteLock
+            if (!writeAtomically(settingsFile, throughLink = true) { it.write(updated.toByteArray()) }) {
+                throw IOException("could not write $settingsFile")
+            }
+            Logger.i(tag, "Turned the Antigravity engine off in settings restored from another phone")
         }
-        Logger.i(tag, "Turned the Antigravity engine off in settings restored from another phone")
     }
 
     /**
@@ -5227,6 +5250,10 @@ private const val LINKED_BASHRC_UNWRITTEN =
     "Could not write the file a .bashrc link names, and left the link as it is; " +
         "the terminal starts without this app's setup until that file can be written"
 
+/** Said when setup cannot write the file a link at [link] names; the link is left as it is (see linkTarget). */
+private fun linkedFileUnwritten(link: File) =
+    "Could not write the file the ${link.name} link names, and left the link as it is"
+
 /** Said when the file a settings.json link names cannot be written, which leaves the editor without this app's settings. */
 private const val LINKED_SETTINGS_UNWRITTEN =
     "Could not write the file a settings.json link names, and left the link as it is; " +
@@ -6060,9 +6087,12 @@ internal fun isSymlink(file: File): Boolean =
  */
 internal fun isSymlinkMode(stMode: Int): Boolean = (stMode and 0xF000) == 0xA000
 
-/** Whether [prefix] is all of [whole] up to its own length, and shorter than it. */
-private fun isStartOf(prefix: ByteArray, whole: ByteArray): Boolean =
-    prefix.size < whole.size && whole.copyOf(prefix.size).contentEquals(prefix)
+/**
+ * Whether [text] holds nothing but NULs and whitespace: what a first write cut short leaves, as zero bytes, or on
+ * f2fs after a power loss as the file's length in NULs. Neither is a file anyone wrote, and a NUL is not whitespace,
+ * so `isBlank` let the second stand for good.
+ */
+private fun isLeftBlank(text: String): Boolean = text.all { it == '\u0000' || it.isWhitespace() }
 
 /**
  * Writes [dest] through a temporary file, so a failure leaves no partial file
@@ -7132,8 +7162,7 @@ private fun jsonStringEnd(text: String, start: Int): Int {
  * string of any length or a deep nesting costs time and never an `Error` out of setup.
  */
 internal fun withEngineConsentWithdrawn(content: String): String? {
-    val bom = if (content.startsWith('\uFEFF')) 1 else 0
-    val brace = rootBraceIndex(content.substring(bom)).takeIf { it >= 0 }?.plus(bom) ?: return null
+    val brace = rootBraceIndex(content).takeIf { it >= 0 } ?: return null
     val masked = commentsBlanked(content)
     val values = mutableListOf<Int>()
     val keys = ArrayList<String?>() // the key each open container sits under, null for the root
@@ -7360,9 +7389,12 @@ private fun objectEnd(scan: String, open: Int): Int {
  * exactly those two is the whole scan. Anything else means this is not a shape
  * this app wrote or understands, and -1 leaves it untouched rather than guessing:
  * declining to add a setting costs one default, and guessing wrong costs the file.
+ * A byte order mark at the very start is stepped over too, as platform-fix.js
+ * reads the file: an editor that saves with one left a settings file that got
+ * none of the settings this app adds, the Claude launcher among them.
  */
 private fun rootBraceIndex(content: String): Int {
-    var i = 0
+    var i = if (content.startsWith('\uFEFF')) 1 else 0
     while (i < content.length) {
         val c = content[i]
         when {

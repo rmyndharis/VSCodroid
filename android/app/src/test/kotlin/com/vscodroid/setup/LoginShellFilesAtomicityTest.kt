@@ -248,4 +248,51 @@ class LoginShellFilesAtomicityTest {
 
         assertEquals("user project instructions", welcome.readText())
     }
+
+    /** The three setup files and the name each one's file has in a dotfiles folder. */
+    private fun linkedFiles() = mapOf(bashProfile to "bash_profile", tmuxConf to "tmux.conf", sshConfig to "ssh_config")
+
+    /**
+     * A person who keeps these files in a dotfiles folder links them into the home directory, and a link
+     * whose file has gone (a branch checked out without it) reads as absent, so setup writes it. The app's
+     * text goes where the link points and the link stays: the rename used to land on the link and replace
+     * it with a copy, which ssh, tmux and every login shell then read while the person's own file came
+     * back beside it unread.
+     */
+    @Test
+    fun `setup's files are written where a link to nothing points and the links stay`() {
+        val dotfiles = File(filesDir, "projects/dotfiles").apply { mkdirs() }
+        assertTrue(sshConfig.parentFile!!.mkdirs(), "could not stage the .ssh directory")
+        for ((link, name) in linkedFiles()) Files.createSymbolicLink(link.toPath(), File(dotfiles, name).toPath())
+
+        for (writer in listOf("createBashProfile", "createTmuxConf", "setupSshDefaults")) invoke(writer)
+
+        for (link in linkedFiles().keys) {
+            assertTrue(Files.isSymbolicLink(link.toPath()), "${link.name} was replaced by a copy")
+        }
+        assertTrue(File(dotfiles, "bash_profile").readText().contains(". \"\$HOME/.bashrc\""))
+        assertTrue(File(dotfiles, "tmux.conf").readText().contains("set -g mouse on"))
+        assertTrue(
+            File(dotfiles, "ssh_config").readText().contains("IdentityFile ${filesDir.absolutePath}/home/.ssh/id_ed25519"),
+        )
+    }
+
+    /**
+     * The same links once the folder they point into has gone too. Making that folder again would undo a
+     * move the person made, so nothing is written and the links stay, and setup carries on: a throw here
+     * would stop it on every update for as long as the folder is away.
+     */
+    @Test
+    fun `setup leaves links into a folder that has gone as they are and carries on`() {
+        assertTrue(sshConfig.parentFile!!.mkdirs(), "could not stage the .ssh directory")
+        val gone = File(filesDir, "projects/dotfiles")
+        for ((link, name) in linkedFiles()) Files.createSymbolicLink(link.toPath(), File(gone, name).toPath())
+
+        for (writer in listOf("createBashProfile", "createTmuxConf", "setupSshDefaults")) invoke(writer)
+
+        for (link in linkedFiles().keys) {
+            assertTrue(Files.isSymbolicLink(link.toPath()), "${link.name} was replaced by a copy")
+        }
+        assertFalse(gone.exists(), "the folder the person moved was made again")
+    }
 }
