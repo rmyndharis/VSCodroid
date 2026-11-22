@@ -56,7 +56,7 @@
  * a quick suggestion by another.
  *
  * NEGATIVE CONTROL, measured on the 1.139.1 tree with Node 22.23.2. Against upstream's
- * files, with no patch applied, 198 of the 216 cases fail. Each of these single edits to a
+ * files, with no patch applied, 204 of the 223 cases fail. Each of these single edits to a
  * copy of a patched file fails at least one case:
  *
  *   0046  the body of the blur listener removed; the composing clause dropped from the
@@ -83,7 +83,7 @@
  *         flag never set, not set by a stale letter, and not cleared at compositionstart; the restart after a
  *         refusal not forced, or forced past the bound for a stale letter; the buffer not written back at a refusal; the call of
  *         `_typeStaleLetter` removed, or its letter taken as the whole text of a grown word, or
- *         not typed past the bound;
+ *         not typed past the bound, or its test of the model's version removed;
  *         `_isLetterOverLastLetter` taking any letter for a base letter, keeping the accents (with
  *         NFD or without it), keeping the case, taking a letter and its combining accent for one
  *         letter, judging two letters with the same base letter, without its guard for a
@@ -95,15 +95,18 @@
  *         caret's), its start, its end, the caret it asks for collapsed (or tested at its end
  *         alone) and right after what it writes (or after one unit, or at the range's end), the
  *         range's own text before the letter or the letter
- *         test, or with a Backspace on a word of two letters taken for a letter, any text that
- *         starts the range's text taken for that Backspace, the two letters counted in UTF-16
- *         units, or the test that the text starts the range's text removed; that Backspace told
+ *         test (or one that takes any text), or with a Backspace on a word of two letters
+ *         taken for a letter, any text that starts the range's text taken for that Backspace,
+ *         the two letters counted in UTF-16 units, or the test that the text starts the range's
+ *         text removed; that Backspace told
  *         by the range's text when the letter was typed alone, by the text it holds now alone,
  *         or by the buffer's text after the update; the range's own text
  *         read from the buffer as it is when the next update comes, or as the letter left it;
  *         `_takesBackReplacement` not called, or without the model's version, the text
- *         replaced, the start, the buffer's text of the range or its test for a text that starts
- *         with what it replaced; the last replacement kept across a
+ *         replaced, the start, the buffer's text of the range, where the buffer starts (or
+ *         that start compared by identity) or its test for a text that starts with what it
+ *         replaced; where the buffer starts taken anew when a deletion or a space at the end of
+ *         the last replacement is kept with it; the last replacement kept across a
  *         text written over its end, a deletion inside it, one that reaches before it, or an edit
  *         of the editor's own; a space inserted at its end not kept with it, or kept without its
  *         text added; the last replacement kept across a letter, a digit or a combining mark
@@ -1887,6 +1890,16 @@ check('0050 a third letter over the same range is typed at the caret as well', a
     }
     return [p.state(), { text: 'line twoxyz', carets: [11], version: 4, restarts: 3 }];
 });
+// The model's version is the witness that the letter was typed: one that the editor discarded keeps no range.
+check('0050 after a stale letter that the editor discarded, the next letter over its range is judged on its own', async () => {
+    const p = page('line two', [8]);
+    p.readOnly = true;
+    await p.compose();
+    await p.update('x', 5, 8);
+    p.readOnly = false;
+    await p.update('y', 5, 8);
+    return [p.state(), applied('line y', 6, 1)];
+});
 check('0050 the next letter over that range is typed at the caret after the buffer moved to the caret line', async () => {
     const p = page('line one', [8]);
     await p.update('\n', 8, 8);
@@ -1916,6 +1929,14 @@ check('0050 after a stale letter, the range named again with its own text types 
     await p.compose();
     await p.update('two', 5, 8, 8);
     return [p.state(), { text: 'line twox', version: 2, restarts: 1 }];
+});
+check('0050 after a stale letter, two letters over its range are judged on their own', async () => {
+    const p = page('line two', [8]);
+    await p.compose();
+    await p.update('x', 5, 8);
+    await p.compose();
+    await p.update('xy', 5, 8);
+    return [p.state(), { text: 'line xyx', carets: [7], version: 3, restarts: 1 }];
 });
 check('0050 after a stale letter, a letter over another range that ends where it ended is judged on its own', async () => {
     const p = page('line two', [8]);
@@ -2261,6 +2282,71 @@ check('0050 the take-back shape on another line, where the buffer holds other te
     await p.compose();
     await p.update('u', 0, 3);
     return [p.state(), { text: 'you\nabcu', carets: [8] }];
+});
+// A tap or a cursor key that starts the buffer at another line moves no version, and the same offsets then name that line: where
+// it holds the corrected word as well, the update has every mark of the take-back but the buffer it was named in.
+check('0050 the take-back shape on another line that holds the corrected word is a stale letter and is typed at the caret', async () => {
+    const p = page('\nyou', [0]);
+    await p.compose();
+    await p.update('u', 0, 0);
+    await p.endComposition();
+    await p.update('you', 0, 1);
+    await p.tap(7);
+    await p.compose();
+    await p.update('u', 0, 3);
+    return [p.state(), { text: 'you\nyouu', carets: [8], restarts: 1 }];
+});
+check('0050 the same after the space of the correction was deleted', async () => {
+    const p = page('\nyou', [0]);
+    await p.compose();
+    await p.update('u', 0, 0);
+    await p.endComposition();
+    await p.update('you ', 0, 1);
+    await p.update('', 3, 4);
+    await p.tap(7);
+    await p.compose();
+    await p.update('u', 0, 3);
+    return [p.state(), { text: 'you\nyouu', carets: [8], restarts: 1 }];
+});
+// A Backspace on that line, at the offsets where the correction ended, shortens what is kept of the correction as it would on the
+// correction's own line, and what is kept still holds the start of the buffer the correction was made in. So does a space there.
+check('0050 the take-back shape on another line, after a Backspace there where the correction ended, is a stale letter and is typed at the caret', async () => {
+    const p = page('\nyou ', [0]);
+    await p.compose();
+    await p.update('u', 0, 0);
+    await p.endComposition();
+    await p.update('you ', 0, 1);
+    await p.tap(9);
+    await p.update('', 3, 4);
+    await p.compose();
+    await p.update('u', 0, 3);
+    return [p.state(), { text: 'you \nyouu', carets: [9], restarts: 1 }];
+});
+check('0050 the same with a space typed on that line where the correction ended and then deleted', async () => {
+    const p = page('\nyou', [0]);
+    await p.compose();
+    await p.update('u', 0, 0);
+    await p.endComposition();
+    await p.update('you', 0, 1);
+    await p.tap(7);
+    await p.update(' ', 3, 3);
+    await p.update('', 3, 4);
+    await p.compose();
+    await p.update('u', 0, 3);
+    return [p.state(), { text: 'you\nyouu', carets: [8], restarts: 1 }];
+});
+// The start is compared, not followed: back on the line of the correction with no edit between, the buffer starts where it did.
+check('0050 a correction taken back after the caret went to another line and back is applied', async () => {
+    const p = page('\nyou', [0]);
+    await p.compose();
+    await p.update('u', 0, 0);
+    await p.endComposition();
+    await p.update('you', 0, 1);
+    await p.tap(7);
+    await p.tap(3);
+    await p.compose();
+    await p.update('u', 0, 3);
+    return [p.state(), applied('u\nyou', 1, 0)];
 });
 check('0050 the take-back shape over another copy of the corrected word is a stale letter and is typed at the caret', async () => {
     const p = page('you ', [4]);

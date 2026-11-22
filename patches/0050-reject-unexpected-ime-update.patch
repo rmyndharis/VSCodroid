@@ -646,31 +646,40 @@ u corrected to you and a space, the space deleted with a Backspace, and
 you reopened and written back as u over 0..3 with the caret asked at 1,
 which typed the u after the word (youu). The last update the editor
 applied that changed the text is kept with the version of the model it
-left, where it starts, the text it replaced and the text it wrote. A
-deletion at the end of the text it wrote, which is what the Backspace on
-the space sends, keeps it with that text cut, and an insertion at that
-end of a text with no letter, digit or mark in it keeps it with that
-text added: a keyboard that sends the correction and its space as two
-updates (you over 0..1, then a space at 3..3) sends the space so, and
-before the space was kept the take-back after its Backspace typed the u
-after the word as well. A letter, a digit or a mark typed there goes on
-with the word and is kept as an update of its own. An update that writes
-the replaced text back, from where that update started, over the text it
-wrote (the buffer holds that text there), with the model at that
-version, is not a stale letter: it is judged by the other rules, which
-apply it. A text that starts with what it replaced is a word completed
-or grown as it is typed (t to the), not a correction, and the first
-letter written over it after a turn stays the stale letter it looks
-like. Anything else that edits the model ends what is kept, a Backspace
-that the editor runs as a key press among them (Gboard 17.7 and 18.4
-send it so): that edit is the editor's own and no update reports it, so
-the take-back after it is typed as a stale letter (youu), as it was
-before anything was kept. What it costs: the same letter typed after a
-turn that follows such a correction, with nothing typed between but a
-space or a punctuation mark at the end of the correction or a deletion
-there, cannot be told from the take-back and is applied (u typed after a
-turn that follows u corrected to you gives u). Not run on a device: no
-recording holds a take-back.
+left, where the buffer started once it was applied, where the update
+starts, the text it replaced and the text it wrote. A deletion at the
+end of the text it wrote, which is what the Backspace on the space
+sends, keeps it with that text cut, and an insertion at that end of a
+text with no letter, digit or mark in it keeps it with that text added:
+a keyboard that sends the correction and its space as two updates (you
+over 0..1, then a space at 3..3) sends the space so, and before the
+space was kept the take-back after its Backspace typed the u after the
+word as well. A letter, a digit or a mark typed there goes on with the
+word and is kept as an update of its own. An update that writes the
+replaced text back, from where that update started, over the text it
+wrote (the buffer holds that text there), with the model at that version
+and the buffer starting where it did, is not a stale letter: it is
+judged by the other rules, which apply it. The buffer's start is part of
+the test because a tap or a cursor key that starts the buffer at another
+line moves no version, and the same offsets then name that line: with
+you on the next line too, a tap at its end and u over 0..3 there would
+be taken for the take-back and the line would become u, its yo lost;
+with the start tested, the u is typed after that you (youu), as a stale
+letter is. The start is compared, not followed: moved to another line
+and back with no edit between, the buffer starts where it did and the
+take-back is applied. A text that starts with what it replaced is a word
+completed or grown as it is typed (t to the), not a correction, and the
+first letter written over it after a turn stays the stale letter it
+looks like. Anything else that edits the model ends what is kept, a
+Backspace that the editor runs as a key press among them (Gboard 17.7
+and 18.4 send it so): that edit is the editor's own and no update
+reports it, so the take-back after it is typed as a stale letter (youu),
+as it was before anything was kept. What it costs: the same letter typed
+after a turn that follows such a correction, with nothing typed between
+but a space or a punctuation mark at the end of the correction or a
+deletion there, cannot be told from the take-back and is applied (u
+typed after a turn that follows u corrected to you gives u). Not run on
+a device: no recording holds a take-back.
 
 What the patch does not do. A letter that the keyboard never sends is
 not typed: no update carried it in 3 of 212 runs without this patch and
@@ -860,7 +869,7 @@ and Japanese lines typed, converted and turned came out as typed in 224
 updates with no refusal.
 
 diff --git a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
-index babfbb09..2f1d684a 100644
+index babfbb09..5ed798ac 100644
 --- a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
 +++ b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
 @@ -87,9 +87,28 @@ export class NativeEditContext extends AbstractEditContext {
@@ -887,9 +896,9 @@ index babfbb09..2f1d684a 100644
 +	// The range of the update whose letter was last typed at the caret as a stale letter, the text the range held in the buffer the keyboard named it in, and the version
 +	// of the model and the primary selection that letter left: see _staleLetter.
 +	private _staleLetterRange: { version: number; selection: Selection; start: number; end: number; text: string } | undefined;
-+	// The last update the editor applied that changed the text, kept for the version of the model it left, where it started, the text it replaced and the text it
-+	// wrote, or the one before it when the update only cut or extended its end: see _afterAppliedEdit and _takesBackReplacement.
-+	private _lastReplacement: { version: number; start: number; old: string; text: string } | undefined;
++	// The last update the editor applied that changed the text, kept for the version of the model it left, where the buffer started once it was applied, where it
++	// started, the text it replaced and the text it wrote, or the one before it when the update only cut or extended its end: see _afterAppliedEdit and _takesBackReplacement.
++	private _lastReplacement: { version: number; bufferStart: Position; start: number; old: string; text: string } | undefined;
  
  	// Overflow guard container
  	private readonly _parent: HTMLElement;
@@ -1181,17 +1190,17 @@ index babfbb09..2f1d684a 100644
 +		return /^[\p{L}\p{N}]$/u.test(text) && !/^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]$/u.test(text);
 +	}
 +
-+	// Whether the update takes back the last replacement the editor applied for the keyboard: it writes the text that replacement replaced over the text it wrote, and the
-+	// model is as that replacement left it, but for a deletion at the end of what it wrote and a space or a punctuation mark inserted there (see _afterAppliedEdit). A
-+	// keyboard that corrected u to you and a space, in one update or two, whose Backspace then deleted the space, reopened you and wrote u over it with the caret after the
-+	// u: the shape of one letter over a reopened word, which would have typed the u after you. A text that starts with what it replaced is a word completed or grown as it
-+	// is typed (t to the), not a correction, and the first letter written over it after a turn is the stale letter it looks like. What it costs: the same letter typed after
-+	// a turn that follows such a correction, with nothing typed between but a space or a punctuation mark at its end or a deletion there, is taken for the take-back. A
-+	// Backspace that the editor runs as a key press (Gboard 17.7 and 18.4) is an edit of its own that no update reports, so the take-back after it is a stale letter.
++	// Whether the update takes back the last replacement the editor applied for the keyboard: it writes the text that replacement replaced over the text it wrote, the model is as that replacement left it, but
++	// for a deletion at the end of what it wrote and a space or a punctuation mark inserted there (see _afterAppliedEdit), and the buffer starts where it did then. A keyboard that corrected u to you and a
++	// space, in one update or two, whose Backspace then deleted the space, reopened you and wrote u over it with the caret after the u: the shape of one letter over a reopened word, which would have typed the
++	// u after you. A tap or a cursor key that starts the buffer at another line moves no version, and the same offsets can then name the same word there, whose update is the stale letter it looks like (you on
++	// two lines gives youu). A text that starts with what it replaced is a word completed or grown as it is typed (t to the), not a correction, and the first letter written over it after a turn is the stale
++	// letter it looks like. What it costs: the same letter typed after a turn that follows such a correction, with nothing typed between but a space or a punctuation mark at its end or a deletion there, is
++	// taken for the take-back. A Backspace that the editor runs as a key press (Gboard 17.7 and 18.4) is an edit of its own that no update reports, so the take-back after it is a stale letter.
 +	private _takesBackReplacement(e: ITextUpdateEvent): boolean {
 +		const last = this._lastReplacement;
-+		return last?.version === this._context.viewModel.model.getVersionId() && e.text === last.old && e.updateRangeStart === last.start &&
-+			!last.text.startsWith(last.old) && this._previousEditContextText.slice(e.updateRangeStart, e.updateRangeEnd) === last.text;
++		return last?.version === this._context.viewModel.model.getVersionId() && last.bufferStart.equals(this._editContextStart) && e.text === last.old &&
++			e.updateRangeStart === last.start && !last.text.startsWith(last.old) && this._previousEditContextText.slice(e.updateRangeStart, e.updateRangeEnd) === last.text;
 +	}
 +
 +	// An update that replaces text and asks for the caret to stay where it was, although that offset is not the end of what it writes, with nothing typed in the composition. After a
@@ -1268,11 +1277,11 @@ index babfbb09..2f1d684a 100644
  		this._applyingInputMethodEdit = false;
  	}
  
-+	// After the edit, once the model has applied an update that changes the text (its version is not the one it had before the edit): the composition has typed, and
-+	// the count of the restart bound, part 4 of 4, starts again. See _emitTypeEvent. The update is kept as the last replacement, with two exceptions that keep the last
-+	// one, applied on the version before: a deletion at the end of the text it wrote, as a Backspace on the space after a correction sends, keeps it with its text cut,
-+	// and an insertion at that end of a text with no letter, digit or mark in it, as a keyboard that sends a correction and its space as two updates sends the space,
-+	// keeps it with the text added. A letter there goes on with the word and is kept as a replacement of its own. See _takesBackReplacement.
++	// After the edit, once the model has applied an update that changes the text (its version is not the one it had before the edit): the composition has typed, and the count of the restart bound, part 4 of
++	// 4, starts again. See _emitTypeEvent. The update is kept as the last replacement, with where the buffer starts now that the edit's cursor event has come, with two exceptions that keep the last one, and
++	// where its buffer started, applied on the version before: a deletion at the end of the text it wrote, as a Backspace on the space after a correction sends, keeps it with its text cut, and an insertion at
++	// that end of a text with no letter, digit or mark in it, as a keyboard that sends a correction and its space as two updates sends the space, keeps it with the text added. A letter there goes on with the
++	// word and is kept as a replacement of its own. The start is compared, not followed: a caret moved to another line and back with no edit between finds the buffer where it was. See _takesBackReplacement.
 +	private _afterAppliedEdit(changesText: boolean, versionBefore: number, e: ITextUpdateEvent, replaced: string): void {
 +		const version = this._context.viewModel.model.getVersionId();
 +		if (changesText && version !== versionBefore) {
@@ -1284,7 +1293,7 @@ index babfbb09..2f1d684a 100644
 +				? { ...last, version, text: last.text.slice(0, e.updateRangeStart - last.start) }
 +				: last && e.updateRangeStart === end && e.updateRangeEnd === end && !/[\p{L}\p{N}\p{M}]/u.test(e.text)
 +					? { ...last, version, text: last.text + e.text }
-+					: { version, start: e.updateRangeStart, old: replaced, text: e.text };
++					: { version, bufferStart: this._editContextStart, start: e.updateRangeStart, old: replaced, text: e.text };
 +		}
 +	}
 +

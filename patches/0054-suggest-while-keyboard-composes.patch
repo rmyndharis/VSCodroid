@@ -25,18 +25,19 @@ made the move (an empty selection, reason NotSet, source keyboard or
 deleteLeft, which is the test the listener already made for 0025) and
 the word before the caret is text as it was typed: it ends in a letter
 that is not a modifier letter, a digit, an underscore or a dollar sign,
-and holds no character of Han, Hiragana, Katakana, Hangul or Bopomofo
-and no full-width form. Everything after that is the code a desktop
-runs: the quick suggest delay, editor.quickSuggestions and the kind of
-token at the caret, the test for a word at the caret, and with a list
-open a typed letter arms nothing, the list being refiltered by 0053. A
-caret that anything else moves during a composition arms and cancels
-nothing, as before, so a list stays open through the selections a
-keyboard sets by itself; its place is noted, so that the next typed move
-is compared with where the caret was. Left at the place of the last
-followed move, a Backspace over an apostrophe read as a move to the
-right and armed a suggestion, and a letter typed after the keyboard had
-moved the caret back armed none. Other platforms return early as before.
+with any combining marks after it, and holds no character of Han,
+Hiragana, Katakana, Hangul or Bopomofo and no full-width form.
+Everything after that is the code a desktop runs: the quick suggest
+delay, editor.quickSuggestions and the kind of token at the caret, the
+test for a word at the caret, and with a list open a typed letter arms
+nothing, the list being refiltered by 0053. A caret that anything else
+moves during a composition arms and cancels nothing, as before, so a
+list stays open through the selections a keyboard sets by itself; its
+place is noted, so that the next typed move is compared with where the
+caret was. Left at the place of the last followed move, a Backspace over
+an apostrophe read as a move to the right and armed a suggestion, and a
+letter typed after the keyboard had moved the caret back armed none.
+Other platforms return early as before.
 
 The scripts left out are the ones a keyboard converts before it commits:
 kana and kanji, the jamo of a Hangul syllable, bopomofo. The word before
@@ -99,15 +100,16 @@ scripts/check-editcontext-ime.js holds its cases, over the patched
 suggestModel.ts with the editor replaced by an adapter. Suggestions are
 expected for a letter and the next one, for a letter with a diacritic, a
 Cyrillic letter, a digit after a letter, an underscore and a dollar
-sign, and for a letter typed after the keyboard moved the caret back;
-each of those fails without the patch. Nothing is expected off Android,
-for a deletion, for a Backspace over an apostrophe, for a caret that
-typing did not move or a selection the keyboard makes (an open list
-stays open and is not refiltered), for kana, a Hangul syllable, a Han
-character, bopomofo and a full-width letter, alone or beside Latin
-letters, for a lone accent or another modifier letter, for a word that
-ends in a combining mark, and for a lone mark, one after a modifier
-letter and one after a converted script; each of those fails when the test it
+sign, for an uppercase and a titlecase last letter, for a word that ends
+in a combining mark after its letter, and for a letter typed after the
+keyboard moved the caret back; each of those fails without the patch.
+Nothing is expected off Android, for a deletion, for a Backspace over an
+apostrophe, for a caret that typing did not move or a selection the
+keyboard makes (an open list stays open and is not refiltered), for
+kana, a Hangul syllable, a Han character, bopomofo and a full-width
+letter, alone or beside Latin letters, for a lone accent or another
+modifier letter, and for a lone mark, one after a modifier letter and
+one after a converted script; each of those fails when the test it
 stands for is removed. One case, a typed letter with a list open, holds
 on every tree and pins what the patch must not change. Not run on a
 device: a Korean keyboard, a keyboard that composes with dead keys, and
