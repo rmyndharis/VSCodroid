@@ -461,15 +461,22 @@ object StorageManager {
     }
 
     /**
-     * The separator is pinned to [Locale.US] because the unit beside it is not
-     * localized: `KB`, `MB` and `GB` are written here in Kotlin rather than in
-     * `res/`, so they stay English on a device whose screens are translated, and
-     * letting the number follow the device locale renders `1,0 GB`, half of one
-     * convention and half of another, on every device whose region uses a comma.
-     * The module has shipped translated resources since the languages were
-     * added; these two literals are what has not moved with them. It also made the same code print
-     * two different strings on two JDKs, because the CLDR data behind a region
-     * moves between releases.
+     * [bytes] as a person reads it in [locale]: that language's decimal separator
+     * and its unit symbols, for the languages this app has screens in. Every caller
+     * that puts the figure in a sentence passes the locale of the screen it is
+     * shown on; the default, [Locale.US], is the English figure, which log lines
+     * write and which English screens and every untranslated language get too,
+     * because a phone in a language the app has no screens for reads the English
+     * sentences, and `1,0 GB` inside one is half of one convention and half of
+     * another.
+     *
+     * Only French and Russian write the units differently ([SIZE_UNITS]), as their
+     * own storage screens do, and each language's symbol for a megabyte is the one
+     * its `error_storage_full` already asks the user to free, which
+     * `LocaleCoverageTest` holds it to. `%.1f` writes no grouping separator, the
+     * part of a locale's number style that has moved between CLDR releases (French
+     * went from a no-break space to a narrow one), so the same call prints the same
+     * string on every JDK and Android release.
      *
      * The divisor is decimal, and this is the one place that decides it for the
      * whole app: every size a user reads on a native screen comes through here.
@@ -486,12 +493,33 @@ object StorageManager {
      * `ProcessManager.heapCeilingForDevice`, `CrashReporter` and the
      * `vscodroid.server.heapCeilingMb` setting keep their 1,048,576 divisors.
      */
-    fun formatSize(bytes: Long): String {
+    fun formatSize(bytes: Long, locale: Locale = Locale.US): String {
+        val units = SIZE_UNITS[locale.language]
+        val numbers = if (units == null) Locale.US else locale
+        val (byte, kilo, mega, giga) = units ?: ENGLISH_UNITS
         return when {
-            bytes >= 1_000_000_000 -> "%.1f GB".format(Locale.US, bytes / 1_000_000_000.0)
-            bytes >= 1_000_000 -> "%.1f MB".format(Locale.US, bytes / 1_000_000.0)
-            bytes >= 1_000 -> "%.1f KB".format(Locale.US, bytes / 1_000.0)
-            else -> "$bytes B"
+            bytes >= 1_000_000_000 -> "%.1f %s".format(numbers, bytes / 1_000_000_000.0, giga)
+            bytes >= 1_000_000 -> "%.1f %s".format(numbers, bytes / 1_000_000.0, mega)
+            bytes >= 1_000 -> "%.1f %s".format(numbers, bytes / 1_000.0, kilo)
+            else -> "$bytes $byte"
         }
     }
+
+    private val ENGLISH_UNITS = listOf("B", "KB", "MB", "GB")
+
+    /**
+     * Byte, kilobyte, megabyte and gigabyte for each translated language, keyed by
+     * language code. A language added to `res/` needs an entry here, or its sizes
+     * stay in the English figure; `LocaleCoverageTest` catches the omission for a
+     * language that writes a decimal comma or units of its own.
+     * English has none on purpose: English screens keep the figure they always
+     * printed, rather than `2,5 GB` on a phone set to English in a region that
+     * writes a decimal comma.
+     */
+    private val SIZE_UNITS: Map<String, List<String>> =
+        listOf("cs", "de", "es", "it", "ja", "ko", "pl", "pt", "tr", "zh").associateWith { ENGLISH_UNITS } +
+            mapOf(
+                "fr" to listOf("o", "ko", "Mo", "Go"),
+                "ru" to listOf("Б", "кБ", "МБ", "ГБ"),
+            )
 }
