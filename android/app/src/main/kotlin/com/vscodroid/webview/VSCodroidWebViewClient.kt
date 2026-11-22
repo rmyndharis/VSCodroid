@@ -53,12 +53,10 @@ import androidx.core.net.toUri
 
 /**
  * The directories this app publishes to content rendered inside the WebView,
- * whatever folder is open. [resourceRootsInForce] adds the open folder to them.
+ * whatever folder is open. [workspaceResourceRootsInForce] adds the open folder to them.
  *
- * Resolved once and handed in as plain strings rather than being derived from a
- * Context inside the client: a WebViewClient lives as long as the WebView
- * holding it, and the Context available where it is constructed is the
- * Activity's.
+ * Resolved by [ResourceRules], once per main-frame navigation, and read by the
+ * interceptor as plain strings rather than derived from a Context per request.
  *
  * Canonicalised here so that [resolveWebviewResource] compares two paths in the
  * same form. That function resolves the request before testing it, so a root
@@ -100,11 +98,58 @@ internal fun publishedResourceRoots(
     Environment.getSafMirrorsDir(context),
 ).mapNotNull(::canonicalOrNull).filter { root ->
     val overlapping = sensitive.firstOrNull { overlaps(root, it) } ?: return@filter true
-    // Named as the app knows it, `~/.npmrc` and not where that link points, which is the person's own path.
-    val name = sensitiveLocationNames(context).firstOrNull { canonicalOrNull(it) == overlapping }
+    // Named as the app knows it, `~/.npmrc` and not where that link points, which is the person's own path,
+    // also when the overlap was found under the data directory's other name.
+    val name = sensitiveLocationNames(context)
+        .firstOrNull { canonicalOrNull(it)?.let(::dataDirectorySpellings)?.contains(overlapping) == true }
         ?.replaceFirst(Environment.getHomeDir(context), "~") ?: overlapping
     Logger.w("WebViewClient", "Not published as a resource root, it overlaps $name, which must stay unreadable: $root")
     false
+}
+
+/**
+ * What [publishedResourceRoots] publishes and what [sensitiveLocations] refuses, as of
+ * the last main-frame navigation. Both entry points of the interceptor read this one
+ * holder, and [VSCodroidWebViewClient.onPageStarted] resolves it again.
+ *
+ * Per navigation rather than once per screen, because both follow links a person can
+ * make or remove at any time. Resolved once, a `~/.npmrc` linked into the projects
+ * folder after the screen was built left that folder published, and the credential
+ * with it, until the screen was destroyed; a link removed kept the folder unserved as
+ * long. Not per request: resolving stats external storage and canonicalises some
+ * thirty paths, and one preview makes hundreds of requests. A link made while a page is
+ * open therefore counts from the next page load.
+ *
+ * A request racing a refresh can read the roots of one resolution and the sensitive set
+ * of the other. That serves nothing neither of them allowed: the roots were filtered by
+ * their own set, and the set only judges the open folder.
+ */
+class ResourceRules internal constructor(private val resolve: () -> Pair<List<String>, List<String>>) {
+    @Volatile
+    var roots: List<String> = emptyList()
+        private set
+
+    @Volatile
+    var sensitive: List<String> = emptyList()
+        private set
+
+    init {
+        refresh()
+    }
+
+    fun refresh() {
+        val (published, refused) = resolve()
+        sensitive = refused
+        roots = published
+    }
+
+    companion object {
+        /** The rules for [context]'s directories. */
+        fun of(context: Context) = ResourceRules {
+            val sensitive = sensitiveLocations(context)
+            publishedResourceRoots(context, sensitive) to sensitive
+        }
+    }
 }
 
 /**
@@ -161,19 +206,19 @@ internal fun resourceOutcome(path: String, resourceRoots: List<String>): Resourc
  */
 internal fun resolveWebviewResource(requestedPath: String, roots: List<String>): File? {
     val canonical = canonicalOrNull(requestedPath) ?: return null
-    // The server's run note and its temporary copy hold the listener's key under
-    // the server root. Refused by name rather than by path because a
-    // name needs no context; a workspace file of that name is not worth serving.
     if (!resourcePathIsPublished(canonical, roots)) return null
-    // Compared with the separator appended: a root's name is also a prefix of
-    // its siblings' names, and creating such a sibling is within reach of
-    // anything running in the extension host.
     return File(canonical)
 }
 
 private fun resourcePathIsPublished(path: String, roots: List<String>): Boolean {
     val name = path.substringAfterLast('/')
+    // The server's run note and its temporary copy hold the listener's key under
+    // the server root. Refused by name rather than by path because a
+    // name needs no context; a workspace file of that name is not worth serving.
     return name != EDITOR_PID_FILE && name != "$EDITOR_PID_FILE.tmp" &&
+        // Compared with the separator appended: a root's name is also a prefix of
+        // its siblings' names, and creating such a sibling is within reach of
+        // anything running in the extension host.
         roots.any { path.startsWith("$it/") }
 }
 
@@ -213,12 +258,42 @@ internal fun openResourceFile(file: File, roots: List<String>): FileInputStream 
  * The locations that must not be readable through a resource request, whatever
  * folder happens to be open.
  *
- * Canonicalised once here rather than on every request, which is what lets
- * [workspaceRootOrNull] take them as a precondition instead of resolving them
- * itself.
+ * Canonicalised once per resolution ([ResourceRules.refresh]) rather than on every
+ * request, which is what lets [workspaceRootOrNull] take them as a precondition
+ * instead of resolving them itself.
+ *
+ * Each one under both names of the data directory ([dataDirectorySpellings]), after
+ * canonicalising, because a link written with the other name canonicalises to it.
+ * Every Context getter answers `/data/user/0/<package>`, while a person or a workspace
+ * file in a cloned repository can write `/data/data/<package>`, and this repository's
+ * measurements disagree on whether canonicalisation makes the two one on a device
+ * (separate mounts on API 36 and 37 emulators, see `FirstRunSetup`; resolved to
+ * `/data/data` on API 33, see `StorageManager.pruneTemporaryBytecode`). Where it does
+ * not, `/data/data/<package>/files/home` overlapped nothing here by prefix and passed as
+ * a workspace root, which serves the ssh key, the key that opens the sealed extension
+ * secrets and the WebView's own stores. Holding both names refuses it either way.
  */
 internal fun sensitiveLocations(context: Context): List<String> =
-    sensitiveLocationNames(context).mapNotNull(::canonicalOrNull)
+    sensitiveLocationNames(context).mapNotNull(::canonicalOrNull).flatMap(::dataDirectorySpellings).distinct()
+
+/**
+ * [path] and, inside an app's data directory, the same place under its other name:
+ * `/data/user/<n>/<package>` and `/data/data/<package>` swapped, the way
+ * `SafStorageManager.mirrorNamesForPaths` reads a mirror path. `/data/data` names user
+ * 0's directory, so for another user the second name is not this process's own data (not
+ * measured with a second user); among the refusals it can only refuse more.
+ */
+@SuppressLint("SdCardPath")
+internal fun dataDirectorySpellings(path: String): List<String> {
+    val user = USER_DATA_DIRECTORY.find(path)
+    return when {
+        user != null -> listOf(path, "/data/data/" + path.substring(user.range.last + 1))
+        path.startsWith("/data/data/") -> listOf(path, "/data/user/0/" + path.removePrefix("/data/data/"))
+        else -> listOf(path)
+    }
+}
+
+private val USER_DATA_DIRECTORY = Regex("^/data/user/[0-9]+/")
 
 /** [sensitiveLocations] as the app names them, before a link among them is followed. */
 private fun sensitiveLocationNames(context: Context): List<String> {
@@ -292,7 +367,8 @@ private var lastRefusedWorkspace: String? = null
  * The roots in force for one request: the published set, plus the open folder
  * when it is safe to publish.
  *
- * Both entry points go through here so that the two cannot drift apart. A
+ * Both entry points reach this through [workspaceResourceRootsInForce] while the page
+ * has published no member set, so that the two cannot drift apart. A
  * rejection is reported because the failure it causes (resources missing from
  * the user's own workspace) otherwise looks like a bug rather than a refusal.
  * Nothing is logged in the ordinary case: an accepted folder and an absent one
@@ -872,8 +948,12 @@ internal enum class SecretKeyRequest { NOT_ONE, ANSWER, REFUSE }
 @SuppressLint("MissingOnRenderProcessGone")
 class VSCodroidWebViewClient(
     private val allowedPort: Int,
-    private val resourceRoots: List<String>,
-    private val sensitiveLocations: List<String>,
+    /**
+     * What the resource arm publishes and refuses, resolved again by [onPageStarted]
+     * at every main-frame navigation. Shared with the service worker's entry point,
+     * which reads the same holder, so the two answer by one set of rules.
+     */
+    private val resourceRules: ResourceRules,
     private val openFolder: () -> String?,
     private val connectionToken: () -> String?,
     private val onCrash: () -> Unit,
@@ -1271,8 +1351,8 @@ class VSCodroidWebViewClient(
             return interfaceBundleResponse(requested)
         }
         return interceptCdnRequest(
-            request, allowedPort, tokenWhileBound(allowedPort, connectionToken), resourceRoots, sensitiveLocations,
-            openFolder, workspaceMembers = workspaceMembers,
+            request, allowedPort, tokenWhileBound(allowedPort, connectionToken), resourceRules.roots,
+            resourceRules.sensitive, openFolder, workspaceMembers = workspaceMembers,
         )
     }
 
@@ -1353,6 +1433,8 @@ class VSCodroidWebViewClient(
     }
 
     override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
+        // A new document, so links made or removed since the last one count from here. See [ResourceRules].
+        resourceRules.refresh()
         onNavigationStarted(url)
         disposeAuthPage()
         AuthTabWindow.beginPage()
@@ -1658,22 +1740,24 @@ class VSCodroidWebViewClient(
          * Must be called before the WebView loads any page, since a registration
          * that has already happened is not intercepted retroactively.
          *
-         * Takes the same roots and the same open-folder supplier as the client
-         * constructor, and for the same reason: this is the second way a
-         * resource request reaches [interceptCdnRequest], so anything applied to
-         * only one of them leaves the other answering from the old rules. Both
-         * compose them through [resourceRootsInForce] rather than each doing it,
-         * so there is one rule and not two copies of one.
+         * Reads the same rules and the same open-folder supplier as the client,
+         * and for the same reason: this is the second way a resource request
+         * reaches [interceptCdnRequest], so anything applied to only one of them
+         * leaves the other answering from the old rules. The rules are asked per
+         * request, because the client resolves them again at every main-frame
+         * navigation ([ResourceRules]). Both compose them through
+         * [workspaceResourceRootsInForce] rather than each doing it, so there is one
+         * rule and not two copies of one.
          */
         fun setupServiceWorkerInterception(
-            port: Int, resourceRoots: List<String>, sensitiveLocations: List<String>,
+            port: Int, resourceRoots: () -> List<String>?, sensitiveLocations: () -> List<String>?,
             openFolder: () -> String?, connectionToken: () -> String?
         ) = setupServiceWorkerInterception(port, resourceRoots, sensitiveLocations, openFolder, { null }, connectionToken)
 
         fun setupServiceWorkerInterception(
             port: Int,
-            resourceRoots: List<String>,
-            sensitiveLocations: List<String>,
+            resourceRoots: () -> List<String>?,
+            sensitiveLocations: () -> List<String>?,
             openFolder: () -> String?,
             workspaceMembers: () -> List<String>?,
             connectionToken: () -> String?
@@ -1682,9 +1766,14 @@ class VSCodroidWebViewClient(
                 val swController = ServiceWorkerController.getInstance()
                 swController.setServiceWorkerClient(object : ServiceWorkerClient() {
                     override fun shouldInterceptRequest(request: WebResourceRequest): WebResourceResponse? {
+                        // Null once the screen these are read through is gone. No set to judge a folder
+                        // by publishes no folder, rather than every folder.
+                        val sensitive = sensitiveLocations()
                         return interceptCdnRequest(
                             request, port, tokenWhileBound(port, connectionToken),
-                            resourceRoots, sensitiveLocations, openFolder, workspaceMembers = workspaceMembers,
+                            resourceRoots().orEmpty(), sensitive.orEmpty(),
+                            { if (sensitive == null) null else openFolder() },
+                            workspaceMembers = { if (sensitive == null) null else workspaceMembers() },
                         )
                     }
                 })
@@ -2369,9 +2458,9 @@ class VSCodroidWebViewClient(
                 )
             } catch (e: Exception) {
                 connection?.disconnect()
-                // `logTag` never carries the token: all three callers build it
-                // from a host or authority and a path, and none of them includes
-                // a query string, which is the only place the token ever sits.
+                // `logTag` never carries the token: its one caller, the CDN rewrite,
+                // builds it from a host and a path, with no query string, which is
+                // the only place the token ever sits.
                 // `e.message` is the reason this is
                 // redacted anyway: a connection failure names the socket and not
                 // the URL, which is measured rather than assumed, but
@@ -2385,8 +2474,9 @@ class VSCodroidWebViewClient(
         /**
          * Whether [origin] is the page this app serves, and nothing else.
          *
-         * The workbench is the only document loaded from our own server, so the
-         * two loopback spellings are the whole of it. Kept apart from
+         * The workbench is the only document loaded from our own server, and only
+         * at `http://127.0.0.1:<port>`: `localhost` is not its origin, because it may
+         * resolve to IPv6, whose listener the app does not reserve. Kept apart from
          * [isOurOrigin], which also has to accept a webview document: this is the
          * test for a claim that must not be satisfiable by anything the workbench
          * merely renders.

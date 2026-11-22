@@ -280,8 +280,7 @@ class ConnectionTokenLoggingTest {
     fun `the page lifecycle callbacks do not log the token`() {
         val client = VSCodroidWebViewClient(
             allowedPort = 41234,
-            resourceRoots = emptyList(),
-            sensitiveLocations = emptyList(),
+            resourceRules = noResourceRules(),
             openFolder = { null },
             connectionToken = { token },
             onCrash = {},
@@ -350,8 +349,7 @@ class ConnectionTokenLoggingTest {
 
         val client = VSCodroidWebViewClient(
             allowedPort = 41234,
-            resourceRoots = emptyList(),
-            sensitiveLocations = emptyList(),
+            resourceRules = noResourceRules(),
             openFolder = { null },
             connectionToken = { token },
             onCrash = {},
@@ -452,8 +450,7 @@ class ConnectionTokenLoggingTest {
         var seen: String? = null
         val client = VSCodroidWebViewClient(
             allowedPort = 41234,
-            resourceRoots = emptyList(),
-            sensitiveLocations = emptyList(),
+            resourceRules = noResourceRules(),
             openFolder = { null },
             connectionToken = { token },
             onCrash = {},
