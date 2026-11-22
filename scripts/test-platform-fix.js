@@ -355,6 +355,17 @@ assert.deepStrictEqual(
 );
 assert.deepStrictEqual(spawnedUnder([ENGINE, null]), [BIONIC_LINKER, [ENGINE], { env: routedEnv(ENGINE) }], 'a null argument list alone was not started through the linker');
 checked += 3;
+// argv0 would reach the linker as its own argv[0], which it does not read: the program it starts is given its path
+// there either way. All it changed was the first word of the process in /proc, where the process monitor and the
+// end of an earlier engine look for the linker, so it is left out of a start through the linker, and only of one.
+{
+    const NAMED = { ...SPAWN_OPTIONS, argv0: 'agy' };
+    assert.deepStrictEqual(spawnedUnder([ENGINE, TOOL_ARGS, NAMED]), [BIONIC_LINKER, [ENGINE, ...TOOL_ARGS], ROUTED], 'argv0 reached a start through the linker');
+    assert.deepStrictEqual(spawnedUnder([ENGINE, TOOL_ARGS, NAMED], { prefix: BARE_PREFIX }), [BIONIC_LINKER, [ENGINE, ...TOOL_ARGS], SPAWN_OPTIONS],
+        'argv0 reached a start through the linker made without the interceptor');
+    assert.deepStrictEqual(spawnedUnder([OUTSIDE, TOOL_ARGS, NAMED]), [OUTSIDE, TOOL_ARGS, NAMED], 'argv0 was taken from a start that is not made through the linker');
+    checked += 3;
+}
 // Without the interceptor on disk nothing is added, the program's own path included: an environment that
 // names a preload Bionic cannot map aborts every exec in it, and the path without the interceptor would reach
 // every program below that one, which no exec would correct. The call is then made as it was before.
@@ -895,6 +906,81 @@ for (const [label, text, on] of [
     checked++;
 }
 
+// A FIFO where the machine settings file or the note of a started engine should be, or a link to one, holds a
+// plain open until a writer comes, and the extension host or the editor server's start waited with it, for good.
+// Only a regular file is read, opened without waiting: a settings file that is anything else turns nothing on, a
+// note that is anything else names no engine, and no note is written into one.
+{
+    const noteIn = (home) => path.join(home, '.vscodroid/antigravity-hub.json');
+    const fifoAt = (file) => { fs.mkdirSync(path.dirname(file), { recursive: true }); execFileSync('mkfifo', [file]); return file; };
+    /** What `main` printed last, run under the shim from `home`, or 'hung' when it had not ended within 5 s. */
+    const within5s = (main, call, home, record = RECORD_SPAWN, fix = FIX) => {
+        try {
+            return JSON.parse(execFileSync(
+                process.execPath,
+                ['--require', FAKE_ANDROID, '--require', SET_PRELOAD, '--require', record, '--require', fix, main, JSON.stringify(call)],
+                { env: childEnv({ home }), encoding: 'utf8', timeout: 5000 },
+            ).trim().split('\n').pop());
+        } catch (e) {
+            if (e.code === 'ETIMEDOUT') return 'hung';
+            throw e;
+        }
+    };
+    const settingsFifo = homeWith(null);
+    fifoAt(machineSettings(settingsFifo));
+    const settingsLink = homeWith(null);
+    fs.mkdirSync(path.dirname(machineSettings(settingsLink)), { recursive: true });
+    fs.symlinkSync(fifoAt(path.join(tmp, 'outside/settings-fifo')), machineSettings(settingsLink));
+    for (const [label, home] of [['a FIFO', settingsFifo], ['a link to a FIFO', settingsLink]]) {
+        const call = [engineIn(home), HUB_ARGS, SPAWN_OPTIONS];
+        assert.deepStrictEqual(within5s(SPAWN_MAIN, call, home), call, `${label} at the machine settings path: the engine's start did not return as written`);
+        assert.strictEqual(fs.existsSync(noteIn(home)), false, `${label} at the machine settings path: a note was kept for an engine that was not started`);
+        checked++;
+    }
+    // The process monitor extension asks the gate itself when it activates.
+    const GATE_MAIN = path.join(tmp, 'gate-main.js');
+    fs.writeFileSync(GATE_MAIN, "console.log(JSON.stringify(globalThis[Symbol.for('vscodroid.engineGate')].engineTurnedOn()));\n");
+    assert.strictEqual(within5s(GATE_MAIN, [], settingsFifo), false, 'a FIFO at the machine settings path: the gate the process monitor asks did not answer off');
+    checked++;
+    // A start the setting refuses ends the engine an earlier host started, which reads the note.
+    const noteFifoOff = homeWith(null);
+    fifoAt(noteIn(noteFifoOff));
+    const refused = [engineIn(noteFifoOff), HUB_ARGS, SPAWN_OPTIONS];
+    assert.deepStrictEqual(within5s(SPAWN_MAIN, refused, noteFifoOff), refused, 'a FIFO at the note: a start the setting refuses did not return as written');
+    checked++;
+    // With the setting on, the hub's start reads the note and writes its own, and the engine's exit reads it again.
+    const FIFO_HUB_DRIVER = path.join(tmp, 'fifo-hub-driver.js');
+    fs.writeFileSync(FIFO_HUB_DRIVER, `
+const fs = require('fs');
+const net = require('net');
+const [engine, note, when] = JSON.parse(process.argv[2]);
+const fifo = () => { fs.rmSync(note, { force: true }); require('child_process').execFileSync('mkfifo', [note]); };
+if (when === 'before the start') fifo();
+const s = net.createServer().listen(0, '127.0.0.1', () => {
+    const front = s.address().port;
+    s.close(() => {
+        const child = require('child_process').spawn(engine, ['--hub', '--hub-port=' + front]);
+        const written = fs.lstatSync(note).isFile() ? JSON.parse(fs.readFileSync(note, 'utf8')).pid : null;
+        if (when === 'before the exit') { fifo(); child.emit('exit', 0); }
+        console.log(JSON.stringify({ started: globalThis.__spawned[0], written, fifo: fs.lstatSync(note).isFIFO() }));
+        process.exit(0);
+    });
+});
+`);
+    for (const [when, written] of [['before the start', null], ['before the exit', 4242]]) {
+        const home = homeWith(SETTING_ON);
+        assert.deepStrictEqual(within5s(FIFO_HUB_DRIVER, [engineIn(home), noteIn(home), when], home, RECORD_HUB), { started: BIONIC_LINKER, written, fifo: true },
+            `a FIFO at the note ${when}: the hub's start or its exit did not return, or wrote into the FIFO`);
+        checked++;
+    }
+    // The editor server's own start and exit end an engine the last one left, which reads the note.
+    const SERVER_COPY = path.join(tmp, 'fifo-server/platform-fix.js');
+    const SERVER_MAIN = put(path.join(tmp, 'fifo-server/vscode-reh/out/server-main.js'), "console.log('null');\n");
+    fs.copyFileSync(FIX, SERVER_COPY);
+    assert.strictEqual(within5s(SERVER_MAIN, [], noteFifoOff, RECORD_SPAWN, SERVER_COPY), null, 'a FIFO at the note: the editor server did not start and exit');
+    checked++;
+}
+
 // Where ~/.gemini and the machine settings are is read when the file is loaded. An extension in the shared host
 // may reassign or delete HOME later, and the decision must not follow it: the gate would be skipped (no
 // ~/.gemini under the new HOME) or read a file of its own.
@@ -1062,6 +1148,19 @@ for (const [how, call] of [
     ['execFileSync', [OUTSIDE, ['--version'], VERSION_OPTIONS]],
 ]) {
     assert.deepStrictEqual(callUnder(how, call), [how, ...call], `${how}: a call that is not the linker's was changed`);
+    checked++;
+}
+// Every start through the linker leaves argv0 out (see the spawn cases), the engine's own included, which gets no
+// interceptor: kept, its name in /proc was the one an earlier engine is ended by.
+for (const [how, call, expected, home] of [
+    ['spawnSync', [ENGINE, TOOL_ARGS, { argv0: 'tool' }], [BIONIC_LINKER, [ENGINE, ...TOOL_ARGS], { env: routedEnv(ENGINE) }]],
+    ['execFile', [ENGINE, ['--version'], { argv0: 'tool' }, CALLBACK], [BIONIC_LINKER, [ENGINE, '--version'], { env: routedEnv(ENGINE) }, null]],
+    ['execFileSync', [ENGINE, ['--version'], { argv0: 'tool' }], [BIONIC_LINKER, [ENGINE, '--version'], { env: routedEnv(ENGINE) }]],
+    ['spawn', [BIONIC_LINKER, [ENGINE, ...TOOL_ARGS], { argv0: 'tool' }], [BIONIC_LINKER, [ENGINE, ...TOOL_ARGS], { env: routedEnv(ENGINE) }]],
+    ['spawn', [HUB_ENGINE, ['--remote-control'], { argv0: 'agy' }], [BIONIC_LINKER, [HUB_ENGINE, '--remote-control'], {}], HUB_HOME],
+    ['execFileSync', [HUB_ENGINE, ['--hub', '--hub-port=41000'], { argv0: 'agy' }], [BIONIC_LINKER, [HUB_ENGINE, '--hub', '--hub-port=41000'], {}], HUB_HOME],
+]) {
+    assert.deepStrictEqual(callUnder(how, call, home ? { home } : {}), [how, ...expected], `${how} of ${call[0]}: argv0 reached a start through the linker`);
     checked++;
 }
 
