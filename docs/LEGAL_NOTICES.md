@@ -426,22 +426,9 @@ downstream that bzip2 never imposed, so the row is now `bzip2-1.0.6`, the SPDX
 identifier for bzip2's own licence. Julian Seward's copyright ships on the device
 at `usr/share/doc/libbz2`.
 
-This is not every binary in the APK. Most of
-them are not below: they live deeper in the asset tree and are attributed by the
-sections above. CPython's extension modules under `usr/lib/python*/lib-dynload/`,
-pip's vendored launchers, the server tree's native addons and bundled tools under
-`assets/vscode-reh/`, the zeromq.js addon under `assets/usr/lib/node-addons/`,
-the WebAssembly its editor services load, and the .NET
-assemblies its terminal integration carries. 184 files against the 53 listed
-below, measured on the tree that built this release, redistributed on identical
-terms. `usr/lib/git-core/` was in that list until its eight standalone helpers
-stopped being copied; what is left there is shell text and symlinks, and Git is
-attributed by `libgit.so` and `libgit-remote-curl.so` below.
+This is not every binary in the APK. Most of them are not below: they live deeper in the asset tree and are attributed by the sections above. CPython's extension modules under `usr/lib/python*/lib-dynload/`, pip's vendored launchers, the server tree's native addons and bundled tools under `assets/vscode-reh/`, the zeromq.js addon under `assets/usr/lib/node-addons/`, the WebAssembly its editor services load, and the .NET assemblies its terminal integration carries. They are redistributed on identical terms. `usr/lib/git-core/` was in that list until its eight standalone helpers stopped being copied; what is left there is shell text and symlinks, and Git is attributed by `libgit.so` and `libgit-remote-curl.so` below.
 
-That figure is a measurement rather than a fixed property, and the gate prints it
-on every run: a Python module leaving `lib-dynload` or a package adding a grammar
-moves it. What has to stay true is that every one of those files is attributed
-somewhere, which is what the gate enforces rather than what this sentence claims.
+How many there are is a measurement rather than a fixed property, and the gate prints the count on every run: a Python module leaving `lib-dynload` or a package adding a grammar moves it. What has to stay true is that every one of those files is attributed somewhere, which is what the gate enforces rather than what this sentence claims.
 
 `scripts/check-library-attribution.py` regenerates the basis for this table from the
 files actually present in the build tree and fails when a shipped binary is absent
@@ -457,17 +444,7 @@ It runs on every pull request and every push to `main` (`.github/workflows/build
 and twice more at release time, once before the toolchain payloads are downloaded
 and once after (`.github/workflows/release.yml`).
 
-That last check is the one the permissive rows turn on. A name and a URL in a
-table is not the notice: MIT, the BSD family, ISC, NCSA, the ICU licence and
-Apache-2.0 section 4 all require the copyright and permission text to be handed
-over with a binary redistribution, and a link discharges none of it on a device
-with no network. Every component in the table below now ships its own upstream
-notice beside the binaries, almost all of them under
-`usr/share/doc/<termux package>`, placed by `termux_copy_notices` in
-`scripts/lib/termux-packages.sh`. A directory that is absent, or that holds
-nothing over 128 bytes, fails the build. The floor is there because a file being
-present proves nothing: Termux's `libicu` 79.1 ships fourteen bytes reading
-`404: Not Found` where its licence should be.
+That last check is the one the permissive rows turn on. A name and a URL in a table is not the notice: MIT, the BSD family, ISC, NCSA, the Unicode and ICU licences and Apache-2.0 section 4 all require the copyright and permission text to be handed over with a binary redistribution, and a link discharges none of it on a device with no network. Every component in the table below now ships its own upstream notice beside the binaries, almost all of them under `usr/share/doc/<termux package>`, placed by `termux_copy_notices` in `scripts/lib/termux-packages.sh`. A directory that is absent, or that holds nothing over 128 bytes, fails the build. The floor is there because a file being present proves nothing: Termux's `libicu` 79.1 ships fourteen bytes reading `404: Not Found` where its licence should be.
 
 Four packages are exceptions, each measured rather than assumed:
 
@@ -487,20 +464,7 @@ Four packages are exceptions, each measured rather than assumed:
   file; without it the copyleft half of the tree would reach a device with a
   dangling link where its licence should be.
 
-Not listed here, because they are not third-party code: `libglibc-shim.so` and the
-stubs beside it (`libc.so.6`, `libm.so.6`, `libdl.so.2`, `libpthread.so.0`,
-`librt.so.1`, `libutil.so.1`, `libresolv.so.2`, `libcrypt.so.1`, `libgcc_s.so.1`,
-`ld-linux-aarch64.so.1`). They carry glibc's names so a glibc-linked binary can
-resolve against them, but contain none of glibc's code; they are built from
-`scripts/glibc-shim.c` and `scripts/gen-glibc-forwarders.py` in this repository and
-are covered by the root `LICENSE`. `libexec-trampoline.so` is excluded for the
-same reason: it is built from `scripts/exec-trampoline.c` here, and it is what
-lets a downloaded toolchain command start from a bare name on `PATH`. So are
-`libclaude-launch.so` and `libseccomp-shim.so`, built here from
-`scripts/claude-launch.c` and `scripts/seccomp-shim.c`; the second is
-freestanding and links against no library at all, so there is nothing in it to
-attribute but this project's own source. `libmove-noreplace.so` is built here
-from `scripts/move-noreplace.c`.
+Not listed here, because they are not third-party code: `libglibc-shim.so` and the stubs beside it (`libc.so.6`, `libm.so.6`, `libdl.so.2`, `libpthread.so.0`, `librt.so.1`, `libutil.so.1`, `libresolv.so.2`, `libcrypt.so.1`, `libgcc_s.so.1`, `ld-linux-aarch64.so.1`). They carry glibc's names so a glibc-linked binary can resolve against them, but contain none of glibc's code; they are built from `scripts/glibc-shim.c` and `scripts/gen-glibc-forwarders.py` in this repository and are covered by the root `LICENSE`. `libexec-trampoline.so` is excluded for the same reason: it is built from `scripts/exec-trampoline.c` here, and it is what lets a downloaded toolchain command start from a bare name on `PATH`. So are `libclaude-launch.so` and `libseccomp-shim.so`, built here from `scripts/claude-launch.c` and `scripts/seccomp-shim.c`; the second is freestanding and links against no library at all, so there is nothing in it to attribute but this project's own source. `libmove-noreplace.so` is built here from `scripts/move-noreplace.c`, and `libselfexe.so`, the library the Codex launcher preloads, from `scripts/selfexe-shim.c`.
 
 One row below is built here rather than downloaded: `libtermux-exec.so` is
 compiled by `scripts/build-termux-exec.sh` from termux-exec-package 2.5.0 and
@@ -530,7 +494,7 @@ files that carry terms of their own changes.
 | [gdbm](https://www.gnu.org.ua/software/gdbm/) | GPL-3.0 | **yes** | `libgdbm.so`, `libgdbm_compat.so` |
 | [Git](https://git-scm.com) | GPL-2.0 | **yes** | `libgit-remote-curl.so`, `libgit.so` |
 | [GNU Make](https://www.gnu.org/software/make/) | GPL-3.0 | **yes** | `libmake.so` |
-| [ICU](https://icu.unicode.org) | ICU | no | `libicudata.so.79`, `libicui18n.so.79`, `libicuuc.so.79` |
+| [ICU](https://icu.unicode.org) | Unicode-3.0, ICU | no | `libicudata.so.79`, `libicui18n.so.79`, `libicuuc.so.79` |
 | [Kerberos 5](https://web.mit.edu/kerberos/) | MIT | no | `libcom_err.so.3`, `libgssapi_krb5.so.2`, `libk5crypto.so.3`, `libkrb5.so.3`, `libkrb5support.so.0` |
 | [ldns](https://www.nlnetlabs.nl/projects/ldns/) | BSD-3-Clause | no | `libldns.so` |
 | [libandroid-glob](https://github.com/termux/libandroid-glob) | BSD-3-Clause | no | `libandroid-glob.so` |
@@ -597,11 +561,19 @@ Releases 1.1.0 to 1.4.0 (Code - OSS 1.133.0) also carried the chat agent host's 
 
 **The judgment call on "unmodified form".** The question is not whether the tree matches npm exactly (it does not) but what the differences actually are. Measured file by file against the upstream tarballs:
 
-*The SDK copy* (`@github/copilot@1.0.73`, the version the extension also pins at 1.139.1): 67 files in the tree built from 1.133.0, five of them re-rooted under `sdk/`. Its content differences from the upstream platform package are `package.json`, rewritten by the extension's own `postinstall` (renamed, given an `exports` map, platform constraints dropped), and the bundled `ripgrep` binary, replaced with the editor's own by the upstream packaging step `prepareBuiltInCopilotRipgrepShim`, which also writes a `shims.txt` marker. That replacement is byte-identical to `@vscode/ripgrep-universal`'s `rg`, sha256 `e152ea689d6e8420357e592f0d8253b96476c164118ca3e6e13074fa1705ddda`, measured in the shipped tree.
+*The SDK copy* (`@github/copilot@1.0.73`, the version the extension's lockfile also pins at 1.139.1). Measured on November 22, 2026, against the published `server-1.139.1` asset (built from commit d6158755, sha256 `0a450ae16494e8e8f87b845d3f946ccddf47f231426578c19a2e1965ec9d6591`) and the two npm tarballs the copy is assembled from, `@github/copilot@1.0.73` and its platform package `@github/copilot-linux-arm64@1.0.73`: 99 files. 96 of them are byte-identical to a file in one of those tarballs. 35 of the 96 sit under `sdk/` at a path the platform package does not use: 33 are the second copies the extension's own `postinstall` makes there of the package's agent definitions, built-in skill, tree-sitter queries and `tgrep`, and two are the native prebuilds in `sdk/prebuilds/linux-arm64/`, taken from the platform package's `prebuilds/linux-arm64`. The other three files:
 
-Pruning follows the upstream build's own `build/.moduleignore` and `build/lib/copilot.ts`.
+- `package.json` is the `@github/copilot` package's own manifest with one key added, an `exports` map for `./sdk`, which the extension's `postinstall` writes so the extension can import the SDK.
+- `sdk/ripgrep/bin/linux-arm64/rg` is not the `ripgrep` the platform package carries, which the pruning leaves out, but the editor's own, placed by the upstream packaging step `prepareBuiltInCopilotRipgrepShim`. It is byte-identical to `@vscode/ripgrep-universal`'s `rg`, sha256 `e152ea689d6e8420357e592f0d8253b96476c164118ca3e6e13074fa1705ddda`.
+- `shims.txt` is the 26-byte marker that same step writes.
 
-Every one of these transformations is performed by GitHub's or Microsoft's own build tooling, which VSCodroid runs unmodified; none is a VSCodroid intervention. The single patch this project applies to that area, `patches/0010-moduleignore-keep-copilot-sdk-entry.patch`, only narrows a pruning rule. From 1.139 upstream's `.moduleignore` strips the extension's whole `@github/copilot` package, `LICENSE.md` included; the patch puts back the per-directory list 1.138 used, minus its line for `sdk/index.js`, so the native and optional payload directories are still stripped and the rest is kept. The result is closer to the published package than upstream's rule would leave it, not further from it.
+Nothing else from the two tarballs is in the copy: the extension's `postinstall` takes only some of the platform package's directories, and the pruning, which follows the upstream build's own `build/.moduleignore` and `build/lib/copilot.ts`, leaves out part of what it takes and the loader package's `README.md`.
+
+Every change of content or layout above is made by GitHub's or Microsoft's own build tooling. VSCodroid runs that tooling as published except in three places, and none of them changes a byte of the Software:
+
+- `patches/0010-moduleignore-keep-copilot-sdk-entry.patch` only narrows a pruning rule. From 1.139 upstream's `.moduleignore` strips the extension's whole `@github/copilot` package, `LICENSE.md` included; the patch puts back the per-directory list 1.138 used, minus its line for `sdk/index.js`, so the native and optional payload directories are still stripped and the rest is kept. The result is closer to the published package than upstream's rule would leave it, not further from it.
+- `scripts/build-vscode-oss.sh` runs the extension's compile task, `compile-copilot-extension-build`, a second time when the staged copy has no `sdk/index.js` after the first. That is the same upstream task run again.
+- Once that compile has exited, `scripts/build-vscode-oss.sh` completes the staged copy, `.build/extensions/copilot/node_modules/@github/copilot`, from the package the compile left in the source tree. The extension's build runs its `postinstall` a second time while the packaging copies that package, and the `postinstall` deletes and rewrites each of the package's directories, so a build used to ship whatever part of a directory the copy happened to read: published servers came out without two of the agent definitions, or without the sixteen `sdk/queries` files. The step copies, byte for byte, every file that the packaging's own rules keep (`build/.moduleignore` and `build/.moduleignore.<platform>`, applied as the packaging applies them) and that the staged copy lacks or holds with other bytes, and it stops the build when the staged copy holds a file those rules leave out. It adds nothing the packaging would not have copied and edits no file. `scripts/verify-server-tree.py` then holds the shipped copy to the 99 files its `COPILOT_PACKAGE_FILES` list names.
 
 We read "unmodified form" as directed at the redistributor altering the Software, not at the vendor's own build tooling producing the embedded shape it was designed to produce. To be precise about which mode of that tooling is in play: Microsoft's own CI does **not** compile this extension; it downloads it as a VSIX from an internal feed, and `compile-copilot-extension-build` is described upstream as the path "used by non-CI local builds where copilot is not downloaded as a VSIX" (`gulpfile.extensions.ts:288`). That is the path this build takes, and it is a mode Microsoft ships for building from source; it is not the identical pipeline behind their released desktop binaries.
 
@@ -845,4 +817,4 @@ For questions about licenses, trademarks, or legal notices:
 
 ---
 
-_This document was last updated on November 21, 2026._
+_This document was last updated on November 22, 2026._

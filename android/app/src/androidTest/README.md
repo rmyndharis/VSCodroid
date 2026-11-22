@@ -27,9 +27,7 @@ Measured on both runner families:
 | `ubuntu-latest` | x86_64 | present, but only accelerates x86_64 images |
 | `ubuntu-24.04-arm` | aarch64 | absent, and no `vmx`/`svm` flag either |
 
-So an arm64 image would run under pure software emulation, for a 340 MB APK
-that boots a Node server. This is the same wall `scripts/device-test.sh`
-documents for the same reason.
+So an arm64 image would run under pure software emulation, for an APK of more than 200 MB that boots a Node server. This is the same wall `scripts/device-test.sh` documents for the same reason.
 
 ## The route that has now been measured
 
@@ -63,8 +61,7 @@ What that leaves, none of it tried here:
 
 - self-hosted hardware, where the virtualisation is real;
 - a physical device attached to a runner;
-- nothing else. Software emulation of a 340 MB APK that boots a Node server was
-  never a serious option, and it is the only thing these runners can offer.
+- nothing else. Software emulation of an APK of more than 200 MB that boots a Node server was never a serious option, and it is the only thing these runners can offer.
 
 One item from the old estimate is worth keeping, because it stays true and is
 cheap: `build.yml`'s asset cache key is `assets-${{ env.NDK_VERSION }}-${{ hashFiles(...) }}` with no

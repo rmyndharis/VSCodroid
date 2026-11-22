@@ -14,9 +14,15 @@
 > the Kotlin under `android/app/src/main/kotlin/com/vscodroid/`. `CONTRIBUTING.md` is the prose
 > kept current alongside it.
 >
-> Note also that the `docker build ... toolchains/` step below cannot run: `toolchains/` is a
-> gitignored download work dir holding no Dockerfile and no build scripts. Bundled binaries come
-> from Termux packages, via `scripts/download-*.sh`.
+> Note also that the `docker build ... toolchains/` step below cannot run: `toolchains/` is a gitignored download work dir holding no Dockerfile and no build scripts. Most bundled binaries come from Termux packages, via `scripts/download-*.sh`. The exceptions are `libldmusl.so`, Alpine's musl loader (`scripts/download-musl-loader.sh`), `libripgrep.so`, copied out of the server tree by `scripts/fetch-vscode-oss.sh`, and four built here with the NDK: `libexec-trampoline.so`, `libclaude-launch.so`, `libseccomp-shim.so` and `libmove-noreplace.so` (`jniLibProducers` in `android/app/build.gradle.kts` names the script behind each binary).
+>
+> Several parts of the plan below name things the app does not have:
+>
+> - **Terminals behind tmux** (M1-T5, M1-T6). Each terminal runs bash directly through node-pty on a real PTY; tmux ships as a plain command and no terminal goes through it. node-pty ships as `pty.node` inside the server tree, not as `libnode_pty.so` in `jniLibs`.
+> - **A server on localhost TCP.** Since #584 the editor listens on a private Unix socket per run (`filesDir/e-<hash>.sock`), and the app's `EditorGateway` owns `127.0.0.1:PORT` and relays every connection to it.
+> - **`minSdk 33`.** `minSdk` is 29 (`android/app/build.gradle.kts`).
+> - **`PhantomProcessMonitor.kt`, `IntentBridge.kt` and `SshKeyBridge.kt`.** None exists. The phantom-process count is kept by `assets/process-monitor.js`, which `assets/server.js` loads into the Node bootstrap; external URLs and SSH keys are methods of `AndroidBridge` (`openExternalUrl`, `generateSshKey`, `getSshPublicKey`), and Back is handled natively (`moveTaskToBack`).
+> - **A crash supervisor for the worker threads** (M5-T1). Patches 0003 and 0004 add no restart policy. A native fault in `pty.node` ends the whole editor server, and the app restarts that (`NodeService`, at most `MAX_RESTARTS` times).
 >
 > Three capabilities below are plans the app does not ship, so read them as plan rather
 > than description:
@@ -27,7 +33,7 @@
 >   locally, at which point saving writes to a copy and the edits never reach the file that was
 >   opened. Folders open through the SAF picker, which has the sync engine that makes write-back
 >   work.
-> - **A `/healthz` endpoint and a health-check fallback server** (M1 and M3 tasks below). Neither
+> - **A `/healthz` endpoint and a health-check fallback server** (M0-T4 and M1-T2 below). Neither
 >   ships. Readiness is `GET /version`, accepted only on 200 (`ProcessManager`), because `/` answers
 >   403 once the server requires a connection token and a probe that takes anything else calls a
 >   server healthy that serves nothing. `assets/server.js` no longer stands anything up when
@@ -1272,8 +1278,7 @@ patches/vscodroid/
    - Test: copy in Chrome → paste in VSCodroid and vice versa
 
 3. **IntentBridge.kt**:
-   - `openExternalUrl(url, authToken)`: planned as a scheme allowlist (https, mailto only); shipped
-     without one. The token is checked, the URL is not
+   - `openExternalUrl(url, authToken)`: planned as a scheme allowlist (https, mailto only); shipped without one. The token is checked, and the one URL refused is this app's own sign-in callback (`vscodroid://callback`, `isExtensionCallback`), so a page cannot hand itself a sign-in return
    - `onBackPressed()`: close panels/dialogs first, then minimize
    - `minimizeApp()`
 
@@ -1520,7 +1525,7 @@ android/app/src/main/kotlin/com/vscodroid/
 
 2. **Day 2** (validation):
    - Test: `npm --version`, `npm init -y`, `npm install express`
-   - Test: `npx create-vite-app test-app`. This has failed in every release so far: see the last acceptance criterion below
+   - Test: `npx create-vite-app test-app`. This works in a terminal since the exec interceptor merged in #453 (2026-10-14): see the last acceptance criterion below
    - Verify npm cache directory is properly configured
 
 > **Android exec note**: this is SELinux, not a `noexec` mount, and the difference is load-bearing. SELinux denies `execute_no_trans` on `app_data_file` for targetSdk >= 29, so a shim script under `filesDir` cannot be exec'd, while `dlopen` of a `.node` addon from the same directory is still allowed and is what `pty.node` relies on. A `noexec` mount would block both. Bash functions defined in `.bashrc` and in the `BASH_ENV` file answer the exec side by invoking Node.js with the npm CLI entry point as an argument. A shell running under the terminal's exec interceptor is the exception: it starts such a script through `/system/bin/linker64`, so the functions are for everything that is not a preloaded shell.
@@ -1530,7 +1535,7 @@ android/app/src/main/kotlin/com/vscodroid/
 - [ ] `npm --version` works
 - [ ] `npm init -y` creates package.json
 - [ ] `npm install express` installs successfully
-- [ ] `npx` works for running packages. No release has met this so far. `npx` itself starts, as the shell function above, but it runs a package's program through the program's file in `node_modules/.bin`, and Android refuses to execute a file inside the app's storage, for the reason the exec note above gives. So `npx <tool>`, `npm create` and `npm init <initializer>` exit 126 with `Permission denied`. The npm and npx section of `docs/USER_GUIDE.md` gives the way round it: run the program's JavaScript file with `node`
+- [ ] `npx` works for running packages. In a terminal it does, since #453 (2026-10-14): `npx` runs a package's program through the program's file in `node_modules/.bin`, which Android refuses to execute inside the app's storage, for the reason the exec note above gives, and every terminal preloads the exec interceptor (`FirstRunSetup.ensureTerminalPreload`), which starts that file through `/system/bin/linker64` instead. So `npx <tool>`, `npm create` and `npm init <initializer>` work in a terminal and in what it starts. Started without the interceptor, from a terminal where `LD_PRELOAD` was cleared or by an extension that runs `npx` itself, the program still exits 126 with `Permission denied`; the npm and npx section of `docs/USER_GUIDE.md` says which starts are covered
 
 ---
 
@@ -1926,7 +1931,7 @@ flowchart TD
 ```
 
 > [!NOTE]
-> **Package Manager** (`vscodroid pkg`) was originally scoped for M5 but has been deferred to the **Post-Release Roadmap**. Similarly, **Rust** and **C/C++ (Clang)** toolchains were deferred to Post-Release; M5 focused on Go, Ruby, and Java only. C/C++ has since shipped as a third pack, `toolchain_cpp` (see section 7.5 of the technical specification); Rust has not. Toolchain compatibility verification and APK size audit have been moved to M6 (Release) where they logically belong as verification/release activities.
+> **Package Manager** (`vscodroid pkg`) was originally scoped for M5 but has been deferred to the **Post-Release Roadmap**. Similarly, **Rust** and **C/C++ (Clang)** toolchains were deferred to Post-Release; M5 focused on Go, Ruby, and Java only. What ships today is Ruby, Java 25, C/C++ and Codex (`ToolchainRegistry.kt`): Go shipped and was withdrawn on 2026-08-18, Java moved from 17 to 21 in 1.6.0 and to 25 in 1.8.0, C/C++ shipped as `toolchain_cpp` (see section 7.5 of the technical specification), and Codex was added in #609 and #610 as a pack the first-run picker does not offer. Rust has not shipped. Toolchain compatibility verification and the APK size check have been moved to M6 (Release) where they logically belong as verification/release activities.
 
 ---
 
@@ -1941,11 +1946,10 @@ flowchart TD
 
 **Target VS Code files** (see Tech Spec §6.1 The Patch Set, and the patches themselves):
 
-- `src/vs/workbench/api/node/extensionHostProcess.ts`
-- `src/vs/server/node/remoteExtensionHostAgentServer.ts`
-- `src/vs/workbench/services/extensions/common/extensionHostEnv.ts`
-- `src/vs/platform/extensions/common/extensionHostStarter.ts`
-- ptyHost process launcher (equivalent fork → worker mapping)
+- `src/vs/server/node/extensionHostConnection.ts` and `src/vs/workbench/api/node/extensionHostProcess.ts` (0004, the extension host)
+- `src/bootstrap-fork.ts`, `src/vs/base/node/workerAsChildProcess.ts`, `src/vs/base/parts/ipc/node/ipc.cp.ts` and `src/vs/platform/terminal/node/nodePtyHostStarter.ts` (0003, the pty host)
+
+The files above are what the two patches change; the plan named four others that neither touches.
 
 **Implementation steps**:
 
@@ -2042,7 +2046,7 @@ android/settings.gradle.kts         (register asset pack modules)
 ```
 
 > [!NOTE]
-> M5 focuses on **Go, Ruby, and Java** only. Additional toolchains (Rust ~100 MB, C/C++ Clang ~84 MB) are deferred to the **Post-Release Roadmap** and will use the same Play Asset Delivery pipeline. C/C++ was built that way afterwards as `toolchain_cpp`, about 254 MB unpacked and a 74 MB ZIP, with its own `scripts/download-cpp.sh`.
+> M5 focuses on **Go, Ruby, and Java** only. Additional toolchains (Rust ~100 MB, C/C++ Clang ~84 MB) are deferred to the **Post-Release Roadmap** and will use the same Play Asset Delivery pipeline. C/C++ was built that way afterwards as `toolchain_cpp`, with its own `scripts/download-cpp.sh`; `ToolchainRegistry.kt` records 280 MB unpacked and an 81 MB ZIP for it. Go shipped and was withdrawn on 2026-08-18, Java is OpenJDK 25 since 1.8.0, and Codex is a fourth pack; `ToolchainRegistry.kt` is the list of what ships.
 
 **Implementation steps**:
 
@@ -2246,7 +2250,7 @@ android/app/src/main/kotlin/com/vscodroid/
 
 **Acceptance criteria**:
 
-- [ ] SSH key generation works (`ssh-keygen -t ed2519`)
+- [ ] SSH key generation works (`ssh-keygen -t ed25519`)
 - [ ] SSH config uses absolute paths for Termux compatibility
 - [ ] `GIT_SSH_COMMAND` configured in environment
 - [ ] Public key viewable and copyable to clipboard
@@ -2301,7 +2305,8 @@ android/app/src/main/kotlin/com/vscodroid/
     - [ ] `java -version` → OpenJDK 17.0.18; `javac` ✓; hello world compile+run ✓
     - [ ] Verify toolchains persist across app restarts: all 3 survive force-stop+restart
     - [ ] Verify uninstall cleans up correctly: symlinks removed, installRoots deleted, libs cleaned, core tools intact
-    - Issues found and fixed: Go tool binaries need chmod +x (added to manifest binaries); Ruby needs `libandroid-execinfo.so` dep, `RUBYLIB` env var, versioned soname symlink (`libruby.so.3.4`), and bash wrapper functions for scripts (noexec /data)
+    - Issues found and fixed: Go tool binaries need chmod +x (added to manifest binaries); Ruby needs `libandroid-execinfo.so` dep, `RUBYLIB` env var, versioned soname symlink (`libruby.so.3.4`), and bash wrapper functions for scripts (SELinux refuses `execve` under the app's data directory; `/data` is not mounted `noexec`)
+    - This list records the toolchains tested then. Go has since been withdrawn (2026-08-18) and Java is OpenJDK 25 since 1.8.0
 12. **Memory**: OnePlus 131 MB PSS, POCO 167 MB PSS, Redmi 142 MB PSS at idle (app + Node.js server)
 
 **Acceptance criteria**:
@@ -2338,15 +2343,8 @@ android/app/src/main/kotlin/com/vscodroid/
 **Acceptance criteria**:
 
 - [ ] Security review completed (no exposed secrets, sandbox intact)
-- [x] WebView CSP headers: not ours to configure. The workbench ships its own policy and nothing in
-      this app's Kotlin or assets sets one. What this project does do is **widen** it: patch 0005
-      adds `'unsafe-inline'` to `script-src` because `script-src` pins the document's inline script
-      by sha256, patching that script changes its digest, and the build does not recompute the hash.
-      `default-src` stays `'none'` and `frame-src` stays `'self'`. Recorded here because it is a
-      deliberate relaxation and this list is where someone would look for it
-- [x] No URL allowlist in `SecurityManager`: there are no entries to validate. A development
-      environment has to reach a LAN dev server, a private registry and a staging host, so the
-      destination is deliberately unjudged; the session token is what is checked
+- [x] WebView CSP headers: not ours to configure. The workbench ships its own policy and nothing in this app's Kotlin sets one. Three changes are this project's, recorded here because this list is where someone would look for them. Patch 0005 **widens** the webview document's policy: it adds `'unsafe-inline'` to `script-src` because `script-src` pins the document's inline script by sha256, patching that script changes its digest, and the build does not recompute the hash. `default-src` stays `'none'` and `frame-src` stays `'self'`. `assets/platform-fix.js` also **widens** one policy it relays, the Google Antigravity engine page's: a `frame-ancestors` that lists `vscode-webview:` gets `https://*.vscode-cdn.net` added (`widenFrameAncestors`), because here a webview is served from that origin rather than from `vscode-webview:`. Patch 0006 **narrows** the sign-in callback page's policy, adding `frame-ancestors 'none'` and `X-Frame-Options: DENY` so no other page can frame it
+- [x] No URL allowlist in `SecurityManager`: there are no entries to validate. A development environment has to reach a LAN dev server, a private registry and a staging host, so the destination is deliberately unjudged; the session token is what is checked. The one destination `AndroidBridge.openExternalUrl` refuses is this app's own sign-in callback (`vscodroid://callback`), so a page cannot deliver a sign-in return to itself
 - [x] Cleartext HTTP is permitted app-wide, not restricted to localhost: a dev server is served over
       plain HTTP at the device's own address, and this file cannot express an address range
 - [x] Localhost matching uses `Uri.parse()` for exact host comparison
@@ -2511,11 +2509,11 @@ android/app/src/main/res/
 2. **lint.yml**: Android lint on PR with baseline, upload lint report as artifact
 3. **release.yml**: tag → sign APK → package toolchain ZIPs (`scripts/package-toolchains.sh`) → GitHub Release with checksums
 4. **pages.yml**: docs site deployment to GitHub Pages
-5. `libnode.so` fetching: `LIBNODE_URL` secret → current tag release → latest release → stub fallback
+5. `libnode.so` fetching: `LIBNODE_URL` secret → current tag release → latest release → stub fallback. Superseded: every build now installs Termux's `nodejs-lts` as `libnode.so` through `scripts/download-node.sh`, and no workflow reads a `LIBNODE_URL` secret
 6. Caching strategy for Node.js binary, VS Code build, Gradle, tarballs + generated assets
-7. Secrets management: keystore env vars (`VSCODROID_KEYSTORE_*`), `LIBNODE_URL`
+7. Secrets management: keystore env vars (`VSCODROID_KEYSTORE_*`); the `LIBNODE_URL` secret is no longer read
 8. CI fix: node-pty subshell path resolved with `ROOT_DIR` (Build + Unit Tests green)
-9. CI fix: release workflow. Remove AAB build (needs toolchain asset packs), fix libnode.so download (try current tag first), remove deprecated `api-level` param (Release workflow green)
+9. CI fix: release workflow. Remove AAB build (needs toolchain asset packs), fix libnode.so download (try current tag first), remove deprecated `api-level` param (Release workflow green). The AAB is built again today: `release.yml` runs `./gradlew bundleRelease` and publishes the bundle, which carries the four toolchain packs
 10. Build toolchain ZIPs and upload as GitHub Release assets: fallback download URL served from GitHub Releases
 11. [ ] Automated on-device testing. Not started, and a hosted device lab is not the shape it
     would take: nothing under `.github/workflows/` starts the app, and the harness that does,
@@ -2621,8 +2619,7 @@ ships beside the server is covered by plain Node scripts (`scripts/test-*.js`), 
 "Check the bundled JavaScript runtime" step in `lint.yml`. The instrumented suite under
 `androidTest/` is compiled by `build.yml` and run by a person on a device.
 
-**Coverage**: no coverage tooling is configured and no threshold is enforced. Nothing in
-`android/` declares a coverage plugin, so a percentage cannot be quoted from this build.
+**Coverage**: opt-in, with no threshold. `./gradlew :app:createDebugUnitTestCoverageReport -PvscodroidCoverage` turns on `enableUnitTestCoverage` for that run (`android/app/build.gradle.kts`); no workflow passes the property, so the suite CI gates on stays uninstrumented.
 
 ### 10.2 Documentation Updates
 
