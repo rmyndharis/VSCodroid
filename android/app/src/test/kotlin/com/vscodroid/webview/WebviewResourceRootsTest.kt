@@ -415,6 +415,65 @@ class PublishedResourceRootsTest {
     }
 
     /**
+     * A credential name that is a link to a file that does not exist yet, such as `~/.npmrc` linked to a
+     * dotfiles repository's `npmrc` before the first login, canonicalises to the link's own path, so the
+     * projects folder looked clear of it. The first `npm login` then writes the token through the link
+     * into that folder, where a webview with script could read it. The place the link leads to counts as
+     * the credential from the start.
+     */
+    @Test
+    fun `a credential link that points at nothing yet keeps the folder it will land in unpublished`() {
+        val context = contextWith(externalDir)
+        File(filesDir, "home").mkdirs()
+        File(filesDir, "projects/dotfiles").mkdirs()
+        Files.createSymbolicLink(File(filesDir, "home/.npmrc").toPath(), File(filesDir, "projects/dotfiles/npmrc").toPath())
+        mockkObject(Logger)
+        val warnings = mutableListOf<String>()
+        every { Logger.w(any(), capture(warnings), any()) } just Runs
+
+        val roots = publishedResourceRoots(context)
+
+        assertFalse(File(filesDir, "projects").canonicalPath in roots, "a root the credential will be written into was published")
+        assertTrue(File(filesDir, "server").canonicalPath in roots, "the roots that hold none were dropped with it")
+        assertTrue(warnings.any { "~/.npmrc" in it }, "the log does not say which link kept the folder back: $warnings")
+        assertNull(workspaceRootOrNull(File(filesDir, "projects/dotfiles").path, sensitiveLocations(context)))
+    }
+
+    /** The same when even the folder the link leads into is missing, and when the target is written relative. */
+    @Test
+    fun `a dangling credential link counts whether its folder exists and however the target is written`() {
+        val context = contextWith(externalDir)
+        File(filesDir, "home").mkdirs()
+        File(filesDir, "projects").mkdirs()
+        Files.createSymbolicLink(File(filesDir, "home/.netrc").toPath(), File(filesDir, "projects/later/netrc").toPath())
+        Files.createSymbolicLink(File(filesDir, "home/.pypirc").toPath(), java.nio.file.Paths.get("../projects/rc/pypirc"))
+        mockkObject(Logger)
+        every { Logger.w(any(), any(), any()) } just Runs
+
+        val sensitive = sensitiveLocations(context)
+
+        assertTrue(File(filesDir, "projects/later/netrc").canonicalPath in sensitive, "a missing folder: $sensitive")
+        assertTrue(File(filesDir, "projects/rc/pypirc").canonicalPath in sensitive, "a relative target: $sensitive")
+        assertFalse(File(filesDir, "projects").canonicalPath in publishedResourceRoots(context, sensitive))
+    }
+
+    /** A chain of links that ends at nothing counts at its end, and a link that leads back to itself does not hang the resolution. */
+    @Test
+    fun `a chain of dangling links counts at its end and a cycle ends`() {
+        val context = contextWith(externalDir)
+        File(filesDir, "home").mkdirs()
+        File(filesDir, "projects").mkdirs()
+        Files.createSymbolicLink(File(filesDir, "home/.docker").toPath(), File(filesDir, "home/docker-next").toPath())
+        Files.createSymbolicLink(File(filesDir, "home/docker-next").toPath(), File(filesDir, "projects/docker/config").toPath())
+        Files.createSymbolicLink(File(filesDir, "home/.kube").toPath(), File(filesDir, "home/.kube").toPath())
+
+        val sensitive = sensitiveLocations(context)
+
+        assertTrue(File(filesDir, "projects/docker/config").canonicalPath in sensitive, "the end of the chain: $sensitive")
+        assertTrue(File(filesDir, "home/.kube").canonicalPath in sensitive, "the cycle is still its own name: $sensitive")
+    }
+
+    /**
      * Catches: a sensitive set that drifts from the paths the rest of the app
      * actually writes to. The first two entries are taken from Environment's
      * getters, so this fails if one is repointed out from under them or dropped.

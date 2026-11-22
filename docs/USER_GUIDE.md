@@ -660,7 +660,7 @@ configured formatter is not available instead of falling back to the editor's bu
 
 Extensions that use webview panels (such as theme configurators, documentation viewers, and AI assistants) render correctly in VSCodroid.
 
-Webviews cannot load files from your projects folder while a file or folder that holds sign-in secrets, such as `~/.npmrc`, `~/.config/git` or `~/.ssh`, is a link into it, because serving the folder would serve the secret with it; a Markdown preview there then shows no images. The same holds for a device folder. Open a folder inside it that does not hold the linked file, or keep that file outside the projects folder and the device folders.
+Webviews cannot load files from your projects folder while a file or folder that holds sign-in secrets, such as `~/.npmrc`, `~/.config/git` or `~/.ssh`, is a link into it, also a link to a file that does not exist yet, which the first sign-in creates, because serving the folder would serve the secret with it; a Markdown preview there then shows no images. The same holds for a device folder. Open a folder inside it that does not hold the linked file, or keep that file outside the projects folder and the device folders.
 
 ### Jupyter Notebooks
 

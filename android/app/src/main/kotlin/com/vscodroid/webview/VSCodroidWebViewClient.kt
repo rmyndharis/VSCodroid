@@ -46,6 +46,8 @@ import java.net.URI
 import java.net.URISyntaxException
 import java.net.URL
 import java.net.URLDecoder
+import java.nio.file.Files
+import java.nio.file.Paths
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 import android.annotation.SuppressLint
@@ -101,7 +103,7 @@ internal fun publishedResourceRoots(
     // Named as the app knows it, `~/.npmrc` and not where that link points, which is the person's own path,
     // also when the overlap was found under the data directory's other name.
     val name = sensitiveLocationNames(context)
-        .firstOrNull { canonicalOrNull(it)?.let(::dataDirectorySpellings)?.contains(overlapping) == true }
+        .firstOrNull { sensitiveForms(it).flatMap(::dataDirectorySpellings).contains(overlapping) }
         ?.replaceFirst(Environment.getHomeDir(context), "~") ?: overlapping
     Logger.w("WebViewClient", "Not published as a resource root, it overlaps $name, which must stay unreadable: $root")
     false
@@ -272,9 +274,55 @@ internal fun openResourceFile(file: File, roots: List<String>): FileInputStream 
  * not, `/data/data/<package>/files/home` overlapped nothing here by prefix and passed as
  * a workspace root, which serves the ssh key, the key that opens the sealed extension
  * secrets and the WebView's own stores. Holding both names refuses it either way.
+ *
+ * A name that is a link to something that does not exist yet counts at the place the link
+ * leads to as well ([sensitiveForms]), because the first write through it creates the file
+ * there.
  */
 internal fun sensitiveLocations(context: Context): List<String> =
-    sensitiveLocationNames(context).mapNotNull(::canonicalOrNull).flatMap(::dataDirectorySpellings).distinct()
+    sensitiveLocationNames(context).flatMap(::sensitiveForms).flatMap(::dataDirectorySpellings).distinct()
+
+/**
+ * Where [name] counts as the credential: its canonical path and, when it is a link that points at
+ * nothing yet, the place the link leads to.
+ *
+ * `File.canonicalPath` of such a link answers the link's own path (measured on API 29 and 36), so
+ * a `~/.npmrc` linked to a dotfiles repository's `npmrc` before the first login looked clear of the
+ * projects folder, and the first `npm login` then wrote the token through the link into a folder
+ * that was served. A link that resolves is its target's canonical path already, and a name that
+ * does not exist is itself; a link made after the rules were resolved counts from the next page
+ * load ([ResourceRules]).
+ */
+private fun sensitiveForms(name: String): List<String> {
+    val own = canonicalOrNull(name) ?: return emptyList()
+    return listOfNotNull(own, danglingDestination(own))
+}
+
+/**
+ * Follows [canonical], a link [File.getCanonicalPath] could not follow, to where it leads: through a
+ * chain of such links, a relative target read against the link's own (canonical) folder, up to the
+ * kernel's own limit of forty. Null for a path that is not a link, for a cycle, and for anything
+ * that cannot be read: the caller then keeps the link's own path, which is what it had before.
+ */
+private fun danglingDestination(canonical: String): String? {
+    try {
+        var current = canonical
+        var destination: String? = null
+        repeat(MAX_LINK_HOPS) {
+            val link = Paths.get(current)
+            if (!Files.isSymbolicLink(link)) return destination
+            val target = Files.readSymbolicLink(link)
+            val next = if (target.isAbsolute) target.toString() else File(File(current).parentFile, target.toString()).path
+            current = canonicalOrNull(next) ?: return null
+            destination = current
+        }
+    } catch (_: Exception) {
+        // An unreadable link or a name the platform cannot spell: no destination, the link's own path stands.
+    }
+    return null
+}
+
+private const val MAX_LINK_HOPS = 40
 
 /**
  * [path] and, inside an app's data directory, the same place under its other name:
