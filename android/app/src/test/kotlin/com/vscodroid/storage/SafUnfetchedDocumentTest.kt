@@ -1765,18 +1765,49 @@ class SafUnfetchedDocumentTest {
     }
 
     /**
-     * The other refusal site cannot be driven from here at all: reaching it means walking
-     * into a directory, and delivering a directory event builds a `FileObserver`, whose
-     * static initializer needs native code. What holds it to the behaviour above is that
-     * there is one refusal in the file, so this reads the source and pins that.
+     * The directory walk, the one write path the cases above do not take. A folder moved into
+     * the copy from elsewhere, onto the empty folder the sync left where the device's holds a
+     * document it never read, brings a file under that document's name. The file comes with
+     * its folder and has no event of its own, so only the walk that makes the folder's entries
+     * on the device reaches it (`createChildrenInSaf` calling `createOneInSaf`). A directory
+     * event places no observer here: none is placed while the engine is not watching.
+     *
+     * Two guards in the walk answer for the document, the unread-document refusal and the
+     * device-edit check behind it (`keepsDeviceEdit`), and either alone keeps it, so this pins
+     * what the person gets and not which guard gave it: the case below pins that the refusal
+     * is still there.
+     */
+    @Test
+    fun `a file that comes inside a folder moved in is refused over a document the sync never read`() {
+        val announced = mutableListOf<String>()
+        engine.onWriteBackFailed = { announced.add(it.name) }
+        deviceTree(docsHoldingUnread)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        assertTrue(File(mirror, "docs").isDirectory, "setup failed: the sync left no folder to move onto")
+        val incoming = File(filesDir, "incoming").apply { mkdirs() }
+        File(incoming, "big.zip").writeText("typed into a new file of that name")
+        assertTrue(incoming.renameTo(File(mirror, "docs")), "setup failed: the folder could not be moved in")
+
+        deliver(FileObserver.MOVED_TO or isDirFlag, "docs")
+
+        verify(exactly = 0) { resolver.openOutputStream(any(), any()) }
+        assertEquals(
+            listOf("big.zip"), announced,
+            "the walk wrote over, or did not announce, a document on the device the sync never read",
+        )
+        assertEquals("typed into a new file of that name", File(mirror, "docs/big.zip").readText())
+    }
+
+    /**
+     * Each refusal site has another guard behind it, so a case that drives a site cannot tell
+     * which of the two answered: removing any one of the three refusals leaves every case in
+     * this class green, the walk's included. What holds each site to the behaviour above is
+     * that there is one refusal in the file, so this reads the source and pins that.
      *
      * Two claims, and they fail differently. The message having one home says that a
      * second refusal cannot have been written that forgets to announce. The call count
      * says every refusal is still there: the sentence can sit in the file, spelt exactly
-     * once, while the site that reaches it has been commented out. That site is the
-     * destructive one (with the call gone, `createOneInSaf` falls through to the write
-     * and truncates a device document this sync never read), and no behavioural test in
-     * this class can reach it.
+     * once, while a site that reaches it has been commented out.
      *
      * The call count counts only what the compiler sees. A plain search over raw text
      * finds the call inside a line a `//` has disabled exactly as readily as inside a

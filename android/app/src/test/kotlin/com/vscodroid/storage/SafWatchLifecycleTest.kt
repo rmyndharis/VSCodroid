@@ -151,19 +151,17 @@ class SafWatchLifecycleTest {
 }
 
 /**
- * That the teardown path still reaches the terminal stop, and the two lifecycle
- * methods still exclude each other.
+ * That the lifecycle methods still exclude each other.
  *
  * Source reading, for the reason `ServerReadinessCallSiteTest` gives: what regresses
- * here is a call going to the wrong one of two near-identical methods, or a monitor
- * being dropped, neither of which changes a value a JVM test can observe. The
+ * here is a monitor being dropped, which changes no value a JVM test can observe. The
  * behaviour above pins what the engine does once the calls are wired this way; this
- * pins the wiring.
+ * pins the wiring. Which of the engine's methods the manager's teardown and folder open
+ * reach is asked of the engine itself, in [SafManagerEngineWiringTest].
  */
 class SafWatchLifecycleWiringTest {
 
     private val engineFile = "src/main/kotlin/com/vscodroid/storage/SafSyncEngine.kt"
-    private val managerFile = "src/main/kotlin/com/vscodroid/storage/SafStorageManager.kt"
 
     /**
      * The lines of a declaration's body, comments blanked, by brace matching.
@@ -231,40 +229,6 @@ class SafWatchLifecycleWiringTest {
                     "test, or a shutdown that lands between them leaves a watcher and a " +
                     "saf-writeback thread on an engine whose owner is gone."
             }
-        }
-    }
-
-    /**
-     * What a person changes while a folder opens is recorded only where it is asked for, by the
-     * open the editor waits on, and sent only by the watcher that starts after it. Asked for
-     * nowhere, the deletion is fetched back and the late save waits again, and every engine test
-     * still passes, because none of them can build the watch.
-     */
-    @Test
-    fun `the folder open records what changes while it runs, and the watcher sends it`() {
-        val manager = SourceScan.withoutComments(SourceScan.read(managerFile))
-        val open = manager.substringAfter("suspend fun syncToLocal(").substringBefore("fun startFileWatcher(")
-        assertTrue(Regex("""initialSync\([^)]*recordChanges = true""").containsMatchIn(open)) {
-            "syncToLocal no longer asks its open to record what changes while it runs"
-        }
-
-        val start = body(engineFile, "fun startWatching(mirrorDir: File, safUri: Uri) {")
-        assertTrue(start.any { it.contains("takeChangesDuringOpen(mirrorDir)") }) {
-            "startWatching no longer takes what the open recorded"
-        }
-        assertTrue(start.any { it.contains("replayChangesDuringOpen(") }) {
-            "startWatching no longer sends what the open recorded"
-        }
-    }
-
-    @Test
-    fun `the manager's shutdown reaches the engine's, not its ordinary stop`() {
-        val delegation = body(managerFile, "fun shutdownFileWatcher() {")
-
-        assertTrue(delegation.any { it.contains("syncEngine.shutdown()") }) {
-            "shutdownFileWatcher no longer shuts the engine down, so `onDestroy` makes a " +
-                "stop that a start already inside the engine simply overtakes. Found: " +
-                delegation
         }
     }
 }

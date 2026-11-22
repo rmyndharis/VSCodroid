@@ -172,6 +172,8 @@ class SafWatchSessionTest {
         released.set(true)
         worker.join(5_000)
 
+        // A drain still running could take the job after the checks below, which would then pass for nothing.
+        assertFalse(worker.isAlive, "setup failed: the departing drain did not finish")
         assertEquals(
             listOf("slow.txt"), openedForWrite.toList(),
             "the departing drain opened a document of the folder opened after it",

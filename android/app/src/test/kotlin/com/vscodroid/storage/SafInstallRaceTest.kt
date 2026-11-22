@@ -235,9 +235,12 @@ class SafInstallRaceTest : SafInitialSyncTestBase() {
     /**
      * What a replaced copy costs in reads of the old one. Each read of a copy before it is replaced is a read of the
      * whole file on the device's storage, and a checkout on the device that changes many files pays it per file.
+     *
+     * Exactly, not at most: every read is one of the looks [EXPECTED_OLD_COPY_READS] names, so a count that drops is a
+     * check that went. A change that needs fewer reads lowers the number and says which look it removed.
      */
     @Test
-    fun `replacing a copy reads the old one in full no more than its checks need`() {
+    fun `replacing a copy reads the old one in full exactly as often as its checks need`() {
         deviceHolds("notes.md", "first")
         sync()
         deviceHolds("notes.md", "newer on the device", modified = DEVICE_TIME + 60_000)
@@ -247,7 +250,11 @@ class SafInstallRaceTest : SafInitialSyncTestBase() {
         open(engineCountingHelpers())
 
         assertEquals("newer on the device", mirrorFile("notes.md").readText())
-        assertEquals(EXPECTED_OLD_COPY_READS, reads, "the old copy was read in full $reads times")
+        assertEquals(
+            EXPECTED_OLD_COPY_READS, reads,
+            "the old copy was read in full $reads times: more costs a read of the whole file per replaced copy, " +
+                "fewer means one of the looks the count names was dropped",
+        )
     }
 
     private companion object {
