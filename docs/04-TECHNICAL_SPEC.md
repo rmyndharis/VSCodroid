@@ -1294,10 +1294,13 @@ back a correction the editor applied for it (`u` corrected to `you`, then `u` wr
 over `you`) has the shape of a letter over the word and is applied, as long as nothing has
 changed the text since but a deletion at the end of the correction or a space or a punctuation
 mark inserted there, which is how a keyboard that sends the correction and its space as two
-updates sends the space; a word completed from its first letter (`t` to `the`) is no
-correction, and the letter over it stays a stale letter. A Backspace that the editor runs as a
-key press, as Gboard 17.7 and 18.4 send it, is an edit no update reports, and the take-back
-after it is typed after the word (`youu`).
+updates sends the space, and as long as the buffer still starts where it did: a tap that starts
+it at another line moves no version, and where that line holds the same word the letter written
+over it is a stale letter, typed after the word (a second line holding `you` becomes `youu`); a
+word completed from its first letter (`t` to `the`) is no correction, and the letter over it
+stays a stale letter. A Backspace that the editor runs as a key press, as Gboard 17.7 and 18.4
+send it, is an edit no update reports, and the take-back after it is typed after the word
+(`youu`).
 Measured on an Android 12 emulator with Gboard 10.8 and WebView 134, with a word typed, a turn
 to landscape and back and one letter about eight seconds later: on a build of the release's
 sources 21 of 30 runs ended damaged, 20 of them with the word doubled (`line twotwox`, `line
