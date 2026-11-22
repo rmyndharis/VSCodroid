@@ -226,11 +226,13 @@ class SafStorageManager(context: Context) {
     }
 
     /**
-     * Told when what a program changed while a folder opened could not all be sent; see
-     * [SafSyncEngine.onOpenChangesUnsent]. Unthrottled, like [onUploadIncomplete]: it fires at
-     * most once per folder open.
+     * Told when what a program changed while a folder opened could not all be sent, or, with the
+     * second argument true, what it changed in the folder already open while a switch to another
+     * folder ran and failed; see [SafSyncEngine.onOpenChangesUnsent]. Unthrottled, like
+     * [onUploadIncomplete]: it fires at most once per folder open and once per watcher a failed
+     * switch puts back.
      */
-    fun onOpenChangesUnsent(announce: (File) -> Unit) {
+    fun onOpenChangesUnsent(announce: (File, Boolean) -> Unit) {
         syncEngine.onOpenChangesUnsent = announce
     }
 
