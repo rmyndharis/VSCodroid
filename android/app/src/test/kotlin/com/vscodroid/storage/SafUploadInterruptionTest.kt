@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeFalse
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -113,6 +114,9 @@ class SafUploadInterruptionTest {
         try {
             providerReleases.forEach { it.set(true) }
             workers.finish()
+            // Beside the mirror, outside what `@TempDir` cleans up.
+            File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).delete()
+            File(mirror.path + SafSyncEngine.SORTED_RECORD_SUFFIX).delete()
         } finally {
             unmockkAll()
         }
@@ -349,6 +353,7 @@ class SafUploadInterruptionTest {
         )
         try {
             Files.setPosixFilePermissions(filesDir.toPath(), permissions - writePermissions)
+            assumeFalse(filesDir.canWrite(), "This account bypasses directory write permissions")
             assertFalse(probe.renameTo(File(filesDir, "rename-target")))
             // Existing files remain writable even though their directory refuses renames.
             journal.writeBytes(original)

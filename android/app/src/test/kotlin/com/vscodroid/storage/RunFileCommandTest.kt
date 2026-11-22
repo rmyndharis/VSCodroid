@@ -1,6 +1,6 @@
 package com.vscodroid.storage
 
-import com.vscodroid.SourceScan
+import com.vscodroid.setup.ToolchainRegistry
 import org.json.JSONObject
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -20,9 +20,9 @@ import java.io.File
  *
  * Each toolchain a language needs is also checked against the packs the app ships, since
  * the command asks `toolchains.json` for it by name and a misspelling would answer "not
- * installed" on a device that has it. Those names are read from tracked sources, the
- * registry and the scripts that write each pack's manifest: the pack manifests themselves
- * are downloaded, so they are absent from a clean clone and from the CI unit job.
+ * installed" on a device that has it. Those names are taken from the registry's own list and
+ * from the scripts that write each pack's manifest: the pack manifests themselves are
+ * downloaded, so they are absent from a clean clone and from the CI unit job.
  *
  * The language is not enough to choose a file the button can run. The built-in C++ language
  * claims every header (`.h`, `.hpp`, `.inl`, ...), and `c++ foo.h` writes a precompiled header
@@ -87,11 +87,11 @@ class RunFileCommandTest {
         val needed = Regex("""toolchain: '(\w+)'""").findAll(table()).map { it.groupValues[1] }.toSet()
         check(needed.isNotEmpty()) { "no toolchain was read from RUN_COMMANDS" }
 
-        val registry = SourceScan.read("src/main/kotlin/com/vscodroid/setup/ToolchainRegistry.kt")
+        val offered = ToolchainRegistry.available.map { it.packName }
         for (name in needed) {
             assertTrue(
-                registry.contains("packName = \"toolchain_$name\""),
-                "RUN_COMMANDS asks toolchains.json for `$name`, but ToolchainRegistry offers no such pack",
+                "toolchain_$name" in offered,
+                "RUN_COMMANDS asks toolchains.json for `$name`, but ToolchainRegistry offers no such pack: $offered",
             )
             val script = File("../../scripts/download-$name.sh")
             assertTrue(script.isFile, "${script.path} not found; it is what writes the `$name` pack's manifest")
