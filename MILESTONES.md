@@ -361,7 +361,7 @@ M6 (Release)   → Play Store release
    - [x] `StorageManager.clearCaches()`: clear temporary files
    - [x] `StorageManager.getAvailableStorage()`: check available space
    - [x] `StorageManager.isStorageLow()`: low storage warning with Toast
-   - [x] Exposed to JS via `AndroidBridge` (`getStorageInfo`, `clearCaches`, `getAvailableStorage`)
+   - [x] Exposed to JS via `AndroidBridge` (`getStorageBreakdown`, `clearCaches`, `getAvailableStorage`); this line named the first `getStorageInfo` until 2026-11-22, a method that never existed
 
 6. **Browser sign-in callback relay** (`AndroidBridge.kt`, `MainActivity.kt`)
    - [x] `openExternalUrl()` opens the authorisation URL, in a Chrome Custom Tab for https

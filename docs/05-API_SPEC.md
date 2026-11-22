@@ -807,20 +807,13 @@ This is VS Code's built-in protocol. VSCodroid uses it as-is (no modifications n
 | `/version`                | GET    | Answered before the token check, which is what makes it the readiness probe |
 | `/vscode-remote-resource` | GET    | Serve workspace files to web client          |
 
-**There is no `/healthz` on any install, and there is no longer a stub that serves one.**
-This table listed the route for a long time. The only thing that ever answered it was a
-fallback server in `assets/server.js`, which bound the port when
-`vscode-reh/out/server-main.js` was missing and answered 200 to every path, `/version`
-included: a broken install reported a healthy start and put a page telling the user to run
-two shell scripts in front of them. The bootstrap now logs the missing entry point and
-exits 1, so the port stays unbound, the readiness poll fails, and the failure is reported
-as one. A probe of `/healthz` gets whatever the REH server does with an unknown route.
+**There is no `/healthz` on any install, and there is no longer a stub that serves one.** This table listed the route for a long time. The only thing that ever answered it was a fallback server in `assets/server.js`, which bound the port when `vscode-reh/out/server-main.js` was missing and answered 200 to every path, `/version` included: a broken install reported a healthy start and put a page telling the user to run two shell scripts in front of them. The bootstrap now logs the missing entry point and exits 1. The port is the app's own `EditorGateway`, bound before anything is started, and with no editor server selected it answers every connection with 503, so the readiness poll fails and the failure is reported as one. A probe of `/healthz` gets whatever the REH server does with an unknown route.
 
 ### 3.2 WebSocket Connection
 
 | Endpoint                 | Description                                    |
 | ------------------------ | ---------------------------------------------- |
-| `ws://localhost:PORT/ws` | Main RPC channel between web client and server |
+| `ws://127.0.0.1:PORT/ws` | Main RPC channel between web client and server |
 
 **Protocol**: VS Code's `IExtHostRpcProtocol`, binary-framed messages with JSON-RPC semantics.
 
@@ -890,10 +883,7 @@ Added by `server.js` itself, not passed from Kotlin:
   APPLICATION-scoped key the server owns, `extensions.verifySignature`, does take effect
   from it. Only a key that is APPLICATION-scoped *and* read by the workbench cannot be
   defaulted there. See `Environment.getMachineSettingsPath`.
-- `--enable-proposed-api ms-python.python`: the workbench strips the proposed APIs an
-  extension declares unless the server names it, and the Python extension, which declares
-  nine, then fails to activate at its first read of one (`testObserver`). The id is the
-  point: the flag with no id turns the check off for every extension on the phone.
+- `--enable-proposed-api` for `ms-python.python`, `ms-toolsai.jupyter` and `ms-toolsai.jupyter-renderers`, one flag per id: the workbench strips the proposed APIs an extension declares unless the server names it. The Python extension, which declares nine, then fails to activate at its first read of one (`testObserver`). Without theirs the Jupyter extensions fail the same way (`notebookKernelSource`), which leaves the kernel picker empty, and the workbench drops their notebook static preloads (`contribNotebookStaticPreloads`). The ids are the point: the flag with no id turns the check off for every extension on the phone.
 
 ⚠️ **An argument not handled explicitly by `server.js` is dropped silently.** Adding a flag to
 the Kotlin command line and expecting the editor server to see it is the trap here,

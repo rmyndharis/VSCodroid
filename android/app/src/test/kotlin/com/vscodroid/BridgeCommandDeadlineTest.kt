@@ -20,11 +20,12 @@ import java.io.File
  * that they walk the mirror.
  *
  * All four were sent under one five-second deadline written for a relay hop. The
- * extracted server tree alone is around 875 MB before a project is opened, so on
- * a real install the walk outruns the deadline, the promise rejects, and the user
- * is told "Bridge timeout: is the app running on Android?" by the only two
- * screens in the app that can free space. The answer they were waiting for
- * arrives afterwards and is dropped, because the pending entry is already gone.
+ * extracted server tree alone is hundreds of megabytes before a project is
+ * opened, so on a real install the walk outruns the deadline, the promise
+ * rejects, and the user is told "Bridge timeout: is the app running on
+ * Android?" by the only two screens in the app that can free space. The answer
+ * they were waiting for arrives afterwards and is dropped, because the pending
+ * entry is already gone.
  *
  * The deadline is checked rather than the walk, because the walk is the user's
  * disk and nothing here can bound it. What can be pinned is that these four are

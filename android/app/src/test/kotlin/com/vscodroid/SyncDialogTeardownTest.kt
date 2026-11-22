@@ -21,14 +21,18 @@ import java.io.File
  * The cancellation branch beside them has carried this guard since it was
  * written. These are its two siblings, which did not.
  *
- * Source reading, and the weaker layer, for the reason [SyncDialogTeardownTest]
- * shares with the other cases over this method: the handler is inside an Activity
+ * The guard asks whether the screen is destroyed, and only that. A screen that is
+ * finishing still has its window until it is destroyed, so the dialog can be
+ * dismissed then; skipped for finishing, it stayed up over the closing screen and
+ * the platform logged its window as leaked when the screen was destroyed.
+ *
+ * Source reading, and the weaker layer: the handler is inside an Activity
  * method holding an `AlertDialog` and a `lifecycleScope`, and a plain JVM test
  * can build neither.
  *
  * NEGATIVE CONTROL, measured rather than assumed: dropping the
- * `if (!isFinishing && !isDestroyed)` from either failure handler reddens `every
- * failure handler guards the dialog it dismisses` and nothing else.
+ * `if (!isDestroyed)` from either failure handler reddens `every failure handler
+ * guards the dialog it dismisses` and nothing else.
  */
 class SyncDialogTeardownTest {
 
@@ -95,14 +99,14 @@ class SyncDialogTeardownTest {
                 dismissals.joinToString("\n") { "  ${it.trim()}" }
         }
 
-        val unguarded = dismissals.filterNot {
-            it.contains("if (!isFinishing && !isDestroyed)")
-        }
+        val unguarded = dismissals.filterNot { it.trim() == "if (!isDestroyed) dialog.dismiss()" }
         assertEquals(emptyList<String>(), unguarded.map { it.trim() }) {
             "a failure handler dismisses the sync dialog without asking whether its " +
-                "window is still there. A sync that fails for a real reason while the " +
-                "activity is being torn down throws out of the handler, out of the " +
-                "coroutine and into the uncaught handler, which kills the app."
+                "window is still there, or skips it for a screen that is only finishing. " +
+                "A sync that fails for a real reason while the activity is being torn down " +
+                "throws out of the handler, out of the coroutine and into the uncaught " +
+                "handler, which kills the app; a finishing screen still has its window, and " +
+                "a dialog left on it is logged as a leaked window when the screen goes."
         }
     }
 

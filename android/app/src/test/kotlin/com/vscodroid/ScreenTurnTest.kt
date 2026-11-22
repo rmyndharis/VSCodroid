@@ -134,6 +134,30 @@ class ScreenTurnTest {
             "the next change is not read against this one, or against the framework's own object, which it may reuse")
     }
 
+    /**
+     * The two ends the cases above run between, read off the source because neither runs on the JVM: the
+     * framework's half of onConfigurationChanged, and onCreate. Without the call no change is read at all;
+     * without the copy onCreate takes, the first change of a screen has nothing to be read against and is taken
+     * for a turn whatever it changed, which is the case above that keeps the old behaviour for want of a record.
+     */
+    @Test
+    fun `every change is read, and the first against the configuration the screen started with`() {
+        val source = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"))
+
+        val changed = SourceScan.body(source, "override fun onConfigurationChanged(newConfig: Configuration)")
+        val framework = changed.indexOf("super.onConfigurationChanged(newConfig)")
+        val read = Regex("""(?m)^\s*configurationChanged\(newConfig\)""").find(changed)?.range?.first ?: -1
+        assertTrue(framework >= 0 && read > framework,
+            "onConfigurationChanged no longer hands the change to configurationChanged after the framework's part: $changed")
+
+        val created = SourceScan.body(source, "override fun onCreate(savedInstanceState: Bundle?)")
+        val start = created.indexOf("super.onCreate(savedInstanceState)")
+        val record = created.indexOf("lastConfiguration = Configuration(resources.configuration)")
+        assertTrue(start >= 0 && record > start,
+            "onCreate no longer records a copy of the configuration the screen starts with, so its first change " +
+                "is taken for a turn of the screen whatever it changed")
+    }
+
     @Test
     fun `a keyboard that is gone brings the row back, turn or not`() {
         change(CONFIG_KEYBOARD or CONFIG_KEYBOARD_HIDDEN or CONFIG_NAVIGATION, Configuration.KEYBOARD_NOKEYS)

@@ -10,8 +10,8 @@ import javax.xml.parsers.DocumentBuilderFactory
 /**
  * What has to hold for the screen that unpacks the app.
  *
- * First-run setup writes out some 810 MB with nothing for the user to touch, and
- * what an interruption costs depends on which run is interrupted.
+ * First-run setup writes out hundreds of megabytes with nothing for the user to
+ * touch, and what an interruption costs depends on which run is interrupted.
  * `extractAssetFile` skips a file it finds at the asset's own length, but only
  * under `resumeSameBuild`: a retry of this exact build on an install no earlier
  * build ever completed under. Every other run, an upgrade above all, re-copies
@@ -120,11 +120,11 @@ class SplashLifetimeTest {
         assertTrue(error.any { Regex("""keepScreenOn\s*=\s*false""").containsMatchIn(it) }) {
             "showSetupError leaves the display held awake on a screen that waits " +
                 "for a person and changes for nothing else. The reachable way in is " +
-                "a phone with under ~875 MB free, which fails the storage pre-flight " +
+                "a phone without room for the tree, which fails the storage pre-flight " +
                 "on first launch."
         }
         assertTrue(error.any { Regex("""keepScreenOn\s*=\s*true""").containsMatchIn(it) }) {
-            "nothing gives the flag back, so tapping Retry restarts an 800 MB " +
+            "nothing gives the flag back, so tapping Retry restarts the whole " +
                 "extraction with the display free to time out part-way through it " +
                 "again. The skip makes this retry cheaper than the first attempt " +
                 "was; it does not make being stopped free"
@@ -394,9 +394,14 @@ class SplashLifetimeTest {
      * `runSetup` was given back while the first instance was still writing. The
      * service answers that by leaving the foreground and stopping.
      *
-     * So the hold has to be taken from inside `runSetup`, which calls back only
-     * from the instance holding the lock with work to do. The behavioural half
-     * is pinned in FirstRunSetupHoldTest; this is the wiring.
+     * So the hold for the unpack is taken from inside `runSetup`, which calls
+     * back only from the instance holding the lock with work to do. A first run
+     * also takes one while it starts, ahead of its repairs, because the platform
+     * refuses a foreground start from an app left a few seconds before; that one
+     * is handed to `runSetupWithRetry`, and a waiter's release of its own is
+     * answered by `SetupHolds`, which lets the service go only once no holder in
+     * the process is left. The behavioural half is pinned in
+     * FirstRunSetupHoldTest; this is the wiring.
      *
      * NEGATIVE CONTROL: move `holdProcessForSetup()` back above `runSetup` on a
      * line of its own and the second assertion goes red.

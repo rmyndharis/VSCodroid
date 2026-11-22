@@ -268,9 +268,9 @@ class EditorEntryTest {
         // is the only thing that ever offers the toolchain picker, and it is only
         // offered inside the isFirstRun branch, so it never comes back. The
         // second cost needs no timing argument: a finished activity leaves the
-        // process holding no component at all, in the middle of writing out some
-        // 810 MB, and there is no skip-if-present branch to make the next attempt
-        // cheaper.
+        // process holding no component at all, in the middle of writing out
+        // hundreds of megabytes. The length skip makes a retry of the same build
+        // cheaper, not free, and an upgrade, which re-copies from zero, gets none.
         val splash = activities().getValue(".SplashActivity")
 
         assertEquals(

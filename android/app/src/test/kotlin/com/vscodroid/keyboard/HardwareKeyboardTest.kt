@@ -14,12 +14,13 @@ import javax.xml.parsers.DocumentBuilderFactory
  * Neither one is a feature anybody wrote, and that is the problem. Keys work
  * because nothing in this app takes a key event away from the page: the system
  * dispatches it, the WebView receives it unchanged, and the workbench binds it.
- * Three overrides stand in that path and none of them takes a key from the
+ * Four overrides stand in that path and none of them takes a key from the
  * page: the Activity delegates to `super` before widening the verdict on Escape
- * alone, and the two webview clients refuse only Escape, and only once the page
- * has already declined it, before handing every other key back. The first case
- * below pins each of those shapes by the ORDER of its statements, and refuses
- * any further override anywhere in the tree. The window survives a
+ * alone, the two webview clients refuse only Escape, and only once the page
+ * has already declined it, before handing every other key back, and the
+ * window's content notes a Back ahead of the soft keyboard and hands every key
+ * on. The first case below pins each of those shapes by the ORDER of its
+ * statements, and refuses any further override anywhere in the tree. The window survives a
  * keyboard being plugged in because the manifest claims the keyboard
  * configuration qualifiers, so Android hands the activity a configuration
  * change instead of destroying it and building a new one.
@@ -107,6 +108,9 @@ class HardwareKeyboardTest {
             "onKeyMultiple",
             "onKeyPreIme",
             "onKeyShortcut",
+            // Ahead of the input method: a key this keeps never reaches the soft
+            // keyboard, the WebView or the page.
+            "dispatchKeyEventPreIme",
             // Not a View callback like the rest, and the one that would be easy
             // to miss for that reason. WebViewClient.shouldOverrideKeyEvent is
             // asked before the page is given the key, and returning true keeps
@@ -123,11 +127,11 @@ class HardwareKeyboardTest {
             "onUnhandledKeyEvent",
         )
 
-        // The three overrides this app has, each pinned by file and by name rather
+        // The four overrides this app has, each pinned by file and by name rather
         // than dropped from the list above: dropping a name would stop guarding it
         // in every other file, which is most of what this case is for.
         //
-        // They earn the exception between them. A key nothing consumed is offered
+        // The first three earn the exception between them. A key nothing consumed is offered
         // to the producing keyboard's own character map for a fallback action, and
         // some maps still read `ESCAPE base: fallback BACK`, which arrives at the
         // back callback as an ordinary press and minimises the app mid-keystroke.
@@ -136,12 +140,17 @@ class HardwareKeyboardTest {
         // the one the workbench takes, which never reaches the Activity at all.
         val activity = "src/main/kotlin/com/vscodroid/MainActivity.kt"
         val client = "src/main/kotlin/com/vscodroid/webview/VSCodroidWebViewClient.kt"
+        // The fourth sees the Back key before the soft keyboard does, so that a keyboard
+        // closed with Back is told from one a turn of the screen took down, and passes
+        // every key on.
+        val observer = "src/main/kotlin/com/vscodroid/keyboard/BackObserverLayout.kt"
         val expected = listOf(
             activity to "dispatchKeyEvent",
             // The bootstrap client, which owns the whole cold start and every
             // window after a renderer crash.
             activity to "onUnhandledKeyEvent",
             client to "onUnhandledKeyEvent",
+            observer to "dispatchKeyEventPreIme",
         )
 
         fun sitesFor(file: String, name: String) =
@@ -152,7 +161,7 @@ class HardwareKeyboardTest {
         for ((file, name) in expected) {
             assertEquals(
                 1, sitesFor(file, name).size,
-                "$file no longer overrides $name exactly once. Between them these three " +
+                "$file no longer overrides $name exactly once. Between them the first three " +
                     "are what stop a keyboard whose character map carries " +
                     "`ESCAPE base: fallback BACK` from minimising the app when Esc is " +
                     "pressed, and they are not interchangeable: the re-injected event the " +
@@ -191,6 +200,16 @@ class HardwareKeyboardTest {
                     "in: $unhandled"
             }
         }
+
+        // Its one way out is the hand-on. A `return true` before it, under any
+        // condition, keeps a key from the keyboard and the page while the hand-on is
+        // still there to be found.
+        val preIme = bodyOf(observer, "override fun dispatchKeyEventPreIme(")
+        assertEquals(
+            listOf("return super.dispatchKeyEventPreIme(event)"),
+            Regex("""\breturn\b.*""").findAll(preIme).map { it.value.trim() }.toList(),
+            "$observer must hand every key on and return nothing else; found: $preIme",
+        )
 
         assertEquals(
             emptyList<String>(), interceptors - allowed.toSet(),

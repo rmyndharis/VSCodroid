@@ -76,20 +76,9 @@ formats this device cannot execute are counted too. A Windows launcher or a .NET
 assembly is redistributed inside the APK on its own terms whether or not
 anything here can run it.
 
-Excluded as first-party: `libglibc-shim.so` and its companion stubs, which carry
-glibc's soname but are built from this repository's own source, and
-`libexec-trampoline.so`, `libclaude-launch.so`, `libseccomp-shim.so` and
-`libmove-noreplace.so`, built from `scripts/exec-trampoline.c`,
-`scripts/claude-launch.c`, `scripts/seccomp-shim.c` and `scripts/move-noreplace.c` here.
+Excluded as first-party: `libglibc-shim.so` and its companion stubs, which carry glibc's soname but are built from this repository's own source, and `libexec-trampoline.so`, `libclaude-launch.so`, `libseccomp-shim.so`, `libmove-noreplace.so` and `libselfexe.so`, built from `scripts/exec-trampoline.c`, `scripts/claude-launch.c`, `scripts/seccomp-shim.c`, `scripts/move-noreplace.c` and `scripts/selfexe-shim.c` here.
 
-Naming a project is not the notice. MIT, the BSD family, ISC, NCSA, the ICU
-licence and Apache-2.0 section 4 all ask for the copyright and permission text to
-be handed over with the binary, so every component below ships its own upstream
-notice beside it, almost all of them under `usr/share/doc/<termux package>`.
-Termux's `libicu` and Alpine's `musl` carry no usable notice of their own, so
-`licenses/LICENSE.ICU` and `licenses/COPYRIGHT.musl` are placed in their stead,
-and ripgrep's travels inside the npm package the server tree brings it in.
-`docs/LEGAL_NOTICES.md` records why for each.
+Naming a project is not the notice. MIT, the BSD family, ISC, NCSA, the Unicode and ICU licences and Apache-2.0 section 4 all ask for the copyright and permission text to be handed over with the binary, so every component below ships its own upstream notice beside it, almost all of them under `usr/share/doc/<termux package>`. Termux's `libicu` and Alpine's `musl` carry no usable notice of their own, so `licenses/LICENSE.ICU` and `licenses/COPYRIGHT.musl` are placed in their stead, and ripgrep's travels inside the npm package the server tree brings it in. `docs/LEGAL_NOTICES.md` records why for each.
 
 The copyleft rows need a licence text as well. GPL-2.0 section 1, GPL-3.0
 section 4, LGPL-2.1 section 1 and LGPL-3.0 section 4 each require a copy of the
@@ -106,7 +95,7 @@ verbatim; `docs/LEGAL_NOTICES.md` records which text covers which component.
 | gdbm | GPL-3.0 | Python, gdbm |
 | Git | GPL-2.0 | bundled tool in its own right |
 | GNU Make | GPL-3.0 | bundled tool in its own right |
-| ICU | ICU | ICU, Node.js |
+| ICU | Unicode-3.0, ICU | ICU, Node.js |
 | Kerberos 5 | MIT | Kerberos 5, OpenSSH |
 | ldns | BSD-3-Clause | OpenSSH |
 | libandroid-glob | BSD-3-Clause | Kerberos 5, tmux |
@@ -228,7 +217,7 @@ Many bundled binaries and shared libraries are compiled by the [Termux](https://
 
 ## Android NDK
 
-The `libc++_shared.so` C++ standard library is distributed under the Apache 2.0 / MIT dual license as part of the [Android NDK](https://developer.android.com/ndk).
+The `libc++_shared.so` in `assets/usr/lib` is not the NDK's: it is Termux's `libc++` package, placed by `scripts/download-termux-tools.sh`, and is listed above under the NCSA licence. The NDK is the toolchain the native addons, shims and helpers this repository builds are compiled with.
 
 ## Project Website
 
