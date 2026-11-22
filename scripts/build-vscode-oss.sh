@@ -529,7 +529,8 @@ elapsed $(( SECONDS - t0 ))
 
 step "Copilot extension (compile-copilot-extension-build)"
 # Not in core-ci, and packaging fails without it. The reh-web package task reads
-# built-in extensions out of .build/extensions (gulpfile.reh.ts:387), and the
+# built-in extensions out of .build/extensions (the extensionPaths glob of
+# packageTask in gulpfile.reh.ts), and the
 # copilot extension is the one thing that never lands there on its own: nothing
 # in core-ci compiles it. The packaging tail then calls
 # prepareBuiltInCopilotRipgrepShim unconditionally, which throws "Copilot SDK
@@ -537,11 +538,12 @@ step "Copilot extension (compile-copilot-extension-build)"
 # the stage that should have filled it.
 #
 # Microsoft's pipeline never hits this because it downloads the extension as a
-# VSIX from an internal feed. gulpfile.extensions.ts:288 says so directly: this
-# task is "used by non-CI local builds where copilot is not downloaded as a
-# VSIX", which is exactly what this build is. Their desktop series places it
-# after the non-native extensions compile and before packaging
-# (gulpfile.vscode.ts:745), and so does this.
+# VSIX from an internal feed. The comment on compileCopilotExtensionBuildTask in
+# gulpfile.extensions.ts says so directly: this task is "used by non-CI local
+# builds where copilot is not downloaded as a VSIX", which is exactly what this
+# build is. Their desktop series places it after the non-native extensions
+# compile and before packaging (vscodeTask in gulpfile.vscode.ts), and so does
+# this.
 #
 # The extension's esbuild step runs its postinstall again after bundling, which
 # deletes node_modules/@github/copilot/sdk and copies it back, and
@@ -892,10 +894,11 @@ cat >> "$WORKBENCH_CSS" << 'CSSEOF'
    line as a blank band. Measured on an API 37 emulator, 411px portrait: each of
    the File menu's seven separators was 71px and the menu was 1427px tall in an
    810px viewport. Neutralising both halves puts them at 11px and the menu at
-   1007px with every real row still 44px. :has() is Chromium 105 and this build
-   floors at WebView 107; where it is missing the selector is dropped whole and
-   the divider stays as it was, which is the old behaviour rather than a broken
-   one. */
+   1007px with every real row still 44px. :has() is Chromium 105, below the
+   WebView 125 the app asks for (WebViewVersion.MINIMUM_CHROME_MAJOR); on an
+   older WebView, which the app warns about and still runs on, a selector it
+   cannot read is dropped whole and the divider stays as it was, which is the
+   old behaviour rather than a broken one. */
 .monaco-menu .monaco-action-bar.vertical .action-item:has(> .action-label.separator) { min-height: 0 !important; }
 /* The settings editor sets a dropdown, and the box that holds it, to 320px whatever the
    window is, and a row starts 48px in. On a phone narrower than 367px the right edge and
