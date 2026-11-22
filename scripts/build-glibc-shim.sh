@@ -183,6 +183,27 @@ for lib in libglibc-shim.so "${STUBS[@]}"; do
     python3 "$SCRIPT_DIR/verify-android-elf.py" "$OUT_DIR/$lib" --lib-dir "$OUT_DIR"
 done
 
+# No relocation may name the environment without a version. A library here that
+# defines environ, __environ or _environ and stores into it does so through a
+# GOT entry the loader binds to Bionic's environ@LIBC, which is searched first:
+# libglibc-shim.so did exactly that, and wrote the environment the process was
+# started with over the live one at the first load of a glibc addon. The only
+# reference allowed is Bionic's own, which readelf prints as environ@LIBC; a
+# stub's export carries its GLIBC_2.17 version. Captured before it is searched,
+# so a readelf that fails stops the build instead of reading as clean.
+READELF="$NDK/toolchains/llvm/prebuilt/$HOST_TAG/bin/llvm-readelf"
+for lib in libglibc-shim.so "${STUBS[@]}"; do
+    relocations="$("$READELF" -rW "$OUT_DIR/$lib")"
+    bare="$(grep -E '[[:space:]]_{0,2}environ([[:space:]]|$)' <<<"$relocations" || true)"
+    if [ -n "$bare" ]; then
+        echo "  ERROR: $lib relocates the environment by a bare name, which the" >&2
+        echo "         loader binds to Bionic's own environ:" >&2
+        echo "$bare" >&2
+        exit 1
+    fi
+done
+echo "  no library relocates environ, __environ or _environ by a bare name"
+
 # And the question the loop above cannot ask. Everything up to here verifies
 # intent -- the generator emitted what it decided to emit, the compiler built
 # what it was handed, each library loads. None of it compares the addons against
