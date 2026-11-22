@@ -709,7 +709,7 @@ class ExtraKeyRow @JvmOverloads constructor(
         longPressPopup = LongPressPopup(context, alternates) { selectedKey ->
             keyInjector?.injectKey(selectedKey, ctrlKey = ctrlActive, altKey = altActive, shiftKey = shiftActive)
             resetModifiersIfNeeded()
-        }.also { it.show(button) }
+        }.also { it.show(button, this) }
     }
 
     /**

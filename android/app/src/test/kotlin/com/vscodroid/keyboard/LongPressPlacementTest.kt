@@ -1,5 +1,6 @@
 package com.vscodroid.keyboard
 
+import com.vscodroid.SourceScan
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -47,7 +48,7 @@ class LongPressPlacementTest {
             popupWidth = 300,
             popupHeight = 120,
             gapPx = 8,
-            windowWidthPx = windowWidth,
+            span = PopupSpan(0, windowWidth),
         )
 
         assertEquals(centreOf(anchorLeft, anchorWidth), centreOf(at.x, 300))
@@ -65,7 +66,7 @@ class LongPressPlacementTest {
             popupWidth = 96,
             popupHeight = 120,
             gapPx = 8,
-            windowWidthPx = windowWidth,
+            span = PopupSpan(0, windowWidth),
         )
 
         assertEquals(centreOf(anchorLeft, 300), centreOf(at.x, 96))
@@ -81,7 +82,7 @@ class LongPressPlacementTest {
             popupWidth = 300,
             popupHeight = 120,
             gapPx = 8,
-            windowWidthPx = windowWidth,
+            span = PopupSpan(0, windowWidth),
         )
 
         val drift = abs(centreOf(at.x, 300) - centreOf(anchorLeft, 101))
@@ -105,7 +106,7 @@ class LongPressPlacementTest {
                 popupWidth = 300,
                 popupHeight = popupHeight,
                 gapPx = gapPx,
-                windowWidthPx = windowWidth,
+                span = PopupSpan(0, windowWidth),
             )
 
             val popupBottom = at.y + popupHeight
@@ -129,8 +130,8 @@ class LongPressPlacementTest {
         // never added.
         // Both far enough from either edge that the clamp does not fire, which
         // is the property being measured here.
-        val atOrigin = LongPressPlacement.above(200, 0, anchorWidth, 300, 120, 8, windowWidth)
-        val moved = LongPressPlacement.above(500, 900, anchorWidth, 300, 120, 8, windowWidth)
+        val atOrigin = LongPressPlacement.above(200, 0, anchorWidth, 300, 120, 8, PopupSpan(0, windowWidth))
+        val moved = LongPressPlacement.above(500, 900, anchorWidth, 300, 120, 8, PopupSpan(0, windowWidth))
 
         assertEquals(300, moved.x - atOrigin.x)
         assertEquals(900, moved.y - atOrigin.y)
@@ -150,7 +151,7 @@ class LongPressPlacementTest {
             popupWidth = 240,
             popupHeight = 120,
             gapPx = 8,
-            windowWidthPx = windowWidth,
+            span = PopupSpan(0, windowWidth),
         )
 
         assertTrue(at.x >= 0, "the popup starts at ${at.x}, left of the window")
@@ -173,7 +174,7 @@ class LongPressPlacementTest {
             popupWidth = 240,
             popupHeight = 120,
             gapPx = 8,
-            windowWidthPx = windowWidth,
+            span = PopupSpan(0, windowWidth),
         )
 
         assertEquals(0, at.x, "the popup starts left of the window")
@@ -190,9 +191,98 @@ class LongPressPlacementTest {
             popupWidth = windowWidth + 100,
             popupHeight = 120,
             gapPx = 8,
-            windowWidthPx = windowWidth,
+            span = PopupSpan(0, windowWidth),
         )
 
         assertEquals(0, at.x)
+    }
+
+    /**
+     * The popup over `()`, three alternates, at density 320 on a 1080x2400
+     * emulator turned to landscape: 336px wide, as `dumpsys window` measured it.
+     * Density 320 because at the emulator's own 420 the row stands down in
+     * landscape, so no popup can be opened there.
+     */
+    private val parenPopup = 336
+
+    private fun overParen(span: PopupSpan, keyLeft: Int, keyWidth: Int) =
+        LongPressPlacement.above(keyLeft, 505, keyWidth, parenPopup, 120, 8, span)
+
+    @Test
+    fun `below Android 15 a bar on the far side no longer pushes the popup off its key`() {
+        // Android 10 with three buttons, turned so the bar is on the left: the
+        // metrics said 2304, the row ran from 96 to 2400 and `()` from 2128 to
+        // 2400. The popup measured at 1968 to 2304, short of its key by the bar.
+        val span = LongPressPlacement.span(29, displayMetricsWidthPx = 2304, rowLeftPx = 96, rowWidthPx = 2304)
+        assertEquals(PopupSpan(96, 2400), span)
+        val at = overParen(span, keyLeft = 2128, keyWidth = 272)
+        assertEquals(2064, at.x)
+        assertEquals(2400, at.x + parenPopup, "the popup ends where its key ends")
+    }
+
+    @Test
+    fun `below Android 15 a cutout on the far side no longer pushes the popup off its key`() {
+        // Android 13 turned with the 136px cutout on the left: the metrics said
+        // 2264, the row ran from 136 to 2400 and `()` from 2133 to 2400. The
+        // popup measured at 1928 to 2264.
+        val span = LongPressPlacement.span(33, displayMetricsWidthPx = 2264, rowLeftPx = 136, rowWidthPx = 2264)
+        assertEquals(PopupSpan(136, 2400), span)
+        assertEquals(2400, overParen(span, keyLeft = 2133, keyWidth = 267).x + parenPopup)
+    }
+
+    @Test
+    fun `below Android 15 a band on the near side still stops the popup before it`() {
+        // Three buttons on the right on Android 10: the metrics' 2304 was where
+        // the row ended, and the popup stopped at the bar, measured at 1968 to
+        // 2304 before and after. Taking the window's 2400 instead would ask for a
+        // popup 32px past the row's end, over the bar.
+        val bar = LongPressPlacement.span(29, displayMetricsWidthPx = 2304, rowLeftPx = 0, rowWidthPx = 2304)
+        assertEquals(1968, overParen(bar, keyLeft = 2032, keyWidth = 272).x)
+
+        // The cutout on the right on Android 13, the row from 0 to 2264: measured
+        // at 1928 to 2264, clear of the cutout, as before.
+        val cutout = LongPressPlacement.span(33, displayMetricsWidthPx = 2264, rowLeftPx = 0, rowWidthPx = 2264)
+        assertEquals(1928, overParen(cutout, keyLeft = 1997, keyWidth = 267).x)
+    }
+
+    @Test
+    fun `below Android 15 a popup at the row's left end stays clear of a band before it`() {
+        // The left half of the span, which no device showed: no key at the left
+        // end of a page carries alternates today. A row starting after a 96px bar
+        // keeps a wide popup over its first key from starting under the bar.
+        val span = LongPressPlacement.span(29, displayMetricsWidthPx = 2304, rowLeftPx = 96, rowWidthPx = 2304)
+        assertEquals(96, overParen(span, keyLeft = 96, keyWidth = 272).x)
+    }
+
+    @Test
+    fun `from Android 15 the span is the whole window, wherever the row is`() {
+        // There the metrics are the window, and this is the span it always had.
+        for (sdk in listOf(35, 36)) {
+            assertEquals(
+                PopupSpan(0, 3120),
+                LongPressPlacement.span(sdk, displayMetricsWidthPx = 3120, rowLeftPx = 144, rowWidthPx = 2976),
+            )
+        }
+    }
+
+    @Test
+    fun `the popup is placed over the row the key is on, on the release the device runs`() {
+        val popup = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/keyboard/LongPressPopup.kt"))
+            .replace(Regex("\\s+"), " ")
+        assertTrue(
+            popup.contains("row.getLocationInWindow(rowLocation)") &&
+                popup.contains(
+                    "span = LongPressPlacement.span( sdkInt = Build.VERSION.SDK_INT, " +
+                        "displayMetricsWidthPx = context.resources.displayMetrics.widthPixels, " +
+                        "rowLeftPx = rowLocation[0], rowWidthPx = row.width, )",
+                ),
+            "LongPressPopup no longer keeps the popup inside the span of the row it was " +
+                "given, for the release the device runs",
+        )
+        val row = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/keyboard/ExtraKeyRow.kt"))
+        assertTrue(
+            row.contains("}.also { it.show(button, this) }"),
+            "the key row no longer hands the popup itself as the row the key is on",
+        )
     }
 }

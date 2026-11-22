@@ -1,10 +1,16 @@
 package com.vscodroid.keyboard
 
+import android.os.Build
+
 /** Where a popup's top-left corner goes, in the app window's coordinates. */
 data class PopupPosition(val x: Int, val y: Int)
 
+/** The stretch of the app window, left edge to right edge, a popup is kept inside. */
+data class PopupSpan(val leftPx: Int, val rightPx: Int)
+
 /**
- * Where the long-press alternates popup goes, with no Android types in it.
+ * Where the long-press alternates popup goes, in plain numbers: nothing here
+ * takes or returns an Android type, so all of it runs on the JVM.
  *
  * Split out of [LongPressPopup] because the arithmetic is the part that can be
  * wrong: the popup is wider than the key it belongs to, so centring it means
@@ -17,15 +23,15 @@ object LongPressPlacement {
     /**
      * Centres a [popupWidth] by [popupHeight] popup horizontally on an anchor at
      * [anchorLeft], [anchorTop] of width [anchorWidth], and puts it [gapPx]
-     * above the anchor's top edge, kept inside a window [windowWidthPx] wide.
+     * above the anchor's top edge, kept inside [span].
      *
      * Every number here is in the app window's coordinates, which is the space
      * `PopupWindow.showAtLocation` puts a popup in: the popup is a child of the
      * activity's window and is laid out against that window's frame. The anchor
      * position is therefore the one [android.view.View.getLocationInWindow]
-     * reports, and [windowWidthPx] is the window's width, which is what an
-     * activity's `DisplayMetrics` reports from API 30 on. Screen coordinates
-     * coincide with these only while the window fills the display.
+     * reports, and [span] is the stretch that [LongPressPlacement.span] picks.
+     * Screen coordinates coincide with these only while the window fills the
+     * display.
      *
      * The clamp is not a nicety. `()` is the last key on page 1 and carries
      * three alternates, so its popup is roughly two and a half times the width
@@ -34,7 +40,7 @@ object LongPressPlacement {
      * was never the point: the popup was not where this said it was, and this is
      * the file that is supposed to know.
      *
-     * A popup wider than the window is pinned to the left edge rather than
+     * A popup wider than the span is pinned to its left edge rather than
      * pushed off the other one. Nothing builds one today; the alternative is a
      * `coerceIn` whose bounds cross, which throws.
      */
@@ -45,10 +51,43 @@ object LongPressPlacement {
         popupWidth: Int,
         popupHeight: Int,
         gapPx: Int,
-        windowWidthPx: Int,
+        span: PopupSpan,
     ): PopupPosition = PopupPosition(
         x = (anchorLeft + (anchorWidth - popupWidth) / 2)
-            .coerceIn(0, (windowWidthPx - popupWidth).coerceAtLeast(0)),
+            .coerceIn(span.leftPx, (span.rightPx - popupWidth).coerceAtLeast(span.leftPx)),
         y = anchorTop - popupHeight - gapPx,
     )
+
+    /**
+     * The stretch of the window a popup over a key is kept inside, from the
+     * activity's display metrics and where the key row lies in the window.
+     *
+     * From Android 15, for an app that targets it as this one does, the display
+     * metrics are the whole window, and the span is that window, as it always was
+     * there. Below it they are the window less the navigation bar and the cutout,
+     * and only by width: the app's window still runs under both. Measured in
+     * landscape on 1080x2400 emulators set to density 320, because at their own
+     * 420 the row stands down in landscape for want of height, with the key row
+     * laid out between the insets its container is padded by:
+     *
+     * - Android 10, three buttons on the right: the metrics said 2304 of the
+     *   2400px window, which happens to be where the row ends, so the popup over
+     *   the last key stopped at the bar.
+     * - Android 10, the bar on the left: the same 2304, while the row ran from 96
+     *   to 2400, so that popup ended 96px short of its key's right edge.
+     * - Android 13, the cutout on the left: 2264, with the row from 136 to 2400,
+     *   so 136px short.
+     *
+     * So below Android 15 the span is the row itself, [rowLeftPx] for
+     * [rowWidthPx]. It is the stretch where the keys are, which the padding keeps
+     * clear of the bars and the cutout on both sides, so a popup over a key is
+     * never pushed off its key by a band on the far side, nor put under a band on
+     * the near one. [displayMetricsWidthPx] is not read there.
+     */
+    fun span(sdkInt: Int, displayMetricsWidthPx: Int, rowLeftPx: Int, rowWidthPx: Int): PopupSpan =
+        if (sdkInt >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            PopupSpan(0, displayMetricsWidthPx)
+        } else {
+            PopupSpan(rowLeftPx, rowLeftPx + rowWidthPx)
+        }
 }

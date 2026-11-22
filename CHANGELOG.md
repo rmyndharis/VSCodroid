@@ -51,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The warning about a folder on shared storage keeps a digest of the editor server's note in the editor's storage instead of the note, which holds the server's run key.
 - A change of navigation device, night mode or keyboard no longer ends a word being composed in the editor or brings back a keyboard put away just after it.
 - On Android 10 to 14 the extra key row counts the navigation bar and the camera cutout when it measures the page above the keyboard, so it no longer stands down, or stays down, over a page with room for it.
+- On Android 10 to 14 the alternates of a long-pressed key line up with their key when the navigation bar or the camera cutout is on the far side of the screen.
 - After the screen is turned, a keyboard that underlines words no longer replaces the last letter of a word when either letter has an accent, such as é over o: the new letter is typed at the caret.
 - Each further letter such a keyboard sends over the same word after a turn is typed at the caret too, while the caret is where the letter before it left it.
 - A keyboard that keeps sending one stale letter has the seventh typed at the caret like the six before it, instead of over the word, leaving seven copies of the letter.
