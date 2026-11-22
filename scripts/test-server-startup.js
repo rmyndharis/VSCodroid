@@ -7,6 +7,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const http = require('node:http');
 const { execFileSync } = require('node:child_process');
+const { applyFixturePatch } = require('./lib/apply-fixture-patch');
 const { stripTypeScriptTypes } = require('node:module');
 const { EventEmitter } = require('node:events');
 const { createHash } = require('node:crypto');
@@ -29,7 +30,7 @@ function loadFixture(fixture, relative, patch, globals, exported, prepareSource 
     const destination = path.join(temporary, relative);
     fs.mkdirSync(path.dirname(destination), { recursive: true });
     fs.copyFileSync(path.join(__dirname, 'fixtures', fixture), destination);
-    execFileSync('git', ['apply', '--include=' + relative, path.join(root, 'patches', patch)], { cwd: temporary });
+    applyFixturePatch(temporary, path.join(root, 'patches', patch), { include: [relative], changes: [relative] });
     const source = prepareSource(fs.readFileSync(destination, 'utf8')).replace(/^export /gm, '');
     const context = { ...globals };
     vm.runInNewContext(stripTypeScriptTypes(source, { mode: 'transform', sourceUrl: relative }) +

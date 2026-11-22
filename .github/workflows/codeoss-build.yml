@@ -127,10 +127,20 @@ jobs:
           path: ${{ runner.temp }}/codeoss/vscode-reh-web-linux-arm64-${{ steps.pin.outputs.version }}.tar.gz
           key: codeoss-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.version }}-${{ steps.pin.outputs.commit }}-${{ hashFiles('VSCODE_VERSION', 'VSCODE_COMMIT', 'patches/**', 'branding/**', 'scripts/build-vscode-oss.sh', 'scripts/patch-js-debug-env.py', 'scripts/patch-language-detection.py', 'scripts/test-language-detection.py', 'scripts/check-editcontext-sync.py', 'scripts/check-editcontext-ime.js', 'scripts/check-patch-fingerprints.py', 'scripts/verify-server-tree.py', 'scripts/verify-android-elf.py', 'scripts/fetch-vscode-oss.sh', '.github/workflows/codeoss-build.yml') }}
 
+      # Bounded the way build.yml's "Install system dependencies" is, for the
+      # reason given there: a stalled mirror holds an unbounded refresh until the
+      # job's budget is gone, and here that budget is two hours, ahead of every
+      # job in build.yml and of every publish.
       - name: Install build dependencies
         if: steps.cache.outputs.cache-hit != 'true'
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
+          for attempt in 1 2 3; do
+            if sudo timeout 120 apt-get update; then
+              break
+            fi
+            echo "  apt-get update stalled or failed (attempt $attempt of 3)"
+          done
           sudo apt-get install -y --no-install-recommends \
             build-essential libkrb5-dev libsecret-1-dev libx11-dev \
             libxkbfile-dev pkg-config python3 python3-setuptools

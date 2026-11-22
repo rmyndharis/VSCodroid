@@ -2,6 +2,7 @@
 """The lint baseline may not grow, and may not name one machine.
 
     check-lint-baseline.py
+    check-lint-baseline.py --play-console-labels <reports-dir>
 
 `android/app/lint-baseline.xml` holds the warnings lint is told to hide, so
 every entry in it is a warning no report will ever show again. How many entries
@@ -94,13 +95,25 @@ LINT_FLAGS = ("abortOnError = true", "warningsAsErrors = true")
 # The other half of warningsAsErrors: warnings no commit raises. Lint downloads
 # Google's Play SDK Index and reports a non-blocking label on a pinned version
 # as a warning under these ids (lint 32.3.1, GradleDetector), so with the flag
-# on, the index turning a label on would fail every build that day.
+# on, the index turning a label on would fail every build that day. All five:
+# PlaySdkIndexGenericIssues, a label the library's own author sets, was the one
+# missing, and it would have failed every build the day such a label arrived.
 SDK_INDEX_WARNINGS = (
     "OutdatedLibrary",
     "PlaySdkIndexDeprecated",
+    "PlaySdkIndexGenericIssues",
     "PlaySdkIndexNonCompliant",
     "PlaySdkIndexVulnerability",
 )
+
+# What listing those ids costs. Lint has no override that tells a non-blocking
+# label from a blocking one, so the blocking label is informational too, and an
+# informational issue fails nothing: a dependency Play Console refuses would
+# pass `./gradlew lint`, the tag would publish the GitHub release, and the store
+# upload would be the first refusal. Lint still writes the issue into its
+# report, opening with this label (GooglePlaySdkIndex in lint-checks 32.3.1), so
+# the release reads the report for it after lint has run.
+BLOCKING_LABEL = "Prevents app release in Google Play Console"
 INFORMATIONAL = re.compile(r"informational\s*\+=\s*listOf\(([^)]*)\)")
 
 HOW_TO_EDIT = (
@@ -137,6 +150,37 @@ def is_module_relative(path: str) -> bool:
     if path.startswith(("/", "~", "$")):
         return False
     return re.match(r"^[A-Za-z]:[\\/]", path) is None
+
+
+def refuse_blocking_labels(reports: pathlib.Path) -> int:
+    """Fail on any issue in the lint XML reports under [reports] carrying [BLOCKING_LABEL].
+
+    No report at all fails too: this runs after `./gradlew lint`, so a missing
+    report is a moved or renamed output, and reading nothing would pass.
+    """
+    found = sorted(reports.glob("lint-results-*.xml"))
+    if not found:
+        print(f"  FAIL   no lint XML report (lint-results-*.xml) under {reports}; "
+              f"run ./gradlew lint first, or point this at where it writes them")
+        return 1
+    blocked = []
+    for report in found:
+        try:
+            issues = ET.parse(report).getroot().iter("issue")
+            blocked += [(report.name, issue.get("id"), issue.get("message") or "")
+                        for issue in issues if BLOCKING_LABEL in (issue.get("message") or "")]
+        except (ET.ParseError, OSError) as e:
+            print(f"  FAIL   {report.name} could not be read as a lint report  {e}")
+            return 1
+    if blocked:
+        for name, issue_id, message in blocked:
+            print(f"  FAIL   {name}: {issue_id}  {message}")
+        print("         Play Console refuses an upload carrying this dependency. "
+              "Move it to a version the SDK Index does not block before tagging.")
+        return 1
+    print(f"  ok     no dependency in {len(found)} lint report(s) carries the label "
+          f"Play Console refuses an upload for")
+    return 0
 
 
 def main() -> int:
@@ -242,4 +286,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--play-console-labels"] and len(sys.argv) == 3:
+        sys.exit(refuse_blocking_labels(pathlib.Path(sys.argv[2])))
+    if sys.argv[1:]:
+        print("usage: check-lint-baseline.py [--play-console-labels <reports-dir>]", file=sys.stderr)
+        sys.exit(2)
     sys.exit(main())

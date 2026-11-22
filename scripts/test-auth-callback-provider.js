@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
-const { execFileSync } = require('node:child_process');
+const { applyFixturePatch } = require('./lib/apply-fixture-patch');
 const { stripTypeScriptTypes } = require('node:module');
 
 // Added to node:module in 22.13 and 23.2. On anything older the destructured name
@@ -30,14 +30,16 @@ try {
     const target = path.join(temporary, 'src/vs/code/browser/workbench/workbench.ts');
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.copyFileSync(path.join(__dirname, 'fixtures/callback-provider.ts'), target);
-    execFileSync('git', ['apply', path.join(root, 'patches/0019-callback-nonce.patch')], { cwd: temporary });
+    applyFixturePatch(temporary, path.join(root, 'patches/0019-callback-nonce.patch'),
+        { changes: ['src/vs/code/browser/workbench/workbench.ts'] });
     source = stripTypeScriptTypes(fs.readFileSync(target, 'utf8'), { mode: 'transform' });
     const callback = path.join(temporary, 'src/vs/code/browser/workbench/callback.html');
     fs.copyFileSync(path.join(__dirname, 'fixtures/callback.html'), callback);
     const serverTarget = path.join(temporary, 'src/vs/server/node/webClientServer.ts');
     fs.mkdirSync(path.dirname(serverTarget), { recursive: true });
     fs.copyFileSync(path.join(__dirname, 'fixtures/web-client-server.ts'), serverTarget);
-    execFileSync('git', ['apply', path.join(root, 'patches/0006-callback-intent-relay.patch')], { cwd: temporary });
+    applyFixturePatch(temporary, path.join(root, 'patches/0006-callback-intent-relay.patch'),
+        { changes: ['src/vs/code/browser/workbench/callback.html', 'src/vs/server/node/webClientServer.ts'] });
     callbackHtml = fs.readFileSync(callback, 'utf8');
     callbackSource = callbackHtml.match(/<script>([\s\S]*?)<\/script>/)[1];
     webClientServerSource = stripTypeScriptTypes(

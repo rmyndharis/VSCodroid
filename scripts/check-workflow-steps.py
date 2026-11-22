@@ -16,7 +16,7 @@ because that workflow is `workflow_dispatch` only and runs perhaps once per VS
 Code bump. The failure would have arrived a month later, on the one job whose
 output every release build depends on.
 
-Six assertions:
+Seven assertions:
 
   * at least one workflow, carrying at least one step, was actually read. A
     checker that finds nothing reports nothing, and CI reads the exit code
@@ -37,7 +37,9 @@ Six assertions:
     something, so a workflow that has lost one, or skips it, parses, loads and
     runs green, and none of the rules above can see an absence;
   * a publish never reads the tarball cache: build-vscode-oss.yml hands the
-    shared build `fresh: true`, and that build skips its cache when given it.
+    shared build `fresh: true`, and that build skips its cache when given it;
+  * every `apt-get update` runs under `timeout <seconds>` in a step with
+    `timeout-minutes`, so a stalled mirror cannot spend a job's whole budget.
 
 Both extensions are read. GitHub Actions runs `.yml` and `.yaml` alike, and a
 checker that knows only one of them would go on printing a healthy count while
@@ -151,17 +153,66 @@ ALLOWLIST_GATE = re.compile(r"github\.event_name\s*==\s*'[a-z_]+'")
 # in it also passed `${{ inputs.fresh }}`, which skips the cache when it should be
 # read and reads it on a publish, and `${{ !inputs.fresh || true }}`.
 FRESH_SKIP = re.compile(r"\$\{\{\s*!\s*inputs\.fresh\s*\}\}")
+# A package index refresh that a stalled mirror cannot hold. Measured twice on one
+# commit in build.yml: apt fell through to the public archive and sat there with no
+# output until the job's budget was gone. codeoss-build.yml had no bound at all.
+BOUNDED_REFRESH = re.compile(r"\btimeout\s+\d+\s+apt-get update\b")
 
 # Steps that only check something, on the path that publishes the server and the
 # app, matched by name in any job. Delete one and the workflow still loads and
 # runs green. Renaming one means renaming it here too.
+#
+# lint.yml is listed as well. Most of its gates run again on a tag, so one deleted
+# from lint.yml alone left every other rule green: check-build-steps.py asks only
+# whether something runs a checker, and release.yml still did, while every pull
+# request and every push to main had stopped running it.
 REQUIRED_STEPS = {
+    "lint.yml": (
+        "Check the documented build steps match the workflows",
+        "Check every workflow step is runnable and pinned",
+        "Check the gates still refuse what they exist to refuse",
+        "Check the Gradle distribution is pinned to a digest",
+        "Check the bridge API spec matches the registered signatures",
+        "Check local network access survives the targetSdk in use",
+        "Check the privacy policy matches the permissions that ship",
+        "Check no user-facing text is stranded in Kotlin",
+        "Check the lint baseline has not grown",
+        "Check the tree writes plain punctuation",
+        "Check the bundled extensions match the notices",
+        "Check extension extraction recovers after an interrupted copy",
+        "Check the Copilot compile stage leaves a complete SDK directory",
+        "Check the sysroot header patcher rewrites tmpfile and the passwd entry",
+        "Check toolchain argument parsing with the host compiler",
+        "Check the self-exe preload library with the host compiler",
+        "Check the move helper with the host compiler",
+        "Check release version declarations are read exactly",
+        "Check packaging and device maintenance commands offline",
+        "Check native shim behavior",
+        "Check the release refuses a server built from other inputs",
+        "Check no document offers a withdrawn toolchain",
+        "Check the documents quote the sizes the registry records",
+        "Check the device-test checklist accounts for its own rows",
+        "Check every Markdown table is drawn as written",
+        "Check the instrumented suite matches what documents it",
+        "Check the shipped documents are not dated before their contents",
+        "Check every patch is still readable by git",
+        "Check the device suite can still read what it asserts",
+        "Check the bundled JavaScript runtime",
+        "Run lint",
+    ),
     "build.yml": (
         "Download the server for unit tests",
         "Fetch the server for unit tests",
         "Copy the server for unit tests",
         "Run unit tests",
         "Check unit test skips",
+        "Check every shipped library is attributed",
+        "Check the wheelhouse matches the bundled Python",
+        "Check the bundled extensions match the notices",
+        "Verify assets",
+        "Check the documented binary lists match what is packaged",
+        "Check the monitor recognises the language servers that ship",
+        "Check the welcome screen states nothing that goes stale",
         "Refuse an asset path that is both a file and a folder",
     ),
     "codeoss-build.yml": (
@@ -175,18 +226,43 @@ REQUIRED_STEPS = {
         "Check the published server was built from the same inputs",
         "Check the documented build steps match the workflows",
         "Check every workflow step is runnable and pinned",
-        "Check the Gradle distribution is pinned to a digest",
+        "Check the bridge API spec matches the registered signatures",
+        "Check local network access survives the targetSdk in use",
+        "Check the privacy policy matches the permissions that ship",
+        "Check no user-facing text is stranded in Kotlin",
+        "Check the lint baseline has not grown",
+        "Check the welcome screen states nothing that goes stale",
+        "Check the bundled extensions match the notices",
+        "Check no document offers a withdrawn toolchain",
+        "Check the documents quote the sizes the registry records",
+        "Check the tree writes plain punctuation",
+        "Check the device-test checklist accounts for its own rows",
+        "Check the instrumented suite matches what documents it",
         "Check every Markdown table is drawn as written",
+        "Check the Gradle distribution is pinned to a digest",
+        "Check the shipped documents are not dated before their contents",
+        "Check the device suite can still read what it asserts",
+        "Check release version declarations are read exactly",
+        "Check packaging and device maintenance commands offline",
+        "Check native shim behavior",
+        "Check the bundled JavaScript runtime",
+        "Check the gates still refuse what they exist to refuse",
+        "Check the build helpers offline",
         "Fetch Code - OSS server",
+        "Check every shipped library is attributed",
+        "Check the wheelhouse matches the bundled Python",
         "Verify assets",
+        "Check the documented binary lists match what is packaged",
+        "Check the monitor recognises the language servers that ship",
         "Run unit tests",
         "Check unit test skips",
         "Run lint",
+        "Refuse a dependency Play Console would block",
         "Compile the instrumented tests",
         "Decode keystore",
         "Check the documented core sizes against the APK",
-        "Check every shipped library is attributed",
         "Check every shipped toolchain library is attributed",
+        "Compare recorded licences against Termux",
         "Refuse an asset the base module and a pack both ship",
         "Hold the user guide's tool versions to what this build resolved",
         "Check the shipped permissions against the privacy policy",
@@ -322,6 +398,28 @@ def conditioned_steps(name, doc, wanted):
         if holder.get("continue-on-error", False) is not False:
             bad.append(f"{name}: {label} sets continue-on-error, so a required check could fail "
                        f"or be skipped without failing the run")
+    return bad
+
+
+def unbounded_refreshes(name, doc):
+    """Complaints for each step refreshing the apt index with nothing to bound it.
+
+    Both bounds, because each covers what the other cannot: `timeout` on the command
+    lets a retry follow a stalled attempt, and `timeout-minutes` on the step stops a
+    stall anywhere in it from spending the job's whole budget.
+    """
+    bad = []
+    for job, i, step in steps_of(doc):
+        # Quoted text is a message about the refresh, not a refresh.
+        lines = [line for line in (re.sub(r"\"[^\"]*\"|'[^']*'", "", raw)
+                                   for raw in str(step.get("run", "")).splitlines())
+                 if "apt-get update" in line]
+        if not lines:
+            continue
+        if "timeout-minutes" not in step or not all(BOUNDED_REFRESH.search(line) for line in lines):
+            bad.append(f"{name}: job {job}, step {i} ({step.get('name')!r}) runs apt-get update "
+                       f"without both `timeout <seconds>` on the command and `timeout-minutes` on "
+                       f"the step, so a stalled mirror can hold it until the job's budget is gone")
     return bad
 
 
@@ -564,6 +662,10 @@ def self_test() -> int:
          lambda doc: step_named(doc, "Run unit tests").update({"if": "${{ false }}"})),
         ("a step under an event the workflow never sees", "build.yml",
          lambda doc: step_named(doc, "Run unit tests").update({"if": "github.event_name == 'schedule'"})),
+        ("a lint step under `if: ${{ false }}`", "lint.yml",
+         lambda doc: step_named(doc, "Check the bundled JavaScript runtime").update({"if": "${{ false }}"})),
+        ("the lint job under `if: ${{ false }}`", "lint.yml",
+         lambda doc: doc["jobs"]["lint"].update({"if": "${{ false }}"})),
         ("a step that may fail", "codeoss-build.yml",
          lambda doc: step_named(doc, "Verify the server tarball").update({"continue-on-error": True})),
         ("a job under `if: ${{ false }}`", "build.yml",
@@ -629,6 +731,22 @@ def self_test() -> int:
             print(f"  FAIL   self-test: the cache condition {spelling!r} was refused")
             return 1
     print(f"  ok     self-test: a publish that could read the cache is refused {len(fresh_cases)} ways")
+
+    refreshing = sorted(name for name, doc in docs.items() if any(
+        "apt-get update" in str(step.get("run", "")) for _, _, step in steps_of(doc)))
+    if not refreshing or any(unbounded_refreshes(name, docs[name]) for name in refreshing):
+        print("  FAIL   self-test: the bounded apt refreshes were refused as they stand, or none was found")
+        return 1
+    for name in refreshing:
+        for label, edit in (("its step budget", lambda step: step.pop("timeout-minutes")),
+                            ("its command timeout", lambda step: step.update(
+                                run=re.sub(r"timeout\s+\d+\s+", "", step["run"])))):
+            edited = copy.deepcopy(docs[name])
+            edit(next(step for _, _, step in steps_of(edited) if "apt-get update" in str(step.get("run", ""))))
+            if not unbounded_refreshes(name, edited):
+                print(f"  FAIL   self-test: an apt refresh in {name} without {label} was admitted")
+                return 1
+    print(f"  ok     self-test: an apt refresh without either bound is refused in {', '.join(refreshing)}")
     return 0
 
 
@@ -654,6 +772,7 @@ def main() -> int:
                 f"REQUIRED_STEPS in this script; if it was removed on purpose, remove it there"
             )
         failures.extend(conditioned_steps(path.name, doc, REQUIRED_STEPS.get(path.name, ())))
+        failures.extend(unbounded_refreshes(path.name, doc))
         for job_name, job in (doc.get("jobs") or {}).items():
             if "uses" not in job:
                 continue
@@ -719,8 +838,14 @@ def main() -> int:
     print(f"  ok     all {sum(map(len, REQUIRED_STEPS.values()))} required steps are in "
           f"{', '.join(REQUIRED_STEPS)}, under no condition ALLOWED_CONDITIONS does not list")
     print("  ok     build-vscode-oss.yml asks for a fresh build and codeoss-build.yml skips its cache for it")
+    print("  ok     every apt-get update is bounded on the command and on its step")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(self_test() if sys.argv[1:] == ["--self-test"] else main())
+    # Anything but no argument or exactly --self-test is refused: a mistyped flag that
+    # fell through to main() skipped the self-test and still exited 0.
+    if sys.argv[1:] not in ([], ["--self-test"]):
+        print("usage: check-workflow-steps.py [--self-test]", file=sys.stderr)
+        sys.exit(2)
+    sys.exit(self_test() if sys.argv[1:] else main())

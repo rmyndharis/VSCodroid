@@ -3,11 +3,19 @@
 
     check-extension.py <extension-dir> <VSCODE_VERSION-file>
 
-Both things it looks at fail the same quiet way. An extension whose
-engines.vscode is newer than the server is registered and then simply never
-activates: no error, no log line, just a missing feature. And a glibc native
-payload loads fine on a desktop and throws on first use under Bionic, long after
-the build that shipped it went green.
+Fails on an extension whose engines.vscode is newer than the server. Such an
+extension is registered and then simply never activates: no error, no log line,
+just a missing feature.
+
+Also names every aarch64 native payload the extension carries, so the download
+log says which extension brought native code, and fails on one it cannot read.
+It does not decide whether a payload loads under Bionic, and must not: a glibc
+payload the compatibility shim covers is one this app supports. That question is
+asked of the packaged tree. build-glibc-shim.sh scans assets/extensions for the
+glibc symbols the shim forwards, the verifyNativeAddons Gradle task refuses a
+payload needing a library neither Bionic nor the shim provides
+(gen-glibc-forwarders.py), and verifyPackagedAlignment refuses one that cannot
+be mapped or names a foreign program interpreter (verify-android-elf.py --tree).
 """
 
 import json
@@ -16,6 +24,7 @@ import re
 import sys
 
 ELF_AARCH64 = 0xB7
+LOADED = re.compile(r"\.node$|\.so(\.\d+)*$")
 
 
 def main(ext: pathlib.Path, version_file: pathlib.Path) -> int:
@@ -33,7 +42,8 @@ def main(ext: pathlib.Path, version_file: pathlib.Path) -> int:
 
     # Only aarch64 ELF payloads are worth reporting: x86-64 and Windows binaries
     # are dead weight the extension never reaches on this device, while an
-    # aarch64 one will be loaded and has to be glibc-free to work.
+    # aarch64 one will be loaded, and the packaging gates in the docstring decide
+    # whether it can be.
     natives, damaged = [], []
     for f in sorted(ext.rglob("*")):
         # stat() and open() were both bare, and either can raise on a file this
@@ -43,7 +53,9 @@ def main(ext: pathlib.Path, version_file: pathlib.Path) -> int:
         try:
             if not f.is_file() or f.is_symlink():
                 continue
-            if f.suffix != ".node" and not f.stat().st_mode & 0o111:
+            # A .node addon and a shared object are dlopen'd whatever their mode,
+            # so only other files are passed over for lacking an execute bit.
+            if not LOADED.search(f.name) and not f.stat().st_mode & 0o111:
                 continue
             with f.open("rb") as fh:
                 head = fh.read(20)
