@@ -26,7 +26,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-WORK_DIR="${WORK_DIR:-$ROOT_DIR/.build/native-addons}"
+# Movable through a name of this script's own, never a generic WORK_DIR a shell
+# may have exported for something else: this script deletes WORK_DIR/src/<pkg>.
+WORK_DIR="${NATIVE_ADDONS_WORK_DIR:-$ROOT_DIR/.build/native-addons}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-$ROOT_DIR/android/app/src/main/assets/vscode-reh}"
 # Not derived from OUTPUT_ROOT: that is the server tree, which can be redirected
 # and which package-assets.sh replaces wholesale. This path is also the value of
@@ -284,8 +286,9 @@ pack_pinned() {
     local pkg=$1 version=$2 expected=$3 dest=$4
 
     if [ ! -f "$dest" ]; then
-        # Resolved before the cd below, so a relative WORK_DIR (the script
-        # accepts one) still names the same file from inside the scratch dir.
+        # Resolved before the cd below, so a relative NATIVE_ADDONS_WORK_DIR
+        # (the script accepts one) still names the same file from inside the
+        # scratch dir.
         local dest_abs scratch
         dest_abs="$(cd "$(dirname "$dest")" && pwd)/$(basename "$dest")"
         scratch=$(mktemp -d "$WORK_DIR/pack.XXXXXX")

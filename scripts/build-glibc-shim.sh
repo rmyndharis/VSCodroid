@@ -31,8 +31,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-OUT_DIR="${OUT_DIR:-$ROOT_DIR/android/app/src/main/assets/usr/lib}"
-WORK_DIR="${WORK_DIR:-$ROOT_DIR/.build/glibc-shim}"
+# Movable through names of this script's own, never a generic OUT_DIR or
+# WORK_DIR a shell may have exported for something else: this script writes
+# the shim and its stubs into OUT_DIR and deletes WORK_DIR/generated.
+OUT_DIR="${GLIBC_SHIM_OUT_DIR:-$ROOT_DIR/android/app/src/main/assets/usr/lib}"
+WORK_DIR="${GLIBC_SHIM_WORK_DIR:-$ROOT_DIR/.build/glibc-shim}"
 
 TARGET=aarch64-linux-android
 # The app's minSdk. The stubs the link and the forwarder check resolve against
