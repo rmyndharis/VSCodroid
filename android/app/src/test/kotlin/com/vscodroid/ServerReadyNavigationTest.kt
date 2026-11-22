@@ -17,8 +17,9 @@ import org.junit.jupiter.api.Test
  * `onReceivedError` only logs, so a connection-refused page is never cleared, and
  * on the renderer-crash path that page replaces the gave-up page, which carries
  * the only control able to start the server again. `ServerReadinessCallSiteTest`
- * covers `isServerRunning` having been removed; it cannot see a call site that
- * asks a different wrong question, which its own KDoc says in as many words.
+ * runs `setupServiceCallbacks` and `handleResumeFromBackground` against a
+ * mocked `NodeService`; it never reaches these two navigations, so a wrong
+ * question asked here is invisible to it.
  *
  * `isReady()` is a cached flag rather than a probe, so reading it here costs
  * nothing and is safe on the main thread.

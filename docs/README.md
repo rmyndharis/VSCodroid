@@ -4,9 +4,7 @@
 
 ### Numbered Planning Suite
 
-Each of these carries `**Version**: 1.0-draft` and `**Date**: 2026-02-10` in its own header. That
-line records when the document was first written, not when it last changed; see
-[Document Status](#document-status) for what each one is today.
+Each of these carries `**Version**: 1.0-draft` and a `**Date**` line in its own header: 2026-02-10, when the suite was first written, in every one but `04-TECHNICAL_SPEC.md`, which gives 2026-11-13. Neither date says when a document last changed; see [Document Status](#document-status) for what each one is today.
 
 | # | Document | Description | Audience |
 |---|----------|-------------|----------|

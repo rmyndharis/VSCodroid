@@ -22,7 +22,7 @@
 <p align="center">
   <a href="#-manifesto">Manifesto</a> •
   <a href="#-who-this-is-for">Who This Is For</a> •
-  <a href="#-why-now-quantitative-signals">Why Now</a> •
+  <a href="#-why-now">Why Now</a> •
   <a href="#-principles">Principles</a> •
   <a href="#-our-promise">Promise</a> •
   <a href="#-features">Features</a> •
@@ -144,7 +144,7 @@ If you are **ready to learn**, you should be able to **start today**.
   <em>Code editor with syntax highlighting</em> · <em>Extensions view, showing the bundled extensions</em> · <em>Terminal with Node.js, Git, and bundled tools</em>
 </p>
 
-## 🏗️ Architecture
+## 🏗 Architecture
 
 VSCodroid runs a local VS Code Server instance on your Android device. The VS Code Web Client renders inside a WebView, and the VS Code Server (Node.js) runs as a native ARM64 process. The app retains a loopback endpoint and relays HTTP and WebSocket traffic to Node through a private filesystem socket.
 

@@ -156,7 +156,7 @@ private fun settle(document: OpenDocument, written: Long) {
  * Everything [DownloadCoordinator] needs from the Activity it runs inside.
  *
  * An interface rather than the pile of lambdas the chrome client uses, because
- * these six are one collaborator seen from six sides and a test wants to
+ * these are one collaborator seen from several sides and a test wants to
  * watch them together: the ordering between opening a document, writing to it
  * and discarding it is most of what can go wrong here.
  */
@@ -220,7 +220,51 @@ interface DownloadHost {
 
     /** Tells the user how a download ended. [detail] is for the log, not the screen. */
     fun report(outcome: DownloadOutcome, fileName: String, detail: String?)
+
+    /**
+     * Whether the page can read the bytes behind [url], which is the only way a download reaches
+     * its document ([requestBytes]). One it cannot read is refused before the picker opens, so the
+     * person is never asked to name a file that is then not saved. The default refuses nothing;
+     * the editor answers with [pageCanReadDownload].
+     */
+    fun pageCanRead(url: String): Boolean = true
 }
+
+/**
+ * Whether the workbench page served on [port] can read the bytes of a download from [url].
+ *
+ * The page reads them itself (`readerFor` in `MainActivity.injectDownloadCapture`): a blob it
+ * made off the object it holds, anything else with `fetch`, under a `connect-src` of
+ * `'self' ws: wss: https:`. So it reads a blob of its own origin, a file of its own origin, and
+ * a file of the resource authority, which the interceptor answers for this origin with CORS
+ * (`VSCodroidWebViewClient.resourceHeaders`). It cannot read a blob another frame made (a
+ * webview's, the Simple Browser's), because the policy does not list `blob:` and the object is
+ * not the page's; nor a `data:` URL; nor a file on another origin, which plain `http:` the
+ * policy refuses and `https:` only a CORS answer could admit.
+ *
+ * Matched as text and not parsed: the platform hands the URL over canonical, and a parser that
+ * refuses a character Chromium leaves unescaped in a query would refuse a download that works.
+ *
+ * A remote `https:` file whose server allows any origin is refused although the page could read
+ * it: the URL cannot say so, and only a request could find out.
+ */
+internal fun pageCanReadDownload(url: String, port: Int): Boolean {
+    if (port <= 0) return false
+    val origin = "http://127.0.0.1:$port/"
+    if (url.startsWith(origin) || url.startsWith("blob:$origin")) return true
+    if (!url.startsWith("https://")) return false
+    val authority = url.removePrefix("https://").substringBefore('/').substringBefore('?').substringBefore('#')
+    return authority.endsWith(".$DOWNLOAD_RESOURCE_AUTHORITY") && '@' !in authority && ':' !in authority
+}
+
+/** Where extension files are served from to webviews; see [pageCanReadDownload]. */
+private const val DOWNLOAD_RESOURCE_AUTHORITY = "vscode-resource.vscode-cdn.net"
+
+/**
+ * How long after a refused download the next refusal is kept off the screen. A page that starts
+ * downloads in a loop would otherwise cover the editor in notices, one each.
+ */
+internal const val UNREADABLE_NOTICE_MS = 30_000L
 
 /**
  * Runs one download at a time, from the platform's download hook to a file the
@@ -241,9 +285,12 @@ interface DownloadHost {
  * name the user chose is indistinguishable from a complete one until they open
  * it, so every path that ends badly removes the document it created, when that
  * document can be told from one the user had (see below), and says so. Reporting
- * is not optional on any path either: the defect this replaces
- * was a menu entry that did nothing and said nothing, and a fix that fails
- * quietly is the same defect wearing more code.
+ * is not optional on any path either, with one exception: a download the page
+ * cannot read is refused before it has a picker, and a refusal within
+ * [UNREADABLE_NOTICE_MS] of the last one said is logged rather than shown, so
+ * that a page starting downloads in a loop cannot bury the editor. The defect
+ * this replaces was a menu entry that did nothing and said nothing, and a fix
+ * that fails quietly is the same defect wearing more code.
  *
  * The other half of that rule is that **a file the user already had is not
  * written to before every byte of the download has arrived**. The picker answers
@@ -332,6 +379,8 @@ class DownloadCoordinator(
     private val stagingDir: () -> File? = { null },
     /** The free space on the staging volume, or null if unknown, checked before each piece. */
     private val stagingRoom: () -> Long? = { null },
+    /** A monotonic clock in milliseconds, which spaces out the notices of refused downloads. */
+    private val monotonicMs: () -> Long = { System.nanoTime() / 1_000_000L },
 ) {
 
     private val tag = "DownloadCoordinator"
@@ -372,6 +421,9 @@ class DownloadCoordinator(
     private var awaitingPicker: String? = null
 
     private var requestCounter = 0L
+
+    /** When a refused download was last said on screen ([UNREADABLE_NOTICE_MS]), or null. */
+    private var unreadableNoticeAt: Long? = null
 
     /**
      * Names the page has reported for URLs it is about to download.
@@ -610,7 +662,8 @@ class DownloadCoordinator(
 
     /**
      * A download has started in the page. Works out what to call it and asks
-     * the user where to put it, or queues it when the picker is busy.
+     * the user where to put it, or queues it when the picker is busy, or
+     * refuses it when the page cannot read it ([DownloadHost.pageCanRead]).
      */
     @Synchronized
     fun onDownloadStart(url: String, contentDisposition: String?) {
@@ -618,6 +671,10 @@ class DownloadCoordinator(
         // behind would let a later download of the same URL that the page did
         // not name inherit this one's filename.
         val fileName = downloadFileName(url, contentDisposition, reportedNames.remove(url))
+        if (!host.pageCanRead(url)) {
+            refuseUnreadable(fileName)
+            return
+        }
         if (url.startsWith("blob:") &&
             (pending?.url == url || waiting.any { it.url == url })
         ) {
@@ -647,6 +704,21 @@ class DownloadCoordinator(
             return
         }
         start(request)
+    }
+
+    /**
+     * Turns away a download the page cannot read, before any picker or queue, and says so once per
+     * [UNREADABLE_NOTICE_MS]. The URL stays out of the log: a `data:` URL is the file itself.
+     */
+    private fun refuseUnreadable(fileName: String) {
+        val now = monotonicMs()
+        val last = unreadableNoticeAt
+        if (last != null && now - last < UNREADABLE_NOTICE_MS) {
+            Logger.d(tag, "Refusing ${redactToken(fileName)} without a notice: the editor page cannot read it")
+            return
+        }
+        unreadableNoticeAt = now
+        host.report(DownloadOutcome.FAILED, fileName, "the editor page cannot read this download")
     }
 
     /** Hands [request] the picker. Only ever called with nothing else holding it. */

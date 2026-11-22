@@ -19,7 +19,7 @@ The third is different in kind and worth reading before you use it: the app bund
 
 ## How the App Works
 
-VSCodroid runs a local code editor server entirely on your Android device. The editor interface (VS Code Workbench) connects to this local server over `localhost` (127.0.0.1) -- your device talking to itself. No data is sent to any external server as part of normal app operation.
+VSCodroid runs a local code editor server entirely on your Android device. The editor interface (VS Code Workbench) connects to this local server over `localhost` (127.0.0.1): your device talking to itself. No data is sent to any external server as part of normal app operation, apart from the connections listed under **Network Access** below, some of which the editor makes on its own.
 
 All code execution -- whether Node.js, Python, Bash, or any other bundled runtime -- happens 100% on your device.
 

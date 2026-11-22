@@ -281,7 +281,8 @@ object KeyPages {
      * back under [MIN_TOUCH_TARGET_DP]. [ExtraKeyRow.onConfigurationChanged]
      * repacks for it, comparing this function's result against the pages the
      * row is already showing so that a change which does not move a page
-     * boundary rebuilds nothing: a rebuild resets the pager to page 1 and hands
+     * boundary rebuilds nothing: a rebuild keeps the pager at the same page
+     * number, which after a change of the page count shows other keys, and hands
      * the adapter's toggle map, which is where a latched modifier lives, across
      * by hand.
      *

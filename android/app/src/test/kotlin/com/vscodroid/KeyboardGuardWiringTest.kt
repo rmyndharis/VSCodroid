@@ -313,12 +313,18 @@ class KeyboardGuardWiringTest {
 
     @Test
     fun `a scroll is not a tap`() {
-        val source = mainActivity()
+        // Inside the guard: the same names appear in other scripts of the file, so a search of the
+        // whole of it stays green with the guard back on pointerdown.
+        val guard = SourceScan.body(mainActivity(), "private fun injectKeyboardGuard()")
 
-        for (name in listOf("pointerup", "pointercancel", "TAP_SLOP")) {
+        for (decides in listOf(
+            "document.addEventListener('pointerup'",
+            "document.addEventListener('pointercancel'",
+            "moved <= TAP_SLOP",
+        )) {
             assertTrue(
-                source.contains(name),
-                "the guard no longer mentions `$name`, so the decision has moved back to " +
+                guard.contains(decides),
+                "the guard no longer has `$decides`, so the decision has moved back to " +
                     "pointerdown and dragging to scroll a file raises the keyboard again.",
             )
         }
@@ -326,10 +332,11 @@ class KeyboardGuardWiringTest {
 
     @Test
     fun `the guard aims at the element this workbench actually focuses`() {
-        val source = mainActivity()
+        // The guard's own selectors: another script of the file names the element as well.
+        val source = SourceScan.body(mainActivity(), "private fun injectKeyboardGuard()")
 
         assertTrue(
-            source.contains("native-edit-context"),
+            source.contains(".native-edit-context"),
             "the guard no longer names `native-edit-context`. That is the element the shipped " +
                 "workbench focuses for the caret, so a guard without it matches nothing and " +
                 "silently does nothing at all.",
@@ -437,12 +444,15 @@ class KeyboardGuardWiringTest {
             "the root of activity_main.xml is no longer the BackObserverLayout, so no Back is seen ahead of the keyboard and a Back inside a turn's window is taken for the turn's.",
         )
         val observer = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/keyboard/BackObserverLayout.kt"))
+        val preIme = SourceScan.body(observer, "override fun dispatchKeyEventPreIme(event: KeyEvent): Boolean")
+        // The hand-on is the only way out: a `return true` ahead of it, under any condition, keeps
+        // the key from the keyboard and the page, and a search for the hand-on alone still finds it.
         assertTrue(
-            observer.contains("override fun dispatchKeyEventPreIme(event: KeyEvent): Boolean") &&
-                observer.contains("event.keyCode == KeyEvent.KEYCODE_BACK") &&
-                observer.contains("return super.dispatchKeyEventPreIme(event)") &&
-                observer.contains("onBack(event.eventTime)"),
-            "BackObserverLayout no longer reports the Back key from dispatchKeyEventPreIme and passes the event on: consuming it would stop the keyboard closing.",
+            preIme.contains("event.keyCode == KeyEvent.KEYCODE_BACK") &&
+                preIme.contains("onBack(event.eventTime)") &&
+                Regex("""\breturn\b.*""").findAll(preIme).map { it.value.trim() }.toList() ==
+                listOf("return super.dispatchKeyEventPreIme(event)"),
+            "BackObserverLayout no longer reports the Back key from dispatchKeyEventPreIme and passes every event on: consuming it would stop the keyboard closing.",
         )
         val activity = mainActivity()
         val setup = SourceScan.body(activity, "private fun setupExtraKeyRow()")
@@ -631,9 +641,15 @@ class KeyboardGuardWiringTest {
     fun `noteEdgeBackGesture handles multi-touch pointer up, screen-touch filtering and top-corner exclusion`() {
         val activity = mainActivity()
         val note = SourceScan.withoutComments(SourceScan.body(activity, "private fun noteEdgeBackGesture("))
-        val handlesPointerUp = note.contains("ACTION_POINTER_UP") || note.contains("ACTION_POINTER_DOWN")
-        val checksTouchSource = note.contains("isScreenTouch") || note.contains("TOOL_TYPE_STYLUS")
-        val checksVerticalOrExclusion = note.contains("ev.y") || note.contains("systemGestureExclusion")
+        val handlesPointerUp = Regex(
+            """MotionEvent\.ACTION_POINTER_DOWN,\s*MotionEvent\.ACTION_POINTER_UP\s*->\s*\{\s*edgeBackGesture\.lifted\(\)""",
+        ).containsMatchIn(note)
+        val checksTouchSource = note.contains("HardwareTyping.isScreenTouch(ev.source)") &&
+            note.contains("MotionEvent.TOOL_TYPE_STYLUS")
+        // The band of the status bar and the cutout: a touch that goes down there is the
+        // notification shade's. Not `ev.y` alone, which the move branch reads whatever this does.
+        val checksVerticalOrExclusion = Regex("""\bev\.y\s*<\s*topInset\b""").containsMatchIn(note) &&
+            note.contains("WindowInsetsCompat.Type.statusBars()")
         assertTrue(
             handlesPointerUp && checksTouchSource && checksVerticalOrExclusion,
             "noteEdgeBackGesture produces false edge pairs on multi-touch pointer lift + later cancel (handlesPointerUp=$handlesPointerUp), " +

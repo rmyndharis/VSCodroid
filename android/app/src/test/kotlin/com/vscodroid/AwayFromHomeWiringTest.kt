@@ -45,7 +45,8 @@ class AwayFromHomeWiringTest {
      * The editor load, run on an activity whose framework half is mocked, for a start that found home
      * busy: it asks the service, and shows the dialog with the home port. Never as a toast, which
      * Android 12 and later cut to two lines, leaving out the port and the way back. A screen that is
-     * going away does not ask at all, so the one notice of the process is not spent on it.
+     * going away, finishing or already destroyed, does not ask at all, so the one notice of the process
+     * is not spent on it.
      */
     @Test
     fun `the editor load tells the person once when the start could not use home`() {
@@ -73,6 +74,14 @@ class AwayFromHomeWiringTest {
 
         every { screen.isFinishing } returns true
         every { service.takeAwayFromHome() } returns 13337
+        load.invoke(screen, 13340, "/projects", null)
+        verify(exactly = 2) { service.takeAwayFromHome() }
+        verify(exactly = 1) { screen["showAwayFromHomeNotice"](any<Int>()) }
+
+        // Destroyed and not finishing: a screen the platform took down without finishing it, which a
+        // configuration change the manifest does not list does, is as unable to show the dialog.
+        every { screen.isFinishing } returns false
+        every { screen.isDestroyed } returns true
         load.invoke(screen, 13340, "/projects", null)
         verify(exactly = 2) { service.takeAwayFromHome() }
         verify(exactly = 1) { screen["showAwayFromHomeNotice"](any<Int>()) }
@@ -285,9 +294,10 @@ class AwayFromHomeWiringTest {
                 "previous-crash dialog comes up over the page",
         )
         assertTrue(
-            page.contains("if (!isFinishing && !isDestroyed) awayFromHomeNotice?.dismiss()"),
+            page.contains("if (!isDestroyed) awayFromHomeNotice?.dismiss()"),
             "a crash page dismisses the notice without asking whether the window is still " +
-                "there; dismissing a dialog whose window has gone throws",
+                "there, which throws once it has gone, or leaves the notice up over a screen " +
+                "that is only finishing and still has its window",
         )
     }
 
