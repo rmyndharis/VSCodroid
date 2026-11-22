@@ -524,6 +524,77 @@ class SshKeyStateTest {
         assertTrue(temporaryStages().isEmpty(), "private-only refusal created temporary output")
     }
 
+    /**
+     * The key methods run on the bridge thread, which clipboard, storage and toolchain calls queue
+     * behind, and they read whatever carried a key's name. A FIFO named like a public key blocked
+     * the open until something wrote to it, which nothing does, so one listing stopped the bridge
+     * for the rest of the process.
+     */
+    @Test
+    fun `a public key name on a FIFO does not hold the bridge thread`() {
+        val fifo = File(sshDir, "pipe.pub")
+        val made = ProcessBuilder("mkfifo", fifo.path).start()
+        assertTrue(made.waitFor(5, java.util.concurrent.TimeUnit.SECONDS) && made.exitValue() == 0, "mkfifo failed")
+        publicKey.writeText("$PUBLIC_LINE\n")
+
+        val listing = org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(
+            java.time.Duration.ofSeconds(2),
+            org.junit.jupiter.api.function.ThrowingSupplier { bridge.listSshKeys(security.getSessionToken()) },
+            "listing the keys blocked on a FIFO named like one",
+        )
+        val names = JSONArray(listing).let { keys -> (0 until keys.length()).map { keys.getJSONObject(it).getString("name") } }
+        assertEquals(listOf("id_ed25519"), names, "the FIFO is listed as a key, or the real key is not: $listing")
+
+        assertTrue(publicKey.delete())
+        val made2 = ProcessBuilder("mkfifo", publicKey.path).start()
+        assertTrue(made2.waitFor(5, java.util.concurrent.TimeUnit.SECONDS) && made2.exitValue() == 0, "mkfifo failed")
+        val key = org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(
+            java.time.Duration.ofSeconds(2),
+            org.junit.jupiter.api.function.ThrowingSupplier { bridge.getSshPublicKey(security.getSessionToken()) },
+            "reading the public key blocked on a FIFO in its place",
+        )
+        assertEquals("", key)
+    }
+
+    @Test
+    fun `a file far larger than any public key is not handed over`() {
+        publicKey.writeText("$PUBLIC_LINE\n" + "A".repeat(1 shl 20))
+
+        assertEquals("", bridge.getSshPublicKey(security.getSessionToken()), "a megabyte went to the page as a public key")
+        assertEquals("[]", bridge.listSshKeys(security.getSessionToken()))
+    }
+
+    @Test
+    fun `a public key kept elsewhere and linked into the ssh directory is still read`() {
+        val kept = File(files, "dotfiles/id_ed25519.pub").apply { parentFile.mkdirs(); writeText("$PUBLIC_LINE\n") }
+        Files.createSymbolicLink(publicKey.toPath(), kept.toPath())
+
+        assertEquals(PUBLIC_LINE, bridge.getSshPublicKey(security.getSessionToken()))
+        val keys = JSONArray(bridge.listSshKeys(security.getSessionToken()))
+        assertEquals(1, keys.length())
+        assertEquals("ssh-ed25519", keys.getJSONObject(0).getString("type"))
+    }
+
+    /**
+     * A process that died while ssh-keygen ran, or a child that could not be stopped, leaves its stage
+     * behind: a private key with no passphrase in a directory nothing else ever reads. The next
+     * generation clears it, and a link with the stage's name is removed rather than followed.
+     */
+    @Test
+    fun `a stage an earlier generation left behind is removed by the next one`() {
+        val left = File(files, ".ssh-keygen-1234").apply { mkdirs() }
+        File(left, "id_ed25519").writeText("LEFT PRIVATE\n")
+        File(left, "id_ed25519.pub").writeText("$PUBLIC_LINE\n")
+        val elsewhere = File(files, "elsewhere").apply { mkdirs() }
+        val kept = File(elsewhere, "id_ed25519").apply { writeText("NOT A STAGE\n") }
+        Files.createSymbolicLink(File(files, ".ssh-keygen-link").toPath(), elsewhere.toPath())
+
+        bridge.generateSshKey(security.getSessionToken(), "")
+
+        assertEquals(emptySet<String>(), temporaryStages(), "a stage left by an earlier generation is still there")
+        assertEquals("NOT A STAGE\n", kept.readText(), "the sweep followed a link out of the app's own stages")
+    }
+
     private fun temporaryStages(): Set<String> =
         files.listFiles().orEmpty().filter { it.name.startsWith(".ssh-keygen-") }.map { it.name }.toSet()
 

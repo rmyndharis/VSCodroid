@@ -2,10 +2,13 @@ package com.vscodroid.util
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTimeoutPreemptively
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.function.ThrowingSupplier
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.time.Duration
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
@@ -466,10 +469,10 @@ class ServerLogTest {
      * character, so the boundary never held next to one and every name in this
      * case was written to disk verbatim and copied into a bug report.
      *
-     * NEGATIVE CONTROL: put the `\b` back around the keyword alternation in the
-     * third entry of `SECRET_PATTERNS` (`\b(?:api[_-]?key|...|token)\b` in place
-     * of the two lookarounds). Every line below is then written unchanged and this
-     * case reddens on the first of them.
+     * NEGATIVE CONTROL: put the `\b` back around the keyword alternation in
+     * `NAMED_SECRET_PREFIX` (`\b(?:api[_-]?key|...|token)\b` in place of the
+     * name-start lookbehind with its prefix and of the lookahead after the
+     * keyword). Every line below is then written unchanged and this case reddens.
      */
     @Test
     fun `a credential named like an environment variable is redacted too`() {
@@ -510,14 +513,15 @@ class ServerLogTest {
      * eat the diagnostics this file exists for, and an exception class or a
      * source file is exactly where those letters turn up innocently.
      *
-     * NEGATIVE CONTROL: one mutation per boundary, because two different things
-     * hold these lines. Drop `(?<![A-Za-z0-9])` from the third entry of
-     * `SECRET_PATTERNS` and the last line reddens, `notasecret=` and `mytoken=`
-     * both read as names. Make the separator optional in the same entry, `[:=]?`
-     * for `[:=]`, and the middle two redden instead: nothing else stops a keyword
-     * with letters welded onto its right, because it can then reach a value with
-     * no separator in between. The first line takes both mutations together,
-     * which is what makes it the one worth keeping when the rule is next widened.
+     * NEGATIVE CONTROL: one mutation per boundary, because different things hold
+     * these lines. Drop the name-start lookbehind `(?<![A-Za-z0-9_-])` from
+     * `NAMED_SECRET_PREFIX` and the last line reddens, `notasecret=` and
+     * `mytoken=` both read as names. Drop the lookahead after the keyword,
+     * `(?![A-Za-z0-9])`, and make the separator optional, `[:=]?` for `[:=]`, and
+     * the middle two redden instead: a keyword with letters welded onto its right
+     * then reaches a value with no separator in between, and either one alone
+     * still holds them. The first line takes all three mutations together, which
+     * is what makes it the one worth keeping when the rule is next widened.
      */
     @Test
     fun `a keyword welded into a longer word is not a credential name`() {
@@ -563,23 +567,24 @@ class ServerLogTest {
      * hides the thing that goes wrong here, which is that widening the pattern
      * for a name in the first column quietly moves a line out of the second.
      *
-     * NEGATIVE CONTROL: three mutations of the third entry of `SECRET_PATTERNS`,
-     * two for the first column and one for the second. Drop `pgpassword|` and the
-     * `PGPASSWORD` row survives; put the value back to `["']?[^\s"',}&]+` with no
-     * quoted alternative and `DB_PASSWORD="correct horse battery staple"` keeps
-     * everything after its first word. Drop `(?<![A-Za-z0-9])` and the second
-     * column's `notasecret=1 mytoken=diagnostic` is redacted instead. Measured:
-     * each of the three reddens this case on its own.
+     * NEGATIVE CONTROL: three mutations of the named rule, two for the first
+     * column and one for the second. Drop `pgpassword|` from `NAMED_SECRET_PREFIX`
+     * and the `PGPASSWORD` row survives; take the quoted branch out of
+     * `redactNamedSecrets`, so every value is read by `UNQUOTED_SECRET_VALUE`, and
+     * `DB_PASSWORD="correct horse battery staple"` keeps everything after its first
+     * word. Drop `(?<![A-Za-z0-9_-])` and the second column's
+     * `notasecret=1 mytoken=diagnostic` is redacted instead. Measured: each of the
+     * three reddens this case on its own.
      *
      * Four more, one per later widening. Put the quote back to a bare `["']?`
-     * in the first and third entries and the three `\"`-quoted rows survive: a
-     * body serialised into an error message arrives with a backslash before
-     * every quote, and the `\s*` then meets that backslash where the separator
-     * has to be. Drop `|cookie|set-cookie` from the first entry and the three
-     * cookie rows survive this function (the `vscode-tkn` one is still taken
-     * by `redactToken` on the append path, which is why it is here as a row
-     * against this function alone). Drop `private[_-]?key|` from the third and the
-     * `private_key:` row survives (the `"privateKey":` row does not, because
+     * in the header rule and in `NAMED_SECRET_PREFIX` and the three `\"`-quoted
+     * rows survive: a body serialised into an error message arrives with a
+     * backslash before every quote, and the `\s*` then meets that backslash where
+     * the separator has to be. Drop `|cookie|set-cookie` from the header rule and
+     * the three cookie rows survive this function (the `vscode-tkn` one is still
+     * taken by `redactToken` on the append path, which is why it is here as a row
+     * against this function alone). Drop `private[_-]?key|` from
+     * `NAMED_SECRET_PREFIX` and the `private_key:` row survives (the `"privateKey":` row does not, because
      * its value is a one-line key and the `-----BEGIN` entry takes that on its
      * own). Drop the `-----BEGIN` entry and the bare one-line key, the one with
      * no name beside it, survives. The second column holds the
@@ -654,15 +659,15 @@ class ServerLogTest {
     /**
      * What accepting a name's remaining segments costs, pinned to the character.
      *
-     * The note above `SECRET_PATTERNS` bounds the cost, and a bound nobody
+     * The note above `NAMED_SECRET_PREFIX` bounds the cost, and a bound nobody
      * measures drifts: it said "a hyphenated ordinary word ending in a colon"
      * loses "the one word after it", while the rule also fires on `_` segments
      * and after a flag's `=`, and the value class does not stop at a `:`, so the
      * punctuation goes with the value. Asserting the exact output is what makes
      * the next widening of that rule visible instead of silent.
      *
-     * NEGATIVE CONTROL: drop `(?:[_-][A-Za-z0-9_-]*)?` from the third entry of
-     * `SECRET_PATTERNS`. All three lines are then returned unchanged, which
+     * NEGATIVE CONTROL: drop `(?:[_-][A-Za-z0-9_-]*+)?` from
+     * `NAMED_SECRET_PREFIX`. All three lines are then returned unchanged, which
      * reddens here and reddens `x_api_key_v2` in the table above, and those two
      * together are the trade being made.
      */
@@ -771,19 +776,25 @@ class ServerLogTest {
      * property under test.
      *
      * NEGATIVE CONTROL: put `(?:[_-][A-Za-z0-9]+)*` back in place of
-     * `(?:[_-][A-Za-z0-9_-]*)?` in the third entry of `SECRET_PATTERNS`. Measured:
-     * this case then fails with StackOverflowError, at 2000 segments as well as at
-     * the 20000 below, and no other case in this file changes.
+     * `(?:[_-][A-Za-z0-9_-]*+)?` in `NAMED_SECRET_PREFIX`. Measured: this case then
+     * fails with StackOverflowError, at 2000 segments as well as at the 20000
+     * below; of the other cases only the linear-time one changes, on its own run
+     * of 20,000 segments.
      */
     @Test
     fun `a name made of thousands of segments does not overflow the stack`() {
-        val line = "<4242><stderr> token" + "_a".repeat(20_000) + "=hunter2"
+        // The keyword first, where the name's tail is long, and last, where the prefix that
+        // finds the keyword inside a name is.
+        val lines = listOf(
+            "<4242><stderr> token" + "_a".repeat(20_000) + "=hunter2",
+            "<4242><stderr> " + "a_".repeat(20_000) + "token=hunter2",
+        )
         var thrown: Throwable? = null
-        var out: String? = null
+        val out = mutableListOf<String>()
 
         val worker = Thread(null, {
             try {
-                out = redactSecrets(line)
+                lines.forEach { out += redactSecrets(it) }
             } catch (t: Throwable) {
                 thrown = t
             }
@@ -792,7 +803,49 @@ class ServerLogTest {
         finishWorker(worker)
 
         assertEquals(null, thrown, "the redaction threw on a long name, killing the process")
-        assertFalse("hunter2" in out!!, "the long name is still a credential name: $out")
+        assertEquals(2, out.size)
+        for (redacted in out) {
+            assertFalse("hunter2" in redacted, "the long name is still a credential name: $redacted")
+        }
+    }
+
+    /**
+     * A line the redaction cannot get through in linear time stalls the server.
+     *
+     * [ServerLog.append] redacts on the thread that drains the server's stdout, holding the
+     * file lock, so a line that takes seconds holds the drain for those seconds, and once the
+     * pipe's buffer fills the server blocks on its next write. Two shapes were quadratic. A
+     * credential name followed by a long run of spaces and no separator: the two whitespace runs
+     * on either side of the optional quote traded the spaces between them on every way of
+     * failing, and the header rule had the same pair. A long run of segments that each start
+     * with a keyword: every keyword read the rest of the run again before failing at its end.
+     * Measured on the JVM at 32,000 characters: about two seconds each before and under ten
+     * milliseconds after; a line of a million characters takes about a tenth of a second.
+     *
+     * NEGATIVE CONTROL: make the whitespace runs greedy again (`\s*` for `\s*+`) in
+     * `NAMED_SECRET_PREFIX` and the first line times out; do the same in the header rule and the
+     * third does. Take the atomic group out of `NAMED_SECRET_PREFIX`, so a run is read again from
+     * each keyword in it, and the second times out even with every quantifier possessive.
+     */
+    @Test
+    fun `a long line with no separator is redacted in linear time`() {
+        for (line in listOf(
+            "token" + " ".repeat(100_000),
+            "-token".repeat(20_000),
+            "authorization" + " ".repeat(100_000),
+            "x_token-a".repeat(12_000),
+            // Runs the prefix walks to their end without meeting a keyword.
+            "-".repeat(200_000),
+            "a".repeat(200_000),
+            "a-".repeat(100_000) + "=x",
+        )) {
+            val out = assertTimeoutPreemptively(Duration.ofSeconds(1), ThrowingSupplier { redactSecrets(line) })
+            assertEquals(line, out, "a line with no separator in it was changed")
+        }
+        // The scan that reads a run once still finds a name whose separator ends it.
+        val named = "-token".repeat(20_000) + "=hunter2"
+        val out = assertTimeoutPreemptively(Duration.ofSeconds(1), ThrowingSupplier { redactSecrets(named) })
+        assertFalse("hunter2" in out, "the credential at the end of a long name survived")
     }
 
     /**
