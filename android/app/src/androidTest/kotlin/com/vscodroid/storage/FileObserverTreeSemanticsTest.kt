@@ -39,11 +39,11 @@ import java.util.concurrent.TimeUnit
  * ## What this needs
  *
  * A temporary directory, and nothing else: no server, no first-run extraction, no SAF
- * grant, no picker. That is deliberate. `ServerHealthTest` passes its three cases on a
- * clean install by skipping all of them, because the state it needs is produced by a
- * class that sorts after it; this file has no such state to be missing, so there is
- * nothing here that a skip could hide. There is no `assumeTrue` below, and there must
- * not be one: an assertion that cannot fail is worse than an absent one.
+ * grant, no picker. That is deliberate. `ServerHealthTest` needs state a class that
+ * sorts after it produces, and once skipped all three of its cases on a clean install
+ * (it fails them now, naming the remedy); this file has no such state to be missing, so
+ * there is nothing here that a skip could hide. There is no `assumeTrue` below, and there
+ * must not be one: an assertion that cannot fail is worse than an absent one.
  *
  * Each claim about an event *not* arriving is preceded by a control on the same observer
  * and the same queue. An empty queue is also what a broken fixture produces, and without

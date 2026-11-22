@@ -64,8 +64,17 @@ class SplashActivityTest {
         val scenario = ActivityScenario.launch(SplashActivity::class.java)
 
         // Poll for setup_version to be written (extraction completes async).
-        // Emulators can take 30-60s for extraction; real devices ~3-5s.
-        val deadline = System.currentTimeMillis() + 90_000L
+        //
+        // The whole tree is copied here, never resumed: setUp cleared the version
+        // over a completed tree, and FirstRunSetup resumes only an attempt of
+        // this same build that nothing completed, so every file is written
+        // again. Readings of that on one emulator were 61, 78 and 200 s (the
+        // last with a Gradle build on the same machine; see
+        // subsequentLaunch_skipsExtraction) and 14.5 s on another, so the
+        // deadline sits above the slowest of them rather than at 90 s, which
+        // the slowest reading outran.
+        val waitMs = 300_000L
+        val deadline = System.currentTimeMillis() + waitMs
         var version: String? = null
         while (System.currentTimeMillis() < deadline) {
             version = getSetupPrefs().getString("setup_version", null)
@@ -74,7 +83,7 @@ class SplashActivityTest {
         }
 
         assertTrue(
-            "setup_version should be set after extraction within 30s, got: $version",
+            "setup_version should be set after extraction within ${waitMs / 1000}s, got: $version",
             version != null && version.isNotEmpty()
         )
         scenario.close()

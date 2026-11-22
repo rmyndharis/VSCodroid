@@ -4,6 +4,8 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.vscodroid.util.ServerReadyHelper
+import org.json.JSONObject
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -80,6 +82,15 @@ class ServerHealthTest {
         scenario.close()
     }
 
+    /**
+     * The probe answered by this build's own server, not merely by something.
+     *
+     * [server_becomesReady] already has `/version` answering 200, because that is
+     * what [ServerReadyHelper.waitForServer] waits for, so asking for a 200 again
+     * here proved nothing the case above had not. What the answer says is the other
+     * half: the commit of the tree this install extracted, which is also how
+     * `ProcessManager` tells its own server from another before adopting one.
+     */
     @Test
     fun server_answersTheReadinessProbe() {
         val scenario = ActivityScenario.launch(SplashActivity::class.java)
@@ -87,8 +98,15 @@ class ServerHealthTest {
         val port = ServerReadyHelper.waitForServer(context, timeoutMs = 60_000L)
         assertTrue(PORT_UNREACHABLE, port != 0)
 
-        val healthy = ServerReadyHelper.healthCheck(port, timeoutMs = 10_000L)
-        assertTrue("HTTP health check should succeed on port $port", healthy)
+        val product = File(context.filesDir, "server/vscode-reh/product.json")
+        assertTrue("$product is missing, so nothing names this build's commit", product.isFile)
+        val commit = JSONObject(product.readText()).optString("commit")
+        assertTrue("$product records no commit", commit.isNotBlank())
+        assertEquals(
+            "/version on port $port did not answer with the commit of the extracted tree",
+            commit.trim(),
+            ServerReadyHelper.version(port),
+        )
         scenario.close()
     }
 
@@ -121,19 +139,20 @@ class ServerHealthTest {
 
     private companion object {
         /**
-         * The port is whatever `PortFinder.getOrAllocatePort()` recorded, read back
-         * by `ServerReadyHelper.waitForServer`. A literal 13337 stood here, and on
-         * any device where that port had ever been taken all three cases went red
-         * for a reason that had nothing to do with the server. What is left for
-         * this message is the one case the record cannot cover: the whole scan
-         * range full, so the app fell back to an ephemeral port it deliberately
-         * does not remember. Not measured on such a device.
+         * The port is the one the app's editor gateway bound, read back by
+         * `ServerReadyHelper.waitForServer`, with `PortFinder`'s record of the
+         * home port standing in only until the gateway is bound. A literal 13337
+         * stood here, and then the record alone, and each sent all three cases red
+         * on a device where that port was held, for a reason that had nothing to do
+         * with the server: since a start that finds home busy binds another port
+         * for that process without recording it, only the gateway knows where the
+         * server is. What is left for this message is a gateway that never bound,
+         * or a server that never answered on the port it did bind.
          */
         const val PORT_UNREACHABLE =
-            "Server never became reachable within 60s on the port PortFinder " +
-                "recorded. Either the record is stale or absent, or the scan range " +
-                "13337 to 13400 was full and the app fell back to an ephemeral port it " +
-                "deliberately does not record (the previous value stays in the prefs), " +
-                "which this probe cannot know."
+            "Server never answered /version with 200 within 60s. Either the editor " +
+                "gateway never bound a port in this process (the service did not start " +
+                "the server, see server.log), or it bound one and the server behind it " +
+                "never became ready."
     }
 }

@@ -80,12 +80,14 @@ STARS = ' <span class="stars" hidden><span data-live="stars"></span><span class=
 # publishing both would be the same list twice, disagreeing the first time one
 # of them is edited.
 INLINE_TOC = re.compile(
-    r"^## Table of Contents\s*\n.*?(?=^## )", re.M | re.S
+    r"^## Table of Contents\s*\n.*?(?=^## |\Z)", re.M | re.S
 )
 
 # The changelog opens with what has been merged and not released. A reader of
 # the site can install none of it, so the page starts at the newest release.
-UNRELEASED = re.compile(r"^## \[Unreleased\]\s*\n.*?(?=^## )", re.M | re.S)
+# Up to the next section or the end of the file: a changelog whose only section
+# is the unreleased one would otherwise publish it whole.
+UNRELEASED = re.compile(r"^## \[Unreleased\]\s*\n.*?(?=^## |\Z)", re.M | re.S)
 
 # Wide content scrolls inside its own box rather than making the page scroll.
 TABLE = re.compile(r"(<table>.*?</table>)", re.S)
@@ -147,8 +149,10 @@ def shell(page: dict, body: str, entries: "list[tuple[str, str]]") -> str:
         + f">{label}{STARS if key is None else ''}</a>"
         for key, href, label in NAV
     )
+    # The label is a heading's HTML with the tags taken off, so its text is
+    # already escaped: escaping it again printed "&amp;amp;" for an ampersand.
     toc = "\n".join(
-        f'          <li><a href="#{slug}">{html.escape(label)}</a></li>'
+        f'          <li><a href="#{slug}">{html.escape(html.unescape(label))}</a></li>'
         for slug, label in entries
     )
     aside = (

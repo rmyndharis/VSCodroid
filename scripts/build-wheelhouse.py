@@ -160,9 +160,18 @@ def bundled_python_version():
     later. See check-wheelhouse-abi.py, which is the gate; this is the reader.
     """
     lib = REPO / "android/app/src/main/assets/usr/lib"
-    for path in sorted(lib.glob("libpython3.*.so")):
-        return path.name[len("libpython"):-len(".so")]
-    return None
+    runtimes = sorted(lib.glob("libpython3.*.so"))
+    # More than one is a tree something other than download-python.sh put
+    # together, since it removes the superseded runtime. Taking the first by name
+    # read 3.13 over 3.14, and 3.10 over 3.9, so refuse rather than guess, as
+    # check-wheelhouse-abi.py does.
+    if len(runtimes) > 1:
+        sys.exit(
+            "FAIL more than one Python runtime is in the asset tree: "
+            + ", ".join(p.name for p in runtimes)
+            + "\n     so which one the APK carries cannot be read from it."
+        )
+    return runtimes[0].name[len("libpython"):-len(".so")] if runtimes else None
 
 
 def download(url, dest):
@@ -240,8 +249,23 @@ def repack_termux_deb(deb, name, version, python_version, dest):
     with deb_data_tar(deb) as tar:
         for member in tar.getmembers():
             path = member.name.lstrip("./")
-            if member.isfile() and path.startswith(prefix):
-                files[path[len(prefix):]] = tar.extractfile(member).read()
+            if not path.startswith(prefix) or not (member.isfile() or member.issym() or member.islnk()):
+                continue
+            # A link is carried as the bytes it leads to: a wheel holds no links,
+            # and pip installing one writes a copy, which is what the package
+            # installed by Termux reads through the link. Dropped, it left the
+            # wheel a file short. One whose target the package does not carry,
+            # or that leads to a directory, cannot be carried at all.
+            try:
+                content = tar.extractfile(member)
+            except KeyError:
+                content = None
+            if content is None:
+                sys.exit(
+                    f"FAIL {deb.name} links {path[len(prefix):]} to {member.linkname}, which it does "
+                    "not carry as a file, so a wheel cannot hold it."
+                )
+            files[path[len(prefix):]] = content.read()
 
     # Found rather than spelled, since a project's dist-info directory uses
     # whatever capitalisation and separators its build wrote.

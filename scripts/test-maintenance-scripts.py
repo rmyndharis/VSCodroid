@@ -1850,5 +1850,418 @@ termux_download_packages fixture
                         self.assertEqual([], list((case / sub).glob(".case-check-*")), result)
 
 
+
+class BuildAndDeviceScriptsTest(unittest.TestCase):
+    """Packaging scripts read and rewrite what ships, and the device suite reads
+    what a phone says; each case below runs the real script on a fixture."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+
+    @staticmethod
+    def load(name, path):
+        module = types.ModuleType(name)
+        module.__file__ = str(path)
+        exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), module.__dict__)
+        return module
+
+    # -- build-nls-bundles.py --------------------------------------------
+
+    def nls_run(self, label, welcome):
+        repo = self.root / label
+        script = repo / "scripts/build-nls-bundles.py"
+        script.parent.mkdir(parents=True)
+        shutil.copyfile(SOURCE / "scripts/build-nls-bundles.py", script)
+        write(repo / "VSCODE_LOC_COMMIT", "0123456789abcdef\n")
+        out = repo / "android/app/src/main/assets/vscode-reh/out"
+        write(out / "nls.messages.json", json.dumps(["Welcome to VSCodroid", "Open"]))
+        write(out / "nls.keys.json", json.dumps([["vs/fixture", ["welcome", "open"]]]))
+        payload = json.dumps({"contents": {"vs/fixture": {"welcome": welcome, "open": "Offen"}}}).encode()
+        stdout = io.StringIO()
+        exited = None
+        import runpy
+        from unittest import mock
+        with mock.patch("urllib.request.urlopen", lambda url, timeout: io.BytesIO(payload)), \
+                contextlib.redirect_stdout(stdout):
+            try:
+                runpy.run_path(str(script), run_name="__main__")
+            except SystemExit as exc:
+                exited = exc.code
+        return exited, stdout.getvalue(), repo / "android/app/src/main/assets/nls"
+
+    def test_translated_bundles_keep_the_product_name_in_every_branded_string(self):
+        exited, _, dest = self.nls_run("matched", "Willkommen bei Visual Studio Code")
+        self.assertIsNone(exited)
+        self.assertEqual("Willkommen bei VSCodroid", json.loads((dest / "de.json").read_text())[0])
+        # A translation spelling the name in a form the pattern does not know, or
+        # dropping it, leaves a branded string without the brand: the build stops
+        # and writes nothing rather than shipping it.
+        exited, _, dest = self.nls_run("dropped", "Program Wizualne Studio, zapraszamy!")
+        self.assertIsInstance(exited, str)
+        self.assertIn("index 0", exited)
+        self.assertFalse(dest.exists())
+
+    # -- build-docs-site.py ----------------------------------------------
+
+    def test_docs_site_escapes_labels_once_and_drops_a_trailing_unreleased_section(self):
+        import html as html_module
+        import re as re_module
+        from unittest import mock
+
+        class Markdown:
+            def __init__(self, **_options):
+                pass
+
+            def convert(self, text):
+                # The two things python-markdown does that matter here: headings
+                # become h2/h3, and text is HTML-escaped.
+                return re_module.sub(
+                    r"^(#{2,3}) (.*)$",
+                    lambda m: f"<h{len(m.group(1))}>{html_module.escape(m.group(2), quote=False)}</h{len(m.group(1))}>",
+                    text, flags=re_module.M)
+
+        stub = types.ModuleType("markdown")
+        stub.Markdown = Markdown
+        with mock.patch.dict(sys.modules, {"markdown": stub}):
+            site = self.load("fixture_docs_site", SOURCE / "scripts/build-docs-site.py")
+        source = self.root / "CHANGELOG.md"
+        source.write_text("# Changelog\n\n## [1.0.0] Tools & tips\n\nShipped.\n\n"
+                          "## [Unreleased]\n\n- not released yet\n", encoding="utf-8")
+        body, entries = site.render(source)
+        self.assertNotIn("Unreleased", body)
+        self.assertNotIn("not released yet", body)
+        page = site.shell({"title": "Release notes", "description": "d", "nav": "changelog"}, body, entries)
+        self.assertIn(">[1.0.0] Tools &amp; tips</a>", page)
+        self.assertNotIn("&amp;amp;", page)
+
+    # -- patch-default-shell.py ------------------------------------------
+
+    def test_shell_paths_end_at_the_shell_name_and_every_data_directory_spelling_counts(self):
+        script = SOURCE / "scripts/patch-default-shell.py"
+        termux = b"/data/data/com.termux/files/usr/bin/sh"
+        cases = {
+            # A longer name beside the shell is not the shell.
+            "longer-name": (b"pre\0/data/data/com.termux/files/usr/bin/sha256sum\0post", 0),
+            "user-zero": (b"/data/user/0/com.vscodroid/files/usr/bin/sh\0", 1),
+            "user-ten": (b"exec('/data/user/10/com.example/files/usr/bin/sh')", 1),
+            "control": (termux + b"\0", 1),
+        }
+        for label, (body, status) in cases.items():
+            with self.subTest(label=label):
+                directory = self.root / label
+                directory.mkdir()
+                (directory / "libsample.so").write_bytes(body)
+                result = run([sys.executable, "-I", str(script), "--check", str(directory)], self.root)
+                self.assertEqual(status, result["status"], result)
+
+        blob = b"pre\0" + termux + b"\0/data/data/com.termux/files/usr/bin/shred\0post"
+        target = self.root / "libgit.so"
+        target.write_bytes(blob)
+        result = run([sys.executable, "-I", str(script), str(target)], self.root)
+        self.assertEqual(0, result["status"], result)
+        after = target.read_bytes()
+        self.assertEqual(len(blob), len(after))
+        self.assertIn(b"pre\0/system/bin/sh\0", after)
+        self.assertIn(b"/data/data/com.termux/files/usr/bin/shred\0post", after)
+
+    # -- docker/codeoss-build.Dockerfile ---------------------------------
+
+    def test_codeoss_build_image_pins_its_base_and_the_node_it_runs(self):
+        import re as re_module
+        text = (SOURCE / "docker/codeoss-build.Dockerfile").read_text()
+        self.assertRegex(text, r"(?m)^FROM ubuntu:[0-9.]+@sha256:[0-9a-f]{64}$")
+        pins = dict(re_module.findall(r"(?m)^ARG (NODE_SHA256_(?:ARM64|X64))=([0-9a-f]{64})$", text))
+        self.assertEqual({"NODE_SHA256_ARM64", "NODE_SHA256_X64"}, set(pins), text)
+        self.assertIn('echo "$node_sha256  $tarball" | sha256sum -c -', text)
+        self.assertNotIn("SHASUMS256.txt\"", text)
+        version = re_module.search(r"(?m)^ARG NODE_VERSION=(\S+)$", text).group(1)
+        addons = (SOURCE / "scripts/build-native-addons.sh").read_text()
+        npm = (SOURCE / "scripts/download-npm.sh").read_text()
+        if re_module.search(r'NODE_VERSION="\$\{NODE_VERSION:-' + re_module.escape(version) + r'\}"', addons):
+            self.assertIn(f'NODE_TARBALL_SHA256="{pins["NODE_SHA256_ARM64"]}"', npm)
+
+    # -- write-build-manifest.py -----------------------------------------
+
+    def test_build_manifest_records_the_commit_of_a_checkout_whose_path_has_a_space(self):
+        repo = self.root / "a checkout" / "VSCodroid"
+        script = repo / "scripts/write-build-manifest.py"
+        script.parent.mkdir(parents=True)
+        shutil.copyfile(SOURCE / "scripts/write-build-manifest.py", script)
+        write(repo / "VSCODE_VERSION", "1.139.1\n")
+        write(repo / "android/app/build.gradle.kts", 'versionCode = 42\nversionName = "1.2.3"\n')
+        work = repo / "toolchains/termux-packages"
+        write(work / "resolved-a.tsv", "zlib\tpool/main/z/zlib/zlib_1.3.1_aarch64.deb\t" + "a" * 64 + "\n")
+        write(work / "resolved-b.tsv", "zlib\tpool/main/z/zlib/zlib_1.3.2_aarch64.deb\t" + "b" * 64 + "\n")
+        identity = ["-c", "user.name=fixture", "-c", "user.email=fixture@invalid"]
+        for command in (["init", "-q"], ["add", "."], [*identity, "commit", "-q", "-m", "fixture"]):
+            git = run(["git", *command], repo)
+            self.assertEqual(0, git["status"], git)
+        head = run(["git", "rev-parse", "HEAD"], repo)["stdout"].strip()
+        result = run([sys.executable, "-I", str(script)], repo)
+        self.assertEqual(0, result["status"], result)
+        manifest = result["stdout"]
+        self.assertIn(f"app-commit\t{head}\n", manifest)
+        self.assertIn("app-version\t1.2.3\n", manifest)
+        self.assertIn("app-versioncode\t42\n", manifest)
+        self.assertIn("termux\tzlib\t1.3.2\t" + "b" * 64, manifest)
+        self.assertIn("# NOTE zlib was resolved twice in this build: 1.3.1 then 1.3.2", manifest)
+        earlier = repo / "earlier.txt"
+        earlier.write_text(manifest.replace("1.3.2\t" + "b" * 64, "1.3.0\t" + "c" * 64))
+        compared = run([sys.executable, "-I", str(script), "--compare", str(earlier)], repo)
+        self.assertEqual(0, compared["status"], compared)
+        self.assertIn("changed  termux:zlib", compared["stdout"])
+
+    # -- build-wheelhouse.py ---------------------------------------------
+
+    @staticmethod
+    def termux_deb(path, members):
+        """An ar archive holding a data.tar.gz built from (name, kind, payload)."""
+        import tarfile
+        data = io.BytesIO()
+        with tarfile.open(fileobj=data, mode="w:gz") as tar:
+            for name, kind, payload in members:
+                info = tarfile.TarInfo(name)
+                if kind == "file":
+                    info.size = len(payload)
+                    tar.addfile(info, io.BytesIO(payload))
+                else:
+                    info.type = tarfile.SYMTYPE if kind == "symlink" else tarfile.LNKTYPE
+                    info.linkname = payload
+                    tar.addfile(info)
+        blob = b"!<arch>\n"
+        for member, body in ((b"debian-binary", b"2.0\n"), (b"data.tar.gz", data.getvalue())):
+            blob += member.ljust(16) + b"0".ljust(12) + b"0".ljust(6) + b"0".ljust(6) \
+                + b"100644".ljust(8) + str(len(body)).encode().ljust(10) + b"`\n" + body
+            if len(body) % 2:
+                blob += b"\n"
+        path.write_bytes(blob)
+
+    def test_wheelhouse_repack_keeps_linked_files_and_refuses_an_ambiguous_runtime(self):
+        builder = self.load("fixture_wheelhouse_links", SOURCE / "scripts/build-wheelhouse.py")
+        site = "./data/data/com.termux/files/usr/lib/python3.14/site-packages/"
+        members = [
+            (site + "fixture/__init__.py", "file", b"VALUE = 1\n"),
+            (site + "fixture/again.py", "hardlink", site + "fixture/__init__.py"),
+            (site + "fixture/libfixture.so.1", "file", b"\x7fELF fixture"),
+            (site + "fixture/libfixture.so", "symlink", "libfixture.so.1"),
+            (site + "fixture-1.0.dist-info/METADATA", "file", b"Name: fixture\nVersion: 1.0\n"),
+            (site + "fixture-1.0.dist-info/INSTALLER", "file", b"pip\n"),
+        ]
+        deb = self.root / "python-fixture_1.0_aarch64.deb"
+        self.termux_deb(deb, members)
+        wheel = self.root / "fixture.whl"
+        builder.repack_termux_deb(deb, "fixture", "1.0", "3.14", wheel)
+        with zipfile.ZipFile(wheel) as archive:
+            names = set(archive.namelist())
+            self.assertEqual(b"VALUE = 1\n", archive.read("fixture/again.py"))
+            self.assertEqual(b"\x7fELF fixture", archive.read("fixture/libfixture.so"))
+            self.assertIn("fixture/again.py", archive.read("fixture-1.0.dist-info/RECORD").decode())
+        self.assertNotIn("fixture-1.0.dist-info/INSTALLER", names)
+
+        # A link whose target the package does not carry cannot be put in a
+        # wheel by content, and dropping it would ship a package missing a file.
+        dangling = self.root / "python-dangling_1.0_aarch64.deb"
+        self.termux_deb(dangling, members + [(site + "fixture/gone.so", "symlink", "missing.so.1")])
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as refused:
+            builder.repack_termux_deb(dangling, "fixture", "1.0", "3.14", self.root / "dangling.whl")
+        self.assertIn("fixture/gone.so", str(refused.exception))
+
+        repo = self.root / "repo"
+        lib = repo / "android/app/src/main/assets/usr/lib"
+        lib.mkdir(parents=True)
+        builder.REPO = repo
+        (lib / "libpython3.14.so").write_bytes(b"")
+        self.assertEqual("3.14", builder.bundled_python_version())
+        (lib / "libpython3.9.so").write_bytes(b"")
+        with self.assertRaises(SystemExit) as ambiguous:
+            builder.bundled_python_version()
+        self.assertIn("libpython3.9.so", str(ambiguous.exception))
+
+    # -- patch-python-platform.py ----------------------------------------
+
+    def test_python_platform_check_refuses_an_unpatched_test_beside_the_rewrite(self):
+        script = SOURCE / "scripts/patch-python-platform.py"
+        rewritten = "function o(e=process.platform){return /^linux|^android/.test(e)?i.Linux:i.Unknown}"
+        original = "function p(t){return /^linux/.test(t)?n.Linux:n.Unknown}"
+        for label, text, status in (("rewritten", rewritten, 0), ("both", rewritten + original, 1),
+                                    ("original", original, 1)):
+            with self.subTest(label=label):
+                write(self.root / label / "out/client/extension.js", text)
+                result = run([sys.executable, "-I", str(script), "--check", str(self.root / label)], self.root)
+                self.assertEqual(status, result["status"], result)
+
+    # -- device-test.sh --------------------------------------------------
+
+    @staticmethod
+    def suite_constants(text):
+        import re as re_module
+        return "\n".join(re_module.findall(r"(?m)^(?:SETUP_DONE|SERVER)_\w+=.*$", text))
+
+    def test_server_ready_wait_clears_the_toolchain_picker(self):
+        text = (SOURCE / "scripts/device-test.sh").read_text()
+        begin = text.index("READY_TIMEOUT=$(derive_ready_budget_seconds)")
+        phase = text[begin:text.index("# TEST 8: health_check", begin)]
+        functions = "\n".join(shell_function(text, name) for name in (
+            "pass", "fail", "skip", "vlog", "dismiss_blocking_dialogs", "derive_ready_budget_seconds"))
+        write(self.root / "bin/sleep", "#!/bin/sh\nexit 0\n", True)
+        write(self.root / "adb", '''#!/bin/bash
+case "$*" in
+    'shell uiautomator dump /sdcard/ui.xml') exit 0 ;;
+    'shell cat /sdcard/ui.xml')
+        if [ -f "$STATE/answered" ]; then printf '<hierarchy/>\n'
+        else printf '<hierarchy><node text="Skip" bounds="[10,20][30,40]"/></hierarchy>\n'; fi ;;
+    'shell input tap 20 30') : > "$STATE/answered" ;;
+    'logcat -d -s VSCodroid.NodeService:I VSCodroid.ProcessManager:I')
+        [ -f "$STATE/answered" ] && printf 'I VSCodroid.NodeService: Server is ready on port 41234\n' ;;
+    *) printf 'Unexpected stub call: %s\n' "$*" >&2; exit 97 ;;
+esac
+exit 0
+''', True)
+        preamble = f'''#!/bin/bash
+set -uo pipefail
+ROOT_DIR={json.dumps(str(SOURCE))}
+ADB="$PWD/adb"
+PKG=com.vscodroid.debug
+VERBOSE=false
+SERVER_PORT=""
+PASS=0 FAIL=0 SKIP=0 FAILURES=""
+RED="" GREEN="" YELLOW="" RESET=""
+'''
+        write(self.root / "ready.sh", preamble + self.suite_constants(text) + "\n" + functions + "\n"
+              + phase + '\n[ "$FAIL" -eq 0 ]\n')
+        result = run(["/bin/bash", str(self.root / "ready.sh")], self.root,
+                     {"STATE": str(self.root), "PATH": str(self.root / "bin") + ":/usr/bin:/bin"})
+        self.assertEqual(0, result["status"], result)
+        self.assertIn("server_ready (port=41234", result["stdout"])
+
+    def test_process_count_needs_the_apps_own_process(self):
+        text = (SOURCE / "scripts/device-test.sh").read_text()
+        begin = text.index("# Test 20: process_count")
+        phase = text[begin:text.index("# Test 21: extensions_manifest", begin)]
+        functions = "\n".join(shell_function(text, name) for name in ("pass", "fail", "skip", "vlog"))
+        header = "USER PID PPID VSZ RSS WCHAN ADDR S NAME"
+        app = "u0_a123 {} 1 1000 100 0 0 S {}"
+        others = [app.format(9, "/system/bin/surfaceflinger")]
+        ours = [app.format(10, "com.vscodroid.debug")] + [
+            app.format(11 + n, "/data/app/~~x==/com.vscodroid.debug-y==/lib/arm64/libnode.so") for n in range(3)]
+        many = ours + [app.format(20 + n, "/data/user/0/com.vscodroid.debug/files/usr/bin/bash") for n in range(8)]
+        for label, listing, verdict in (("ours", [header] + others + ours, "PASS"),
+                                        ("none", [header] + others, "FAIL"),
+                                        ("silent", [], "SKIP"),
+                                        ("many", [header] + many, "FAIL")):
+            with self.subTest(label=label):
+                case = self.root / label
+                case.mkdir()
+                write(case / "listing", "".join(line + "\n" for line in listing))
+                write(case / "adb", '#!/bin/bash\n[ "$*" = "shell ps -A" ] || exit 97\ncat "$LISTING"\n', True)
+                script = ('#!/bin/bash\nset -uo pipefail\nADB="$PWD/adb"\nPKG=com.vscodroid.debug\n'
+                          'VERBOSE=false\nPASS=0 FAIL=0 SKIP=0 FAILURES=""\nRED="" GREEN="" YELLOW="" RESET=""\n'
+                          + functions + "\n" + phase)
+                write(case / "count.sh", script)
+                result = run(["/bin/bash", str(case / "count.sh")], case, {"LISTING": str(case / "listing")})
+                self.assertIn(verdict + "  process_count", result["stdout"], result)
+
+    def test_summary_prints_failure_text_as_text(self):
+        text = (SOURCE / "scripts/device-test.sh").read_text()
+        begin = text.index("TOTAL=$((PASS + FAIL + SKIP))")
+        summary = text[begin:]
+        script = ('#!/bin/bash\nPASS=1 FAIL=1 SKIP=0\nRED="" GREEN="" YELLOW="" CYAN="" BOLD="" RESET=""\n'
+                  "FAILURES='\\n  - health_check: Expected 200, got 50%d \\\\ here'\n" + summary)
+        write(self.root / "summary.sh", script)
+        result = run(["/bin/bash", str(self.root / "summary.sh")], self.root)
+        self.assertEqual(1, result["status"], result)
+        self.assertIn("- health_check: Expected 200, got 50%d \\ here\n", result["stdout"])
+
+    def suite_copy(self, label, rewrite=None):
+        """device-test.sh with the files its self-check reads, at their paths."""
+        root = self.root / label
+        for rel in ("scripts/device-test.sh", "scripts/build-native-addons.sh", "scripts/download-npm.sh",
+                    "android/app/src/main/kotlin/com/vscodroid/setup/ToolchainRegistry.kt",
+                    "android/app/src/main/kotlin/com/vscodroid/setup/ToolchainManager.kt",
+                    "android/app/src/main/kotlin/com/vscodroid/setup/FirstRunSetup.kt",
+                    "android/app/src/main/kotlin/com/vscodroid/util/Environment.kt",
+                    "android/app/src/main/kotlin/com/vscodroid/SplashActivity.kt",
+                    "android/app/src/main/kotlin/com/vscodroid/service/ProcessManager.kt",
+                    "android/app/src/main/kotlin/com/vscodroid/service/NodeService.kt"):
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            body = (SOURCE / rel).read_text(encoding="utf-8")
+            if rewrite and rel.endswith(rewrite[0]):
+                self.assertIn(rewrite[1], body)
+                body = body.replace(rewrite[1], rewrite[2])
+            (root / rel).write_text(body, encoding="utf-8")
+        return root
+
+    def test_self_check_reads_every_log_line_the_server_wait_matches(self):
+        home = {"HOME": str(self.root)}
+        control = self.suite_copy("control")
+        result = run(["/bin/bash", str(control / "scripts/device-test.sh"), "--self-check"], control, home)
+        self.assertEqual(0, result["status"], result)
+        for source, line in (("ProcessManager.kt", '"Server ready after'),
+                             ("ProcessManager.kt", '"Starting server on port'),
+                             ("NodeService.kt", '"Server is ready on port'),
+                             ("NodeService.kt", '"Max restarts exceeded')):
+            with self.subTest(line=line):
+                reworded = self.suite_copy("reworded-" + line.strip('"').replace(" ", "-"),
+                                           (source, line, '"Reworded:'))
+                result = run(["/bin/bash", str(reworded / "scripts/device-test.sh"), "--self-check"], reworded, home)
+                self.assertNotEqual(0, result["status"], result)
+                self.assertIn(line.strip('"'), result["stdout"])
+
+    def test_instrumented_record_never_counts_an_earlier_runs_results(self):
+        root = self.root / "checkout"
+        (root / "scripts").mkdir(parents=True)
+        shutil.copyfile(SOURCE / "scripts/device-test.sh", root / "scripts/device-test.sh")
+        app = root / "android/app"
+        write(root / "android/gradlew", "#!/bin/bash\nexit 3\n", True)
+        (app / "src/main/jniLibs/arm64-v8a").mkdir(parents=True)
+        (app / "src/main/jniLibs/arm64-v8a/libnode.so").write_bytes(b"\0" * 2000)
+        write(app / "src/main/assets/vscode-reh/out/server-main.js", "")
+        (app / "src/main/assets/usr").mkdir()
+        write(app / "build/outputs/androidTest-results/connected/debug/TEST-earlier.xml",
+              '<testsuite name="earlier" tests="140" failures="0" errors="0" skipped="2"></testsuite>\n')
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "python3").symlink_to(sys.executable)
+        write(bin_dir / "adb", '''#!/bin/bash
+case "$*" in
+    devices) printf 'List of devices attached\nemulator-5554\tdevice\n' ;;
+    'shell getprop sys.boot_completed') printf '1\n' ;;
+    'shell getprop ro.product.cpu.abi') printf 'arm64-v8a\n' ;;
+    'shell getprop ro.build.fingerprint') printf 'fixture/device\n' ;;
+    *) printf 'Unexpected stub call: %s\n' "$*" >&2; exit 97 ;;
+esac
+''', True)
+        result = run(["/bin/bash", str(root / "scripts/device-test.sh"), "--instrumented"], root,
+                     {"PATH": str(bin_dir) + ":/usr/bin:/bin"})
+        self.assertEqual(3, result["status"], result)
+        record = (app / "build/reports/device-run.txt").read_text()
+        self.assertIn("gradle exit 3", record)
+        self.assertNotIn("tests=140", record)
+        self.assertIn("no result files", record)
+
+    # -- check-instrumented-inventory.py ---------------------------------
+
+    def test_instrumented_inventory_counts_java_test_classes(self):
+        root = self.root / "inventory"
+        (root / "scripts").mkdir(parents=True)
+        shutil.copyfile(SOURCE / "scripts/check-instrumented-inventory.py", root / "scripts/check-instrumented-inventory.py")
+        suite = root / "android/app/src/androidTest"
+        write(suite / "kotlin/com/example/KotlinTest.kt", "class KotlinTest {\n    @Test\n    fun a() {}\n}\n")
+        write(suite / "java/com/example/JavaTest.java",
+              "public class JavaTest {\n    @Test\n    public void a() {}\n    @Test\n    public void b() {}\n}\n")
+        write(suite / "java/com/example/Helper.java", "public class Helper {}\n")
+        for label, sentence, rows, status in (
+                ("kotlin-only", "there are 1 tests across one classes", ["KotlinTest"], 1),
+                ("whole-directory", "there are 3 tests across two classes", ["KotlinTest", "JavaTest"], 0)):
+            with self.subTest(label=label):
+                write(suite / "README.md", f"**At HEAD {sentence}.**\n\n| File | Covers |\n|---|---|\n"
+                      + "".join(f"| `{row}` | something |\n" for row in rows))
+                result = run([sys.executable, "-I", str(root / "scripts/check-instrumented-inventory.py")], root)
+                self.assertEqual(status, result["status"], result)
+
+
 if __name__ == "__main__":
     unittest.main()
