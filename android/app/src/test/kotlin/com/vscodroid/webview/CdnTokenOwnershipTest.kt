@@ -102,8 +102,7 @@ class CdnTokenOwnershipTest {
             gateway.release(server.port)
             val client = VSCodroidWebViewClient(
                 allowedPort = server.port,
-                resourceRoots = emptyList(),
-                sensitiveLocations = emptyList(),
+                resourceRules = noResourceRules(),
                 openFolder = { null },
                 connectionToken = { token },
                 onCrash = {},
@@ -133,7 +132,7 @@ class CdnTokenOwnershipTest {
             gateway.bind(server.port)
             gateway.release(server.port)
             VSCodroidWebViewClient.setupServiceWorkerInterception(
-                server.port, emptyList(), emptyList(), { null },
+                server.port, { emptyList() }, { emptyList() }, { null },
             ) { token }
             assertTrue(registered.isCaptured, "no ServiceWorkerClient was registered")
 

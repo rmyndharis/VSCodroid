@@ -124,8 +124,7 @@ class ExternalUrlNoticeThrottleTest {
 
         client = VSCodroidWebViewClient(
             allowedPort = ALLOWED_PORT,
-            resourceRoots = emptyList(),
-            sensitiveLocations = emptyList(),
+            resourceRules = noResourceRules(),
             openFolder = { null },
             connectionToken = { null },
             onCrash = {},
