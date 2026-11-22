@@ -354,15 +354,22 @@
          worded like saf_write_back_failed: most of the folder did arrive, so "the only
          copy is inside VSCodroid" would overstate. -->
     <plurals name="saf_upload_incomplete">
-        <item quantity="one">%2$s: jedna položka se nedostala do složky v zařízení. Zůstává v aplikaci VSCodroid; pro odeslání ji uložte znovu.</item>
-        <item quantity="few">%2$s: %1$d položky se nedostaly do složky v zařízení. Zůstávají v aplikaci VSCodroid; pro odeslání každou uložte znovu.</item>
-        <item quantity="many">%2$s: %1$d položky se nedostalo do složky v zařízení. Zůstávají v aplikaci VSCodroid; pro odeslání každou uložte znovu.</item>
-        <item quantity="other">%2$s: %1$d položek se nedostalo do složky v zařízení. Zůstávají v aplikaci VSCodroid; pro odeslání každou uložte znovu.</item>
+        <item quantity="one">%2$s: jedna položka se nedostala do složky v zařízení.</item>
+        <item quantity="few">%2$s: %1$d položky se nedostaly do složky v zařízení.</item>
+        <item quantity="many">%2$s: %1$d položky se nedostalo do složky v zařízení.</item>
+        <item quantity="other">%2$s: %1$d položek se nedostalo do složky v zařízení.</item>
     </plurals>
     <!-- The same folder stopped by the enumeration cap rather than by a refusal. Named
          separately because the cause is a limit this app chose, not the device saying
          no, and the user's next move is to copy the rest out by hand. -->
     <string name="saf_upload_capped">Složka %1$s je příliš velká, nezkopírovala se celá. Zbytek zůstal v aplikaci VSCodroid.</string>
+    <string name="saf_file_kept_in_app">%1$s: soubor %2$s zůstává jen v aplikaci VSCodroid, protože mohl být smazán ve složce v zařízení. Uložte ho znovu a odešle se tam.</string>
+    <plurals name="saf_files_kept_in_app">
+        <item quantity="one">%2$s: %1$d soubor, %3$s, zůstává jen v aplikaci VSCodroid, protože mohl být smazán ve složce v zařízení. Uložte ho znovu a odešle se tam.</item>
+        <item quantity="few">%2$s: %1$d soubory, mezi nimi %3$s, zůstávají jen v aplikaci VSCodroid, protože mohly být smazány ve složce v zařízení. Uložte soubor znovu a odešle se tam.</item>
+        <item quantity="many">%2$s: %1$d souboru, mezi nimi %3$s, zůstává jen v aplikaci VSCodroid, protože mohly být smazány ve složce v zařízení. Uložte soubor znovu a odešle se tam.</item>
+        <item quantity="other">%2$s: %1$d souborů, mezi nimi %3$s, zůstává jen v aplikaci VSCodroid, protože mohly být smazány ve složce v zařízení. Uložte soubor znovu a odešle se tam.</item>
+    </plurals>
 
     <!-- The Toolchains toolbar's only icon-only control, and the app's only visible
          way back out of that screen. Without it a screen reader announces an

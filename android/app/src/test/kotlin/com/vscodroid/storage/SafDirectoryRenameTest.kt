@@ -99,6 +99,7 @@ class SafDirectoryRenameTest {
     @AfterEach
     fun tearDown() {
         File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).delete()
+        File(mirror.path + SafSyncEngine.SORTED_RECORD_SUFFIX).delete()
         unmockkAll()
     }
 

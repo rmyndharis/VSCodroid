@@ -79,10 +79,14 @@ abstract class SafMirrorPairEnumerationFixture : SafInitialSyncTestBase() {
         val byPath = actual.associateBy { it.absolutePath }
         val first = if (committed) discardedEntry(mirror) else mirror
         val second = if (committed) discardedEntry(record) else record
-        assertEquals(setOf(first.absolutePath, second.absolutePath), byPath.keys)
+        // The mark a sync of this build leaves beside its record holds nothing and goes when the record does; a
+        // committed removal has already deleted it.
+        val mark = sortedMark.takeUnless { committed }
+        assertEquals(setOfNotNull(first.absolutePath, second.absolutePath, mark?.absolutePath), byPath.keys)
         assertTrue(actual.all { it.exists() })
-        if (recordFirst) arrayOf(byPath.getValue(second.absolutePath), byPath.getValue(first.absolutePath))
-        else arrayOf(byPath.getValue(first.absolutePath), byPath.getValue(second.absolutePath))
+        val marks = listOfNotNull(mark?.let { byPath.getValue(it.absolutePath) })
+        if (recordFirst) (listOf(byPath.getValue(second.absolutePath), byPath.getValue(first.absolutePath)) + marks).toTypedArray()
+        else (listOf(byPath.getValue(first.absolutePath), byPath.getValue(second.absolutePath)) + marks).toTypedArray()
     }
 
     protected fun stopAfterDeleting(entry: File, recordFirst: Boolean) {

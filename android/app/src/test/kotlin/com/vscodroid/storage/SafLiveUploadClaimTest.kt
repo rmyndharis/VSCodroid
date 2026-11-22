@@ -130,4 +130,51 @@ class SafLiveUploadClaimTest {
         call("releaseUploadClaim", checkNotNull(call("markUploadInFlight", moved)))
         assertEquals(setOf(moved), engine.partlyWrittenUploads(), "a write that may have reached the provider left the mark on")
     }
+
+    /**
+     * 1.10.1 reads a mark line as a path, `unwritten` and a tab before the file's own, and writes it back escaped
+     * when it rewrites the journal for another line: the tab became a backslash and a `t`. Read back as a path, the
+     * line was never retired, because each retirement matches whole paths or the mirror's prefix, and the mark it
+     * stood for was lost, so the line of a write that reached no provider read as this app's own cut-short write.
+     */
+    @Test
+    fun `a mark an older release wrote back escaped still marks its line and leaves with it`() {
+        mirrorFileExists()
+        val other = File(filesDir, "saf-mirrors/abc123def456/other.md").apply { writeText("another edit") }.absolutePath
+        call("releaseUploadClaim", checkNotNull(call("markUploadInFlight", path)), true)
+        call("releaseUploadClaim", checkNotNull(call("markUploadInFlight", other)))
+        val journal = File(filesDir, SafSyncEngine.UPLOADS_IN_FLIGHT_FILE)
+        // What 1.10.1 makes of the journal when it rewrites it: readUploadJournal unescapes each line after the
+        // header, and rewriteJournal escapes each line again, the mark's tab included.
+        val (header, lines) = journal.readLines().let { it.first() to it.drop(1) }
+        val readByOldBuild = lines.map { SafSyncEngine.unescapeRecordPath(it) }
+        journal.writeText((listOf(header) + readByOldBuild.map { SafSyncEngine.escapeRecordPath(it) }).joinToString("\n"))
+        assertTrue(journal.readText().contains("unwritten\\t"), "precondition: the mark was not written back escaped")
+
+        assertEquals(setOf(path, other), engine.uploadsInFlight(), "the escaped mark was read as a path")
+        assertEquals(setOf(other), engine.partlyWrittenUploads(), "the escaped mark no longer marked its line")
+
+        File(path).delete()
+        call("consumeStaleUploadRecord", path)
+        assertEquals(setOf(other), engine.uploadsInFlight())
+        assertTrue(journal.readLines().none { it.startsWith("unwritten") }) { "the escaped mark outlived its line: ${journal.readText()}" }
+    }
+
+    /** The same mark where 1.10.1 also retired the line it marked: the mark marks nothing, and the next rewrite drops it. */
+    @Test
+    fun `an escaped mark whose line an older release retired goes at the next rewrite`() {
+        mirrorFileExists()
+        val other = File(filesDir, "saf-mirrors/abc123def456/other.md").apply { writeText("another edit") }.absolutePath
+        val journal = File(filesDir, SafSyncEngine.UPLOADS_IN_FLIGHT_FILE)
+        val header = "#vscodroid-saf-uploads 1"
+        journal.writeText(listOf(header, other, "unwritten\\t" + SafSyncEngine.escapeRecordPath(path)).joinToString("\n"))
+
+        assertEquals(setOf(other), engine.uploadsInFlight(), "the escaped mark of a retired line was read as a path")
+        assertEquals(setOf(other), engine.partlyWrittenUploads())
+
+        File(other).delete()
+        call("consumeStaleUploadRecord", other)
+        assertEquals(emptySet<String>(), engine.uploadsInFlight())
+        assertTrue(!journal.exists() || journal.readLines().none { it.startsWith("unwritten") }) { "the escaped mark stayed: ${journal.readText()}" }
+    }
 }

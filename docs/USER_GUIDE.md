@@ -156,13 +156,13 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   the terminal while the folder was closed, is put in the device folder the next
   time you open it. Where VSCodroid cannot tell such a file from one deleted in
   the device folder, it keeps the file inside VSCodroid rather than put a deleted
-  file back, and a notice says how many files did not reach the device folder.
-  That happens when its record of the folder is missing; at the first opening
-  after an update, for a file older than the last opening before it; and while a
-  folder that has been empty at every opening still is, for a file older than the
-  last opening (as `unzip` or `cp -p` leave its time). A file whose save or
-  creation in the editor did not finish is sent. Save a kept file again in the
-  editor to send it.
+  file back, and a notice names the file, or the first of them and how many.
+  That happens when its record of the folder is missing; once, at the first
+  opening of a folder last opened in VSCodroid 1.10.1 or earlier, for a file
+  older than that opening; and while a folder that has been empty at every
+  opening still is, for a file older than the last opening (as `unzip` or
+  `cp -p` leave its time). A file whose save or creation in the editor did not
+  finish is sent. Save a kept file again in the editor to send it.
 - Device-folder copies stay inside VSCodroid after their folder permission is
   removed. Use **VSCodroid: Manage Device Folder Storage** to see and remove them.
   Copies may contain files that never reached the device folder. Save anything

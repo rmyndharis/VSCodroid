@@ -346,13 +346,18 @@
          worded like saf_write_back_failed: most of the folder did arrive, so "the only
          copy is inside VSCodroid" would overstate. -->
     <plurals name="saf_upload_incomplete">
-        <item quantity="one">%2$s: bir öğe cihaz klasörüne ulaşmadı. VSCodroid içinde kalır; göndermek için yeniden kaydedin.</item>
-        <item quantity="other">%2$s: %1$d öğe cihaz klasörüne ulaşmadı. VSCodroid içinde kalırlar; göndermek için her birini yeniden kaydedin.</item>
+        <item quantity="one">%2$s: bir öğe cihaz klasörüne ulaşmadı.</item>
+        <item quantity="other">%2$s: %1$d öğe cihaz klasörüne ulaşmadı.</item>
     </plurals>
     <!-- The same folder stopped by the enumeration cap rather than by a refusal. Named
          separately because the cause is a limit this app chose, not the device saying
          no, and the user's next move is to copy the rest out by hand. -->
     <string name="saf_upload_capped">%1$s tümüyle dışarı kopyalanamayacak kadar büyük. Geri kalanı VSCodroid içinde kaldı.</string>
+    <string name="saf_file_kept_in_app">%1$s: %2$s cihaz klasöründe silinmiş olabileceği için yalnızca VSCodroid içinde kalıyor. Oraya göndermek için yeniden kaydedin.</string>
+    <plurals name="saf_files_kept_in_app">
+        <item quantity="one">%2$s: %1$d dosya, %3$s, cihaz klasöründe silinmiş olabileceği için yalnızca VSCodroid içinde kalıyor. Oraya göndermek için yeniden kaydedin.</item>
+        <item quantity="other">%2$s: %3$s dahil %1$d dosya, cihaz klasöründe silinmiş olabilecekleri için yalnızca VSCodroid içinde kalıyor. Oraya göndermek için bir dosyayı yeniden kaydedin.</item>
+    </plurals>
 
     <!-- The Toolchains toolbar's only icon-only control, and the app's only visible
          way back out of that screen. Without it a screen reader announces an

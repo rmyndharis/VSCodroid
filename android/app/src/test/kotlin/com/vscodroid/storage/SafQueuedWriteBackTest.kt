@@ -231,6 +231,7 @@ class SafQueuedWriteBackTest {
     @AfterEach
     fun tearDown() {
         File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).delete()
+        File(mirror.path + SafSyncEngine.SORTED_RECORD_SUFFIX).delete()
         unmockkAll()
     }
 
@@ -791,6 +792,39 @@ class SafQueuedWriteBackTest {
     }
 
     /**
+     * An open over a record it cannot read writes nothing over it, and a save that open sends has its row only in
+     * the engine's memory. It was dropped there, so the next open, with the record readable again, found the device
+     * holding bytes no row vouched for and kept this app's own delivered save beside the file as another app's edit.
+     */
+    @Test
+    fun `a save an open sends over a record it cannot read is not kept as a device edit at the next open`() {
+        onDevice("notes.txt", "baseline")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        inMirror("notes.txt", "edited while closed")
+        val record = File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+        assertTrue(record.setReadable(false, false))
+        try {
+            assumeFalse(Files.isReadable(record.toPath()), "This account bypasses file read permissions")
+            runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        } finally {
+            record.setReadable(true, true)
+        }
+        assertEquals("edited while closed", text("notes.txt"), "precondition: the open did not send the save")
+        val keptBefore = deviceCopies()
+        // Edited again and never sent, as an edit made while the folder was not watched is.
+        inMirror("notes.txt", "edited again, never sent")
+
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        assertEquals(keptBefore, deviceCopies(), "the open kept this app's own delivered save as if another app had written it")
+        assertEquals("edited again, never sent", text("notes.txt"))
+    }
+
+    /** The contents of the `.device-` copies beside the mirror's files. */
+    private fun deviceCopies() =
+        mirror.list()!!.filter { SafSyncEngine.DEVICE_COPY_SUFFIX in it }.map { File(mirror, it).readText() }.sorted()
+
+    /**
      * Stands in for the watch an open keeps on each directory of the mirror, which a JVM test
      * cannot build: it remembers each directory's delivery, and [fire] reports an event the way
      * the kernel would.
@@ -1027,6 +1061,7 @@ class SafQueuedWriteBackTest {
         record.writeText("not a record this build wrote")
         val notReached = mutableListOf<Int>()
         engine.onUploadIncomplete = { _, count, _ -> notReached += count }
+        engine.onFilesKeptInApp = { _, count, _ -> notReached += count }
         val watches = OpenWatches().also { it.install() }
         var made = false
 
@@ -1060,6 +1095,7 @@ class SafQueuedWriteBackTest {
         onDevice("g1.txt", "golf")
         val notReached = mutableListOf<Int>()
         engine.onUploadIncomplete = { _, count, _ -> notReached += count }
+        engine.onFilesKeptInApp = { _, count, _ -> notReached += count }
         val watches = OpenWatches().also { it.install() }
         var renamed = false
 
@@ -1092,6 +1128,8 @@ class SafQueuedWriteBackTest {
         onDevice("g1.txt", "golf")
         val notReached = mutableListOf<Int>()
         engine.onUploadIncomplete = { _, count, _ -> notReached += count }
+        val kept = mutableListOf<Pair<Int, String>>()
+        engine.onFilesKeptInApp = { _, count, first -> kept += count to first }
         val watches = OpenWatches().also { it.install() }
         var renamed = false
         openRecording { done, _ ->
@@ -1115,7 +1153,8 @@ class SafQueuedWriteBackTest {
 
         assertFalse("g3.txt" in device.keys, "precondition: the watcher sent the file")
         assertEquals("golf", File(mirror, "g3.txt").readText(), "the file did not stay in the app")
-        assertEquals(listOf(1), notReached, "a file that stayed in the app was not told of")
+        assertEquals(listOf(1 to "g3.txt"), kept, "a file that stayed in the app was not told of by name")
+        assertEquals(emptyList<Int>(), notReached, "a file kept in the app was told of as one the device refused")
     }
 
     /**
@@ -1133,6 +1172,8 @@ class SafQueuedWriteBackTest {
         onDevice("foo")
         val notReached = mutableListOf<Int>()
         engine.onUploadIncomplete = { _, count, _ -> notReached += count }
+        val told = mutableListOf<Pair<Int, String>>()
+        engine.onFilesKeptInApp = { _, count, first -> told += count to first }
         val watches = OpenWatches().also { it.install() }
 
         openRecording { _, _ -> }
@@ -1146,7 +1187,8 @@ class SafQueuedWriteBackTest {
 
         assertFalse(kept in device.keys, "the watcher sent a copy the open keeps inside the app")
         assertEquals("first draft", File(mirror, kept).readText())
-        assertEquals(listOf(1), notReached)
+        assertEquals(listOf(1 to kept), told, "the copy kept inside the app was not told of by name")
+        assertEquals(emptyList<Int>(), notReached, "the copy kept inside the app was told of as one the device refused")
     }
 
     /**

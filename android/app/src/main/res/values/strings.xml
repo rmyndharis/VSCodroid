@@ -354,17 +354,28 @@
          separate notices is another way of telling the user nothing. Deliberately not
          worded like saf_write_back_failed: most of the folder did arrive, so "the only
          copy is inside VSCodroid" would overstate. Also said once when a folder opens, for
-         the files only the app's copy holds that the open could not send or keeps inside
-         the app because it cannot tell them from a document deleted on the device. Saving
-         such a file again sends it, which is what the second sentence tells the user. -->
+         the files only the app's copy holds that the open tried to send and could not. -->
     <plurals name="saf_upload_incomplete">
-        <item quantity="one">%2$s: one item did not reach the device folder. It stays in VSCodroid; save it again to send it.</item>
-        <item quantity="other">%2$s: %1$d items did not reach the device folder. They stay in VSCodroid; save each one again to send it.</item>
+        <item quantity="one">%2$s: one item did not reach the device folder.</item>
+        <item quantity="other">%2$s: %1$d items did not reach the device folder.</item>
     </plurals>
     <!-- The same folder stopped by the enumeration cap rather than by a refusal. Named
          separately because the cause is a limit this app chose, not the device saying
          no, and the user's next move is to copy the rest out by hand. -->
     <string name="saf_upload_capped">%1$s is too large to copy out whole. The rest of it stayed inside VSCodroid.</string>
+    <!-- Files only the app's copy holds that an open keeps inside the app because it cannot
+         tell them from a document deleted in the device folder: an earlier version may have
+         lost its note of them, or the folder lists as empty, or its record cannot be read.
+         Named, because the person decides about each, and kept apart from
+         saf_upload_incomplete, which also counts folders and files whose folder never reached
+         the device, which saving again does not send. Saving a kept file again in the editor
+         does send it. The string is for one file (%1$s the folder, %2$s the file); the plural
+         is used for two or more and names the first of them (%3$s). -->
+    <string name="saf_file_kept_in_app">%1$s: %2$s stays only in VSCodroid, because it may have been deleted in the device folder. Save it again to send it there.</string>
+    <plurals name="saf_files_kept_in_app">
+        <item quantity="one">%2$s: %1$d file, %3$s, stays only in VSCodroid, because it may have been deleted in the device folder. Save it again to send it there.</item>
+        <item quantity="other">%2$s: %1$d files, %3$s among them, stay only in VSCodroid, because they may have been deleted in the device folder. Save a file again to send it there.</item>
+    </plurals>
 
     <!-- The Toolchains toolbar's only icon-only control, and the app's only visible
          way back out of that screen. Without it a screen reader announces an

@@ -29,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Renaming a folder of a device folder in the editor sends a save that was held back inside it under the new name, instead of leaving it inside the app until the file is saved again.
 - A save made just before its folder is renamed reaches the renamed folder on the device also when the rename lands on disk before the save is sent.
 - A save made just before its folder is renamed reaches the device under the folder's last name when the folder is renamed again while the first rename is being sent.
-- At the first open of a device folder after an update, a file only the app's copy holds that is older than the folder's record is kept inside the app with a notice, instead of putting a document deleted on the device back there.
+- At the first open of a device folder last opened by 1.10.1 or earlier, a file only the app's copy holds that is older than the folder's record is kept inside the app with a notice, instead of putting a document deleted on the device back there.
 - A file whose save or creation never reached the device folder is sent at the next open, even where an empty folder or an earlier open had kept it inside the app.
 - An edit of a file over 50 MiB that the app could not send reaches the device folder once the device deletes the file.
 - An open that cannot read the folder's record no longer rewrites it, which kept copies of documents deleted on the device inside the app for good.
@@ -38,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An edit left in a copy that a removal had taken is kept under a name of its own and sent to the device folder.
 - A save after one the device folder refused before writing anything keeps a shortened device file as a `.device-` copy instead of writing over it.
 - A save no longer writes over another app's edit when the device file's read ends before its reported size.
-- The notice for files that did not reach the device folder says they stay in VSCodroid and that saving one again sends it.
+- Files an open keeps inside the app because it cannot tell them from documents deleted on the device get a notice of their own that names one of them and says that saving it again sends it.
 - A folder moved out of a device folder's copy is no longer taken for the rename of an unrelated folder arriving within the same second, which wrote the arriving folder's files over the device's copies of the departed one's.
 - Renaming a folder no longer writes a file in it again that you have not changed since it was sent, a leftover of an earlier rename that gave way to another onto the same name.
 - A save still queued or still arriving when a device folder is closed shows the notice that the only copy is inside VSCodroid, instead of only a log line.
@@ -47,7 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A delete or a new file in a device folder that waits for another folder's write to the same storage no longer stalls that folder's saves for up to ten seconds.
 - A delete that gave up waiting for another write to the same storage says so, instead of saying the device folder refused it and to delete the file in the file manager.
 - A file or folder a program deletes while its device folder is opening is deleted on the device instead of being copied back, and a file it saves after the open has read it is sent once the folder is open.
-- A save written into a file just as opening its device folder puts the device's newer copy in place is kept beside it as a `.local-` copy instead of being lost.
+- A save written into a file just as opening its device folder puts the device's newer copy in place is kept beside it, whole, as a `.local-` copy instead of being lost.
 - A folder renamed while its device folder opens, or set aside by the open, is still watched afterwards, so saves in it reach the device instead of staying inside VSCodroid for the rest of the session.
 - A save made in a folder renamed while its device folder opens reaches the renamed folder on the device, whether it was made before or after the rename.
 - A folder renamed while its device folder opens is renamed on the device instead of ending up there under both names.
@@ -55,6 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Opening a device folder no longer keeps an event in memory for every 8 KiB it writes until the folder is open.
 - A save made just as a device folder finishes opening, in a folder made or renamed while it opened, reaches that folder on the device instead of being announced as kept inside VSCodroid or missing the rename.
 - A folder moved out of a device folder while it opens is no longer taken for the rename of an unrelated folder arriving within the same second.
+- A save VSCodroid delivers while a device folder's record cannot be read is no longer kept as another app's `.device-` copy at the next open.
 
 ## [1.10.1] - 2026-11-21
 

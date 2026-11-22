@@ -63,6 +63,7 @@ class ActivityRetentionTest {
     private val notices = listOf(
         "safManager.onWriteBackFailed {",
         "safManager.onUploadIncomplete {",
+        "safManager.onFilesKeptInApp {",
         "safManager.onDocumentsNotCopied {",
         "safManager.onKeptOnDevice {",
     )

@@ -13,7 +13,7 @@ class MirrorReclaimRegrantRaceTest : SafMirrorPairEnumerationFixture() {
         val unique = File(mirror, "terminal-only.txt")
         val removed = manager.reclaimRevokedMirrorsSync { root ->
             val entries = root.listFiles() ?: error("the real mirrors directory was unreadable")
-            assertEquals(setOf(mirror.name, record.name), entries.map { it.name }.toSet())
+            assertEquals(setOf(mirror.name, record.name, sortedMark.name), entries.map { it.name }.toSet())
             val replacement = regrantAndSync()
             assertTrue(replacement.hasPersistedPermission(folder))
             unique.writeText("UNIQUE")

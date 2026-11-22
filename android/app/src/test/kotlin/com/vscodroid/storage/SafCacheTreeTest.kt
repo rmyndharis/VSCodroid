@@ -136,7 +136,9 @@ class SafCacheTreeTest {
     @AfterEach
     fun tearDown() {
         File(mirrorA.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).delete()
+        File(mirrorA.path + SafSyncEngine.SORTED_RECORD_SUFFIX).delete()
         File(mirrorB.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).delete()
+        File(mirrorB.path + SafSyncEngine.SORTED_RECORD_SUFFIX).delete()
         unmockkAll()
     }
 

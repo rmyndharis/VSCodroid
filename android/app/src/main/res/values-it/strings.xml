@@ -350,14 +350,20 @@
          worded like saf_write_back_failed: most of the folder did arrive, so "the only
          copy is inside VSCodroid" would overstate. -->
     <plurals name="saf_upload_incomplete">
-        <item quantity="one">%2$s: un elemento non è arrivato nella cartella del dispositivo. Resta in VSCodroid; salvalo di nuovo per inviarlo.</item>
-        <item quantity="many">%2$s: %1$d elementi non sono arrivati nella cartella del dispositivo. Restano in VSCodroid; salva ciascuno di nuovo per inviarlo.</item>
-        <item quantity="other">%2$s: %1$d elementi non sono arrivati nella cartella del dispositivo. Restano in VSCodroid; salva ciascuno di nuovo per inviarlo.</item>
+        <item quantity="one">%2$s: un elemento non è arrivato nella cartella del dispositivo.</item>
+        <item quantity="many">%2$s: %1$d elementi non sono arrivati nella cartella del dispositivo.</item>
+        <item quantity="other">%2$s: %1$d elementi non sono arrivati nella cartella del dispositivo.</item>
     </plurals>
     <!-- The same folder stopped by the enumeration cap rather than by a refusal. Named
          separately because the cause is a limit this app chose, not the device saying
          no, and the user's next move is to copy the rest out by hand. -->
     <string name="saf_upload_capped">%1$s è troppo grande per essere copiata per intero. Il resto è rimasto dentro VSCodroid.</string>
+    <string name="saf_file_kept_in_app">%1$s: il file %2$s resta solo in VSCodroid, perché potrebbe essere stato eliminato nella cartella del dispositivo. Salvalo di nuovo per inviarlo lì.</string>
+    <plurals name="saf_files_kept_in_app">
+        <item quantity="one">%2$s: %1$d file, %3$s, resta solo in VSCodroid, perché potrebbe essere stato eliminato nella cartella del dispositivo. Salvalo di nuovo per inviarlo lì.</item>
+        <item quantity="many">%2$s: %1$d file, tra cui %3$s, restano solo in VSCodroid, perché potrebbero essere stati eliminati nella cartella del dispositivo. Salva di nuovo un file per inviarlo lì.</item>
+        <item quantity="other">%2$s: %1$d file, tra cui %3$s, restano solo in VSCodroid, perché potrebbero essere stati eliminati nella cartella del dispositivo. Salva di nuovo un file per inviarlo lì.</item>
+    </plurals>
 
     <!-- The Toolchains toolbar's only icon-only control, and the app's only visible
          way back out of that screen. Without it a screen reader announces an

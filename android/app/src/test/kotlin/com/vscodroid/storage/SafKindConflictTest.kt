@@ -178,12 +178,13 @@ class SafKindConflictTest : SafInitialSyncTestBase() {
         assertTrue(mirrorFile("foo").isDirectory, "the device folder never took its name")
         assertEquals("first draft", setAsideCopies("foo").single().readText(), "the copy was not kept beside the folder")
         assertEquals(emptyList<String>(), created.map { it.second }, "a copy nothing proves is work was sent to the device")
-        assertEquals(listOf(1), didNotReach, "the copy kept inside the app was not told of")
+        assertEquals(listOf(1 to setAsideCopies("foo").single().name), keptInApp, "the copy kept inside the app was not told of by name")
+        assertEquals(emptyList<Int>(), didNotReach, "the copy kept inside the app was told of as one the device refused")
 
         sync()
 
         assertEquals(emptyList<String>(), created.map { it.second }, "the next open sent the kept copy")
-        assertEquals(emptyList<Int>(), didNotReach, "the next open told of the same copy again")
+        assertEquals(emptyList<Pair<Int, String>>(), keptInApp, "the next open told of the same copy again")
         assertEquals("first draft", setAsideCopies("foo").single().readText())
     }
 

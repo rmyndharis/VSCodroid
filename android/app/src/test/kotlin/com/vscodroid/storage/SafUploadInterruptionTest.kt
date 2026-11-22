@@ -171,6 +171,7 @@ class SafUploadInterruptionTest {
         assertEquals("complete local edit", file.readText())
         assertTrue(engine.uploadsInFlight().isEmpty())
         File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).delete()
+        File(mirror.path + SafSyncEngine.SORTED_RECORD_SUFFIX).delete()
     }
 
     @Test
@@ -192,6 +193,7 @@ class SafUploadInterruptionTest {
         assertEquals("foreign device edit", copies.single().readText())
         assertFalse(file.absolutePath in engine.uploadsInFlight())
         File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).delete()
+        File(mirror.path + SafSyncEngine.SORTED_RECORD_SUFFIX).delete()
     }
 
     @Test

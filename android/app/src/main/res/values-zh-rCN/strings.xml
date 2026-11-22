@@ -342,12 +342,16 @@
          worded like saf_write_back_failed: most of the folder did arrive, so "the only
          copy is inside VSCodroid" would overstate. -->
     <plurals name="saf_upload_incomplete">
-        <item quantity="other">%2$s：有 %1$d 个项目未能写入设备文件夹。它们保留在 VSCodroid 内；再次保存即可发送。</item>
+        <item quantity="other">%2$s：有 %1$d 个项目未能写入设备文件夹。</item>
     </plurals>
     <!-- The same folder stopped by the enumeration cap rather than by a refusal. Named
          separately because the cause is a limit this app chose, not the device saying
          no, and the user's next move is to copy the rest out by hand. -->
     <string name="saf_upload_capped">%1$s 太大，无法整体复制出去。其余部分留在了 VSCodroid 内。</string>
+    <string name="saf_file_kept_in_app">%1$s：%2$s 可能已在设备文件夹中删除，因此只保留在 VSCodroid 内。再次保存即可将其发送到设备文件夹。</string>
+    <plurals name="saf_files_kept_in_app">
+        <item quantity="other">%2$s：包括 %3$s 在内的 %1$d 个文件可能已在设备文件夹中删除，因此只保留在 VSCodroid 内。再次保存其中某个文件即可将其发送到设备文件夹。</item>
+    </plurals>
 
     <!-- The Toolchains toolbar's only icon-only control, and the app's only visible
          way back out of that screen. Without it a screen reader announces an

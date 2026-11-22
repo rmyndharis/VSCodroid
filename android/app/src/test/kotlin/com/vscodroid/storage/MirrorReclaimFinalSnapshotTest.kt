@@ -104,19 +104,30 @@ class MirrorReclaimFinalSnapshotTest : SafInitialSyncTestBase() {
         assertTrue(record.isFile)
         resolver.releasePersistableUriPermission(folder, 3)
         assertFalse(manager.hasPersistedPermission(folder))
-        assertEquals(setOf(mirror.name, record.name), mirror.parentFile.list()!!.toSet())
+        assertEquals(setOf(mirror.name, record.name, sortedMark.name), mirror.parentFile.list()!!.toSet())
     }
 
     private fun worker(name: String, work: () -> Unit) = Worker(name, work).also { workers.add(it) }
 
     @Test
-    fun `orphan record cleanup completes its decision before a new grant is taken`() {
+    fun `orphan record cleanup completes its decision before a new grant is taken`() =
+        orphanDecisionBeforeRegrant(File::listFiles)
+
+    @Test
+    fun `orphan record cleanup decides the same when the record is listed before its mark`() =
+        orphanDecisionBeforeRegrant { dir -> dir.listFiles()?.sortedBy { if (it.name.endsWith(SafSyncEngine.SORTED_RECORD_SUFFIX)) 1 else 0 }?.toTypedArray() }
+
+    @Test
+    fun `orphan record cleanup decides the same when the mark is listed before its record`() =
+        orphanDecisionBeforeRegrant { dir -> dir.listFiles()?.sortedBy { if (it.name.endsWith(SafSyncEngine.SORTED_RECORD_SUFFIX)) 0 else 1 }?.toTypedArray() }
+
+    private fun orphanDecisionBeforeRegrant(listing: (File) -> Array<File>?) {
         val retainedCopy = File(mirror.parentFile, "kept-project")
         assertTrue(mirror.renameTo(retainedCopy))
         val removed = AtomicInteger(-1)
         try {
             armSnapshot.set(true)
-            val old = worker("reclaim") { removed.set(manager.reclaimRevokedMirrorsSync()) }
+            val old = worker("reclaim") { removed.set(manager.reclaimRevokedMirrorsSync(listing)) }
             assertTrue(snapshotEntered.await(5, TimeUnit.SECONDS), "the real orphan record grant read was never reached")
             val new = worker("regrant") {
                 replacement.persistPermission(folder)
