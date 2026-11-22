@@ -62,9 +62,11 @@ class EditorEndOnLinuxTest {
         }
     }
 
+    // The shell's own kill, as the fixture runs under that shell: a /bin/kill on PATH is not on every
+    // Linux, and a minimal container image has none.
     private fun signal(name: String, pid: Int) {
         signals += name to System.nanoTime()
-        ProcessBuilder("kill", "-$name", pid.toString()).start().waitFor(5, TimeUnit.SECONDS)
+        ProcessBuilder("/bin/sh", "-c", "kill -s $name $pid").start().waitFor(5, TimeUnit.SECONDS)
     }
 
     private fun pid(process: Process) = (Process::class.java.getMethod("pid").invoke(process) as Long).toInt()
