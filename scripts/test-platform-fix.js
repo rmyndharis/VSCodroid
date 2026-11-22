@@ -951,6 +951,29 @@ for (const [label, call] of [
 assert.deepStrictEqual(spawnedUnder([OFF_ENGINE, ['--version'], SPAWN_OPTIONS], { home: OFF_HOME }), throughLinker([OFF_ENGINE, ['--version'], SPAWN_OPTIONS], OFF_HOME),
     'setting off, the extension\'s check of the engine\'s version was held back, so it downloads the engine again');
 checked++;
+// A program's path is read as text before it is resolved, with either resolver the shim may use: `..` after a link
+// in ~/.gemini that leads out of it still spells out the engine, and the start is held back.
+{
+    const home = homeWith(null);
+    fs.symlinkSync(path.join(tmp, 'outside'), path.join(home, '.gemini/out'));
+    const call = [`${home}/.gemini/out/../bin/agy`, HUB_ARGS, SPAWN_OPTIONS];
+    assert.deepStrictEqual(spawnedUnder(call, { home }), call, 'setting off, the engine spelled out with .. after a link was not read as text first, and was changed');
+    checked++;
+}
+// The system's resolver is used only where it answers as the JavaScript one does on the shim's own directory: one
+// that fails, or answers another path, is left out, and the gate reads with the JavaScript one.
+for (const [label, answer] of [
+    ['fails', "() => { throw Object.assign(new Error('refused'), { code: 'EPERM' }); }"],
+    ['answers / for every path', "() => '/'"],
+]) {
+    const record = path.join(tmp, `record-native-${homes++}.js`);
+    fs.writeFileSync(record, `require(${JSON.stringify(RECORD_SPAWN)});\nrequire('fs').realpathSync.native = ${answer};\n`);
+    const hub = [OFF_ENGINE, HUB_ARGS, SPAWN_OPTIONS];
+    assert.deepStrictEqual(spawnedUnder(hub, { home: OFF_HOME, record }), hub, `a system resolver that ${label}: the engine's hub was changed with the setting off`);
+    assert.deepStrictEqual(spawnedUnder([ENGINE, TOOL_ARGS, SPAWN_OPTIONS], { home: OFF_HOME, record }), [BIONIC_LINKER, [ENGINE, ...TOOL_ARGS], { ...SPAWN_OPTIONS, env: routedEnv(ENGINE, { home: OFF_HOME }) }],
+        `a system resolver that ${label}: a program outside ~/.gemini was not started through the linker with the interceptor`);
+    checked += 2;
+}
 for (const how of ['plain', 'promisified']) {
     const exec = (call, home) => spawnedUnder([how, call], { record: RECORD_EXEC, main: EXEC_MAIN, home });
     const hub = [OFF_ENGINE, ['--hub', '--hub-port=41000'], { timeout: 5000 }];
@@ -988,12 +1011,23 @@ const ALL_MAIN = path.join(tmp, 'all-main.js');
 fs.writeFileSync(
     ALL_MAIN,
     "const cp = require('child_process');\n" +
-        // { "@url": path } is that path as a file URL, which Node takes for a cwd.
-        "const [how, call] = JSON.parse(process.argv[2], (k, v) => (v && typeof v['@url'] === 'string' ? require('url').pathToFileURL(v['@url']) : v));\n" +
+        // { "@url": path } is that path as a file URL, { "@buffer": [bytes] } those bytes as a Buffer and
+        // { "@uint8": [bytes] } as a Uint8Array that is not one, all of which Node takes for a cwd.
+        "const [how, call] = JSON.parse(process.argv[2], (k, v) => (v && typeof v['@url'] === 'string' ? require('url').pathToFileURL(v['@url'])\n" +
+        "    : v && Array.isArray(v['@buffer']) ? Buffer.from(v['@buffer']) : v && Array.isArray(v['@uint8']) ? Uint8Array.from(v['@uint8']) : v));\n" +
         "const args = call.map((x) => (x === '@callback' ? function () {} : x === '@undefined' ? undefined : x));\n" +
         "if (how === 'promisified') require('util').promisify(cp.execFile)(...args); else cp[how](...args);\n",
 );
 const callUnder = (how, call, conditions = {}) => spawnedUnder([how, call], { record: RECORD_ALL, main: ALL_MAIN, ...conditions });
+// A cwd given as the bytes of `text` (and `more`) in a Buffer, or in a Uint8Array that is not one, and each as a
+// recorder logs it.
+const bytes = (text, ...more) => ({ '@buffer': [...Buffer.from(text), ...more] });
+const asBuffer = (text, ...more) => ({ type: 'Buffer', data: [...Buffer.from(text), ...more] });
+const view = (text) => ({ '@uint8': [...Buffer.from(text)] });
+const asView = (text) => ({ ...[...Buffer.from(text)] });
+// A call as a failure message shows it, a Buffer or a Uint8Array as its text.
+const shown = (call) => JSON.stringify(call, (k, v) => (v && Array.isArray(v['@buffer']) ? `Buffer(${Buffer.from(v['@buffer'])})`
+    : v && Array.isArray(v['@uint8']) ? `Uint8Array(${Buffer.from(v['@uint8'])})` : v));
 
 // The synchronous starts go through the linker as the asynchronous ones do, with the interceptor.
 for (const [how, call, expected] of [
@@ -1001,12 +1035,20 @@ for (const [how, call, expected] of [
     ['spawnSync', [ENGINE], [BIONIC_LINKER, [ENGINE], { env: routedEnv(ENGINE) }]],
     ['execFileSync', [ENGINE, ['--version']], [BIONIC_LINKER, [ENGINE, '--version'], { env: routedEnv(ENGINE) }]],
     ['execFileSync', [ENGINE, null, VERSION_OPTIONS], [BIONIC_LINKER, [ENGINE], VERSION_ROUTED]],
+    // Node reads a function in place of the argument list of execFileSync as its callback, and runs the call.
+    ['execFileSync', [ENGINE, CALLBACK], [BIONIC_LINKER, [ENGINE], { env: routedEnv(ENGINE) }, null]],
+    // A Buffer for the cwd names the directory a synchronous start runs in, here one that reaches nothing in ~/.gemini.
+    ['spawnSync', [ENGINE, TOOL_ARGS, { cwd: bytes(tmp) }], [BIONIC_LINKER, [ENGINE, ...TOOL_ARGS], { cwd: asBuffer(tmp), env: routedEnv(ENGINE) }]],
 ]) {
     assert.deepStrictEqual(callUnder(how, call), [how, ...expected], `${how}: not started through the linker with the interceptor`);
     assert.deepStrictEqual(callUnder(how, call, { prefix: BARE_PREFIX }), [how, ...expected.map((x) => (x && x.env ? (({ env, ...rest }) => rest)(x) : x)).filter((x) => !(x && typeof x === 'object' && !Array.isArray(x) && !Object.keys(x).length))],
         `${how} with no interceptor on disk: the call gained an environment`);
     checked += 2;
 }
+// Null options are no options to execFileSync, as they are to execFile.
+assert.deepStrictEqual(callUnder('execFileSync', [ENGINE, [], null]), ['execFileSync', BIONIC_LINKER, [ENGINE], { env: routedEnv(ENGINE) }],
+    'execFileSync with null options: not started through the linker with the interceptor');
+checked++;
 for (const [how, call] of [
     ['spawnSync', [MUSL, TOOL_ARGS, SPAWN_OPTIONS]],
     ['execFileSync', [OUTSIDE, ['--version'], VERSION_OPTIONS]],
@@ -1112,6 +1154,59 @@ assert.deepStrictEqual(asNode('linker64 ./agy --hub', 'cwd', { home: OFF_HOME, c
     ['execFileSync', path.join(fs.realpathSync(OFF_BIN), 'agy'), [], { shell: false }],
     'setting off, a command was read from a working directory its options inherit, which Node ignores, and started the engine');
 checked++;
+// Node takes a Uint8Array for the cwd as well. A synchronous start runs in the string Node makes of it, and an
+// asynchronous one ignores it and runs in the process's own directory, as the editor server's extension host does
+// in the app's files directory, from which home-<n>/.gemini/bin/agy is the engine. The call is read where it runs.
+// A cwd that cannot be read as a path at all, which Node refuses, is taken as one that could be in ~/.gemini.
+{
+    const FILES = path.join(REAL_DATA, 'files');
+    const FROM_FILES = path.relative(FILES, OFF_ENGINE);
+    for (const [how, call, expected, cwd] of [
+        ['execSync', ['linker64 ./agy --hub', { cwd: bytes(OFF_BIN) }], ['execFileSync', OFF_ENGINE, [], { cwd: asBuffer(OFF_BIN), shell: false }]],
+        ['spawnSync', ['linker64', ['./agy', '--hub'], { cwd: bytes(OFF_BIN) }], ['spawnSync', OFF_ENGINE, ['--hub'], { cwd: asBuffer(OFF_BIN) }]],
+        ['execFileSync', ['linker64', ['./agy', '--hub'], { cwd: bytes(OFF_BIN) }], ['execFileSync', OFF_ENGINE, ['--hub'], { cwd: asBuffer(OFF_BIN) }]],
+        ['spawn', ['linker64', [FROM_FILES, '--hub'], { cwd: bytes('/') }], ['spawn', path.join(fs.realpathSync(FILES), FROM_FILES), ['--hub'], { cwd: asBuffer('/') }], FILES],
+        ['exec', ['linker64 ./agy --hub', { cwd: bytes('/') }, CALLBACK], ['execFile', path.join(fs.realpathSync(OFF_BIN), 'agy'), [], { cwd: asBuffer('/'), shell: false }, null], OFF_BIN],
+        // Asynchronous, so not where the Buffer points: ./agy is not the engine here.
+        ['spawn', ['linker64', ['./agy', '--hub'], { cwd: bytes(OFF_BIN) }], ['spawn', 'linker64', ['./agy', '--hub'], { cwd: asBuffer(OFF_BIN) }], tmp],
+        // A Uint8Array that is not a Buffer is made a string of its numbers, a directory below this one: not the engine.
+        ['spawnSync', ['linker64', ['./agy', '--hub'], { cwd: view(OFF_BIN) }], ['spawnSync', 'linker64', ['./agy', '--hub'], { cwd: asView(OFF_BIN) }], tmp],
+        ['execSync', ['linker64 ./agy --hub', { cwd: {} }], ['execFileSync', path.join(OFF_HOME, '.gemini'), [], { cwd: {}, shell: false }]],
+        ['spawnSync', ['linker64', ['./agy', '--hub'], { cwd: {} }], ['spawnSync', './agy', ['--hub'], { cwd: {} }]],
+    ]) {
+        assert.deepStrictEqual(callUnder(how, call, { home: OFF_HOME, cwd }), expected,
+            `setting off, ${how} of ${shown(call)} from ${cwd || 'the default directory'}: not read in the directory Node runs it in`);
+        checked++;
+    }
+    // With no ~/.gemini there is nothing such a cwd could reach: the calls go as they would from anywhere else.
+    for (const [how, call, expected] of [
+        ['execSync', ['linker64 ./agy --hub', { cwd: {} }], ['execSync', 'linker64 ./agy --hub', { cwd: {} }]],
+        ['spawnSync', ['linker64', ['./agy', '--hub'], { cwd: {} }], ['spawnSync', 'linker64', ['./agy', '--hub'], { cwd: {} }]],
+        ['spawn', [ENGINE, TOOL_ARGS, { cwd: {} }], ['spawn', BIONIC_LINKER, [ENGINE, ...TOOL_ARGS], { cwd: {}, env: routedEnv(ENGINE) }]],
+    ]) {
+        assert.deepStrictEqual(callUnder(how, call), expected, `no ~/.gemini, ${how} of ${shown(call)}: changed for a cwd that is not a path`);
+        checked++;
+    }
+}
+// What the rule above follows, measured on Node itself without the shim: a synchronous start runs in the string
+// Node makes of a Uint8Array (one that is not a Buffer names a directory of its numbers), an asynchronous one
+// ignores it. If a Node release changes this, the reading above has to change with it.
+{
+    const NODE_CWD = path.join(tmp, 'node-cwd.js');
+    fs.writeFileSync(NODE_CWD,
+        "const cp = require('child_process');\n" +
+        "const where = ['-e', 'process.stdout.write(process.cwd())'];\n" +
+        "const dir = process.argv[2];\n" +
+        "const sync = String(cp.spawnSync(process.execPath, where, { cwd: Buffer.from(dir) }).stdout);\n" +
+        "const view = String(cp.spawnSync(process.execPath, where, { cwd: Uint8Array.from(Buffer.from('/')) }).stdout);\n" +
+        "let out = '';\nconst child = cp.spawn(process.execPath, where, { cwd: Buffer.from(dir) });\n" +
+        "child.stdout.on('data', (d) => { out += d; });\nchild.on('close', () => console.log(JSON.stringify({ sync, view, async: out })));\n");
+    fs.mkdirSync(path.join(tmp, '47'), { recursive: true });
+    const seen = JSON.parse(execFileSync(process.execPath, [NODE_CWD, OFF_BIN], { cwd: tmp, encoding: 'utf8', timeout: 10000 }));
+    assert.deepStrictEqual(seen, { sync: fs.realpathSync(OFF_BIN), view: fs.realpathSync(path.join(tmp, '47')), async: fs.realpathSync(tmp) },
+        'Node no longer runs a start in the directory a Uint8Array cwd names the way the shim reads it');
+    checked++;
+}
 // A program started through the linker that could reach ~/.gemini gets no interceptor in either state of the
 // setting, so what it would start there is refused as it was before: one that is handed a path there, runs
 // there or searches a PATH directory there, and the engine itself. A shell gets none at any time, these
@@ -1122,7 +1217,7 @@ for (const home of [OFF_HOME, HUB_HOME]) {
     const bin = path.join(home, '.gemini/bin');
     const engine = engineIn(home);
     const searching = { env: { PATH: `${bin}:/usr/bin` } };
-    for (const [how, call, expected] of [
+    for (const [how, call, expected, cwd] of [
         ['execSync', ['agy --hub', searching], ['execSync', 'agy --hub', searching]],
         ['execSync', ['make', { cwd: bin }], ['execSync', 'make', { cwd: bin }]],
         ['exec', ['agy --hub', { cwd: bin }, CALLBACK], ['execFile', 'agy --hub', { cwd: bin, shell: true }, null]],
@@ -1134,9 +1229,16 @@ for (const home of [OFF_HOME, HUB_HOME]) {
         // Runs there, with arguments that name nothing there: the directory, and the same as a file URL.
         ['spawn', [WRAPPER, ['--flag'], { cwd: bin }], ['spawn', BIONIC_LINKER, [WRAPPER, '--flag'], { cwd: bin }]],
         ['spawn', [WRAPPER, ['--flag'], { cwd: { '@url': bin } }], ['spawn', BIONIC_LINKER, [WRAPPER, '--flag'], { cwd: require('url').pathToFileURL(bin).href }]],
+        // The same as a Buffer, which a synchronous start runs in, and an asynchronous start run from there, whatever
+        // its Buffer names.
+        ['spawnSync', [WRAPPER, ['--flag'], { cwd: bytes(bin) }], ['spawnSync', BIONIC_LINKER, [WRAPPER, '--flag'], { cwd: asBuffer(bin) }]],
+        ['execFileSync', [WRAPPER, ['./agy'], { cwd: bytes(bin) }], ['execFileSync', BIONIC_LINKER, [WRAPPER, './agy'], { cwd: asBuffer(bin) }]],
+        ['spawn', [WRAPPER, ['--flag'], { cwd: bytes('/') }], ['spawn', BIONIC_LINKER, [WRAPPER, '--flag'], { cwd: asBuffer('/') }], bin],
+        // A cwd that is not a path, which may be anywhere.
+        ['spawn', [WRAPPER, ['--flag'], { cwd: {} }], ['spawn', BIONIC_LINKER, [WRAPPER, '--flag'], { cwd: {} }]],
     ]) {
-        assert.deepStrictEqual(callUnder(how, call, { home }), expected,
-            `setting ${home === HUB_HOME ? 'on' : 'off'}, ${how} of ${JSON.stringify(call)}: given the interceptor, which would start what it reaches in ~/.gemini`);
+        assert.deepStrictEqual(callUnder(how, call, { home, cwd }), expected,
+            `setting ${home === HUB_HOME ? 'on' : 'off'}, ${how} of ${shown(call)}: given the interceptor, which would start what it reaches in ~/.gemini`);
         checked++;
     }
 }
@@ -1158,8 +1260,8 @@ const REAL_MAIN = path.join(tmp, 'real-main.js');
 fs.writeFileSync(
     REAL_MAIN,
     "const cp = require('child_process');\n" +
-        "const [how, raw] = JSON.parse(process.argv[2]);\n" +
-        "const call = raw.map((x) => (x === '@callback' ? function () {} : x));\n" +
+        "const [how, raw] = JSON.parse(process.argv[2], (k, v) => (v && Array.isArray(v['@buffer']) ? Buffer.from(v['@buffer']) : v));\n" +
+        "const call = raw.map((x) => (x === '@callback' ? function () {} : x === '@undefined' ? undefined : x));\n" +
         "const done = (what) => { console.log(JSON.stringify(what)); process.exit(0); };\n" +
         "setTimeout(() => done('no answer'), 8000);\n" +
         "try {\n" +
@@ -1169,12 +1271,12 @@ fs.writeFileSync(
         "    else { cp[how](...call); done('exit 0'); }\n" +
         "} catch (e) { done(e.code !== undefined ? e.code : 'exit ' + e.status); }\n",
 );
-const realUnder = (how, call) => JSON.parse(execFileSync(
+const realUnder = (how, call, cwd = tmp) => JSON.parse(execFileSync(
     process.execPath,
     ['--require', FAKE_ANDROID, '--require', FIX, REAL_MAIN, JSON.stringify([how, call])],
-    { env: childEnv({ home: OFF_HOME }), encoding: 'utf8', timeout: 15000, cwd: tmp },
+    { env: childEnv({ home: OFF_HOME }), encoding: 'utf8', timeout: 15000, cwd },
 ).trim().split('\n').pop());
-for (const [how, call] of [
+for (const [how, call, cwd] of [
     ['spawn', [BIONIC_LINKER, [OFF_ENGINE, '--hub']]],
     ['spawnSync', [BIONIC_LINKER, [OFF_ENGINE, '--hub']]],
     ['execFile', [BIONIC_LINKER, [OFF_ENGINE, '--hub']]],
@@ -1183,8 +1285,12 @@ for (const [how, call] of [
     ['execSync', ['linker64 ~/.gemini/bin/agy --hub', { stdio: 'ignore' }]],
     ['execSync', ['X=$HOME/.gem""ini/bin/agy; linker64 $X --hub', { stdio: 'ignore' }]],
     ['spawn', [BIONIC_LINKER, [OFF_ENGINE, '--hub'], { shell: true }]],
+    // A Buffer for the cwd: where a synchronous start runs, and an asynchronous start run from the files directory.
+    ['execSync', ['linker64 ./agy --hub', { cwd: bytes(OFF_BIN), stdio: 'ignore' }]],
+    ['spawnSync', ['linker64', ['./agy', '--hub'], { cwd: bytes(OFF_BIN) }]],
+    ['spawn', ['linker64', [path.relative(path.join(REAL_DATA, 'files'), OFF_ENGINE), '--hub'], { cwd: bytes('/') }], path.join(REAL_DATA, 'files')],
 ]) {
-    assert.strictEqual(realUnder(how, call), 'EACCES', `setting off, ${how} of ${JSON.stringify(call)} did not fail with EACCES`);
+    assert.strictEqual(realUnder(how, call, cwd), 'EACCES', `setting off, ${how} of ${shown(call)} did not fail with EACCES`);
     checked++;
 }
 // Options Node refuses are left for Node to refuse: made through the linker, the start would succeed where the
@@ -1196,6 +1302,17 @@ for (const [label, how, call, want] of [
     ['an Android program with a string for its argument list', 'spawnSync', [ENGINE, 'x'], 'ERR_INVALID_ARG_TYPE'],
     ['an Android program with a number for its options', 'execFileSync', [ENGINE, [], 5], 'ERR_INVALID_ARG_TYPE'],
     ['an Android program with a list for its options', 'spawn', [ENGINE, [], []], 'ERR_INVALID_ARG_TYPE'],
+    // spawn and spawnSync take no callback, and refuse null options; execFileSync hands a function after its
+    // argument list to spawnSync as the options.
+    ['an Android program with null for its options', 'spawn', [ENGINE, [], null], 'ERR_INVALID_ARG_TYPE'],
+    ['an Android program with null for its options', 'spawnSync', [ENGINE, [], null], 'ERR_INVALID_ARG_TYPE'],
+    ['an Android program with null for its options after no argument list', 'spawn', [ENGINE, '@undefined', null], 'ERR_INVALID_ARG_TYPE'],
+    ['an Android program with a function for its options', 'spawn', [ENGINE, [], '@callback'], 'ERR_INVALID_ARG_TYPE'],
+    ['an Android program with a function for its options', 'spawnSync', [ENGINE, [], '@callback'], 'ERR_INVALID_ARG_TYPE'],
+    ['an Android program with a function for its argument list', 'spawn', [ENGINE, '@callback'], 'ERR_INVALID_ARG_TYPE'],
+    ['an Android program with a function for its argument list', 'spawnSync', [ENGINE, '@callback'], 'ERR_INVALID_ARG_TYPE'],
+    ['an Android program with a function for its options', 'execFileSync', [ENGINE, [], '@callback'], 'ERR_INVALID_ARG_TYPE'],
+    ['an Android program with a function for its options after a null argument list', 'execFileSync', [ENGINE, null, '@callback'], 'ERR_INVALID_ARG_TYPE'],
     ['the linker and the engine with a string for the options', 'execSync', ['linker64 ~/.gemini/bin/agy --hub', 'x'], 'EACCES'],
     ['the linker and the engine with a number for the options', 'execSync', ['linker64 ~/.gemini/bin/agy --hub', 5], 'EACCES'],
     ['the linker and the engine with a function for the options', 'execSync', ['linker64 ~/.gemini/bin/agy --hub', '@callback'], 'EACCES'],
@@ -1431,8 +1548,11 @@ if (mode === 'dead') {
     pid = dummy.pid;
 }
 fs.writeFileSync(note, JSON.stringify({ pid: pid, port: 41999 }));
-// A shell command that names the linker and the engine, which the setting refuses as it refuses the hub.
+// A shell command that names the linker and the engine, which the setting refuses as it refuses the hub, and one
+// that names the engine alone, which is not read.
 const started = call === 'shell' ? cp.exec('/system/bin/linker64 ' + engine + ' --hub', function () {})
+    : call === 'shell without the linker' ? cp.exec(engine + ' --hub', function () {})
+    : call === 'bare name' ? cp.spawn('agy', ['--hub'])
     : cp.spawn(engine, call === 'version' ? ['--version'] : ['--hub', '--hub-port=41500']);
 started.on('error', () => {});
 const done = (result) => { console.log(JSON.stringify({ result: result })); if (dummy) dummy.kill('SIGKILL'); process.exit(0); };
@@ -1487,6 +1607,22 @@ if (dummy) {
             { env: { ...process.env, ...standInEnv, HOME: home, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 30000 },
         ).trim().split('\n').pop());
         assert.strictEqual(shellRun.result, 'ended by SIGTERM', `a refused shell command left an engine running with the setting off: ${shellRun.result}`);
+        checked++;
+        // A shell command that does not name the linker is not read, so it ends nothing: the starts above still do.
+        const unreadRun = JSON.parse(execFileSync(
+            process.execPath,
+            ['--require', FAKE_ANDROID, '--require', FIX, REAP_DRIVER, engineIn(home), 'match', path.join(home, '.vscodroid/antigravity-hub.json'), 'shell without the linker'],
+            { env: { ...process.env, ...standInEnv, HOME: home, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 30000 },
+        ).trim().split('\n').pop());
+        assert.strictEqual(unreadRun.result, 'still running', `a shell command naming the engine without the linker ended an earlier engine: ${unreadRun.result}`);
+        checked++;
+        // Nor does a program named without a path, which is not one in ~/.gemini.
+        const bareRun = JSON.parse(execFileSync(
+            process.execPath,
+            ['--require', FAKE_ANDROID, '--require', FIX, REAP_DRIVER, engineIn(home), 'match', path.join(home, '.vscodroid/antigravity-hub.json'), 'bare name'],
+            { env: { ...process.env, ...standInEnv, HOME: home, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 30000 },
+        ).trim().split('\n').pop());
+        assert.strictEqual(bareRun.result, 'still running', `a program named without a path ended an earlier engine: ${bareRun.result}`);
         checked++;
     }
 
