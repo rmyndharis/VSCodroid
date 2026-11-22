@@ -114,9 +114,16 @@ object ToolchainRegistry {
             // the 36,000,000 recorded then, which package-toolchains.sh refuses
             // rather than shipping a card that admits a device to an install it
             // cannot finish; it grew again by the C headers a native gem is
-            // built against (`usr/include/ruby-4.0.0`). A point release changes
-            // the ZIP by tens of KB, so both figures leave about 3 percent over
-            // what was measured. Measure again before a release.
+            // built against (`usr/include/ruby-4.0.0`). That tree was stripped by
+            // an earlier rule, which deleted every directory named doc, ri, test,
+            // tests or spec anywhere under `usr/lib/ruby`. download-ruby.sh now
+            // deletes doc, test, tests and spec only at a gem's root, and the
+            // generated rdoc and ri only under gems/<abi>/doc, so the pack keeps
+            // the code that lives in such directories (test-unit's lib/test,
+            // rdoc's lib/rdoc/ri, rbs's lib/rbs/test, bundler's newgem templates)
+            // and is larger than the tree measured here. Both figures were set
+            // about 3 percent over that measurement, which says nothing about the
+            // pack the current rule makes: measure again before a release.
             estimatedSize = 41_000_000,
             downloadSize = 11_300_000,
             downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_ruby.zip",

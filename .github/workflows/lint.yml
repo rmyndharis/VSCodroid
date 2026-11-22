@@ -287,6 +287,12 @@ jobs:
       - name: Check the documents quote the sizes the registry records
         run: python3 scripts/check-size-claims.py
 
+      # The release plan, the technical specification and the bug report form
+      # repeat the version build.gradle.kts declares, by hand, and a bump that
+      # missed one left it naming an older release as the current one.
+      - name: Check the documents state the app's current version
+        run: python3 scripts/check-version-copies.py
+
       # Reads two Markdown files, the checklist and the release plan that cites
       # its rows, and no assets. The summary it checks is derived data kept by
       # hand, and it is the only record of whether a manual test pass covered
