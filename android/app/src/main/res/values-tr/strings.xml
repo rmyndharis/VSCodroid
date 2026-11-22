@@ -199,6 +199,9 @@
          that got there first, and the only thing the user needs is to stop tapping. -->
     <string name="toolchain_already_installing">Bu araç zinciri zaten yükleniyor.</string>
     <string name="toolchain_failed_internal">Yükleme başarısız oldu. Ayrıntılar uygulama günlüğünde.</string>
+    <!-- Shown when Remove did not take a toolchain away: its record could not be read, a file it names
+         could not be deleted, or the removal stopped on an error. Its own sentence rather than "Install failed",
+         and the card stays on Remove, because the record still names the toolchain. -->
     <string name="toolchain_remove_failed">Bu araç zinciri kaldırılamadı. Ayrıntılar uygulama günlüğünde.</string>
     <!-- Shown on the splash screen when Install or Retry was tapped on the Toolchains screen while this
          build's setup had not finished. The tap goes to the splash screen, which runs setup, and the
