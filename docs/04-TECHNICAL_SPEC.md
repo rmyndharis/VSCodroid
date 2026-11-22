@@ -1243,29 +1243,49 @@ forced restarts are counted for one version of the model, in one count for every
 update, and after six with no change of text, each less than half a minute after the one
 before, the next update a rule would refuse is applied as
 the editor without the patch applies it, whatever the six before it refused, so that input
-never stops answering; a range that reaches beyond the buffer is cut at the buffer's end
+never stops answering (a stale letter, below, is the exception: its letter is still typed at
+the caret, with no restart forced); a range that reaches beyond the buffer is cut at the
+buffer's end
 first, so that nothing after the buffer is replaced. Half a minute with no forced restart, by the
 page's monotonic clock, ends the count, so the refusals of separate moments do not add up to six; a touch or a turn of the
 screen does not end it, because a person whose pick was refused taps the word between tries
 and has to reach the seventh. Nothing of a refusal is kept beyond that
-count: the restart ends the composition, and the update that follows is judged on its own.
+count but the range of a stale letter, below: the restart ends the composition, and the update
+that follows is judged on its own.
 What is refused is a set of shapes; the set and its cases are in the patch's description,
 with what the rules cost: a correction of an earlier word that keeps the caret where it was
-is not applied either, and the typo stays. One
-known limit is a letter typed after a turn while the keyboard still holds the range it
-reopened. The keyboard can send that letter alone over the word, which is refused, so the
-letter is lost; or over a single reopened letter, which is what a Hangul or kana step looks
-like, so it is applied and replaces the last letter of the word (`line twx`). A person sees
-either at once. Measured on an Android 12 emulator with Gboard 10.8 and WebView 134, with a
-word typed, a turn to landscape and back and one letter about eight seconds later: on a build
-of the release's sources 21 of 30 runs ended damaged, 20 of them with the word doubled (`line
-twotwox`, `line wordwordx`), on the disk too. With the rules built, 100 of 101 runs were
-right, and the one that was not ended `line twx`; with the patch as it is, 26 of 28 more were
-right, and the two that were not lost the letter. Counted over the runs on builds that did not
-type the letter themselves, the letter came alone in 4 of 105 runs in which the keyboard had a
-range open on a line reached by a tap (the exact 95% interval is 1.0 to 9.5%) and in 2 of 107
-on a new line (0.2 to 6.6%): over the whole word in 3 and over its last letter in 3. On an
-Android 13 emulator with Gboard 12.4 the same steps ended right in 30 of 30 runs, twenty on
+is not applied either, and the typo stays. A letter typed after a turn while the keyboard still
+holds the range it reopened can arrive as a write into that range: alone over the word (`x`
+over `two` of `line two`), over the word's last letter, or as an earlier word with the same
+text grown by the letter. Each of these is refused and its letter typed at the caret as one
+edit (`line twox`), and while nothing else has changed the text and the caret has not moved, the
+next letter sent over the same range, which a keyboard that did not read the text again sends,
+is typed at the caret too, with a composition open or none; a Backspace on a word of two letters,
+which writes the first letter over both, is a deletion and is applied. A letter over the last
+letter is taken for one when both are letters of the basic Latin alphabet, accented or not, with
+different base letters once case and the accents are set aside, so that an accent or a Telex step
+(`é` over `e`, `â` over `a`) is applied. No other letter is judged: a letter with a stroke (`đ`
+over `d`), a letter of another script, Han, kana, Hangul and digits are left out, because a step
+on a reopened letter would have the same shape there (a transliteration, a phonetic or multi-tap
+step, a final form, `ı` over `i`; no recording holds one), so a stale letter of those still
+replaces the last letter. These three shapes are recognised only while a composition is open:
+with none open, the letter alone over the word still replaces it (`line x`), and over the last
+letter still replaces that letter (`line twx`). A person sees either at once. A keyboard taking
+back a correction the editor applied for it (`u` corrected to `you`, then `u` written back
+over `you`) has the shape of a letter over the word and is applied, as long as nothing but a
+deletion at the end of the correction has changed the text since; a word completed from its
+first letter (`t` to `the`) is no correction, and the letter over it stays a stale letter.
+Measured on an Android 12 emulator with Gboard 10.8 and WebView 134, with a word typed, a turn
+to landscape and back and one letter about eight seconds later: on a build of the release's
+sources 21 of 30 runs ended damaged, 20 of them with the word doubled (`line twotwox`, `line
+wordwordx`), on the disk too. With the rules built, 100 of 101 runs were right, and the one
+that was not ended `line twx`; with the patch as it is, 26 of 28 more were right, and the two
+that were not lost the letter; neither build typed the letter at the caret yet. Counted over
+the runs on builds that did not type the letter themselves, the letter came alone in 4 of 105
+runs in which the keyboard had a range open on a line reached by a tap (the exact 95% interval
+is 1.0 to 9.5%) and in 2 of 107 on a new line (0.2 to 6.6%): over the whole word in 3 and over
+its last letter in 3. On an Android 13 emulator with Gboard 12.4 the same steps ended right in
+30 of 30 runs, twenty on
 the nine rules and ten on the patch as it is. A write that ends beyond the buffer, dispatched
 into the editor after the turn with the keyboard attached, in three states of the composition,
 deleted the lines below the caret in 12 of 12 runs on a build without the refusal and in none
@@ -1276,7 +1296,11 @@ The builds called the nine rules and the patch as it is above carried one rule m
 patch has now, the third of the nine: it remembered the last refusal and was to refuse the
 next letter sent over the same range. It could not act, because the restart that follows a
 refusal ends the composition the rule needed, and it has been removed; the runs after a
-refusal below were made without it. One more result is a known limit that the rules pass: the
+refusal below were made without it. They also carried two rules that refused a remembered word
+written over text after the caret and the word written back grown with the caret kept before
+the growth; the rule that refuses a write keeping the caret away from the end of what it writes
+refuses every update either of them did, and both have been removed. One more result is a known
+limit that the rules pass: the
 word written again at the caret in a composition that has typed (`line twoxtwo`, one recorded
 update, in a run that ended damaged). A keyboard that went on with the range it kept after a
 refusal would be passed as well: its next letter over that range, or the refused write sent
