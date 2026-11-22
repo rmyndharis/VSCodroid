@@ -17,6 +17,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const http = require('http');
+const net = require('net');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -125,6 +126,65 @@ async function anEditorThatRefusesIsAFailure() {
     }
 }
 
+/**
+ * A stand-in that reads the whole request, then answers with `statusLine` and a
+ * Content-Length the body never reaches, and ends the connection: a FIN, as an
+ * editor process that goes away in the middle of its answer leaves it, rather than
+ * a reset, which reaches the opener as a request error instead.
+ */
+function cutShort(statusLine) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vscodroid-opener-'));
+    const socketPath = path.join(dir, 'cli.sock');
+    const server = net.createServer((socket) => {
+        let request = '';
+        socket.on('data', (chunk) => {
+            request += chunk;
+            const head = request.indexOf('\r\n\r\n');
+            if (head < 0) return;
+            const length = Number((/content-length:\s*(\d+)/i.exec(request.slice(0, head)) || [])[1] || 0);
+            if (request.length - head - 4 < length) return;
+            socket.end(`${statusLine}\r\ncontent-type: application/json\r\ncontent-length: 100\r\n\r\nnull`);
+        });
+    });
+    return {
+        socketPath,
+        listen: () => new Promise((resolve) => server.listen(socketPath, resolve)),
+        close: () => new Promise((resolve) => {
+            server.close(() => {
+                fs.rmSync(dir, { recursive: true, force: true });
+                resolve();
+            });
+        }),
+    };
+}
+
+async function anAnswerCutShortIsReadByItsStatus() {
+    // A refusal whose body never arrives whole. Waiting for the body's end, the
+    // opener saw neither 'end' nor 'error' (Node emits a response's 'error' only to
+    // a listener), ran out of work and exited 0: a refused open reported success.
+    const refused = cutShort('HTTP/1.1 500 Internal Server Error');
+    await refused.listen();
+    try {
+        const run = await open(['https://example.com'], { socketPath: refused.socketPath });
+        assert.strictEqual(run.status, 1, `a refusal cut short did not fail:\n${run.output}`);
+        assert.ok(/^xdg-open: the editor answered 500$/m.test(run.output),
+            `the caller should be told what the editor said:\n${run.output}`);
+    } finally {
+        await refused.close();
+    }
+
+    // A 200 cut short is still an open that happened: the editor writes its status
+    // line only once the open has finished, so the body adds nothing to the answer.
+    const opened = cutShort('HTTP/1.1 200 OK');
+    await opened.listen();
+    try {
+        const run = await open(['https://example.com'], { socketPath: opened.socketPath });
+        assert.strictEqual(run.status, 0, `an open the editor confirmed was reported as a failure:\n${run.output}`);
+    } finally {
+        await opened.close();
+    }
+}
+
 async function whatCannotBeOpenedIsRefusedRatherThanSent() {
     const cli = editor();
     await cli.listen();
@@ -185,12 +245,13 @@ async function nothingToOpenWithIsNamed() {
 sendsTheMessageTheEditorAnswers()
     .then(severalAddressesRideInOneMessage)
     .then(anEditorThatRefusesIsAFailure)
+    .then(anAnswerCutShortIsReadByItsStatus)
     .then(whatCannotBeOpenedIsRefusedRatherThanSent)
     .then(nothingToOpenWithIsNamed)
     .then(() => {
         console.log(
             'ok -- the browser opener sends the openExternal message the editor handler reads, ' +
-                'carries every address given, fails when the editor refuses, refuses what the ' +
+                'carries every address given, fails when the editor refuses, also with an answer cut short, refuses what the ' +
                 'handler would have skipped silently, and names a missing editor rather than ' +
                 'throwing at one',
         );
