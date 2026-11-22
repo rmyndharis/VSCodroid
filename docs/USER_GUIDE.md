@@ -681,8 +681,9 @@ Reload Window**. Until then VSCodroid holds back the extension's starts of what 
 other than the engine's version check, including one written with the system loader in front of the
 program and a shell command that names both, and the extension's panel reads `Couldn't load this view`
 with a `spawn ... EACCES` error, which is the engine not being started. Only what a start spells out is
-seen: a program that is told what to run (a shell given a command with `-c`, an interpreter, or `env` in
-front of the loader), or a name a shell command builds from a variable or a pattern, gets past it. The switch
+seen: a program that is told what to run (a shell given a command with `-c`, an interpreter, `env` in
+front of the loader, or `fork` given the loader as its `execPath`), a name a shell command builds from a variable or a pattern, or a path that goes through
+a link and then back up with `..`, gets past it. The switch
 holds back what an extension starts in the usual way; it is no barrier against an extension that sets out to
 run the engine. If the box is ticked and the panel still shows that error, VSCodroid reads the setting as
 off in its settings file, which happens when the file has an error that VS Code works around, such as a

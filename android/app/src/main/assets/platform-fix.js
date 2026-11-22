@@ -197,14 +197,20 @@ if (process.platform === 'android') {
     return out;
   }
 
-  /** The directory a call runs in, as a path. */
-  function cwdOf(options) {
+  /**
+   * The directory a call made through `how` (spawn, execSync, ...) runs in, as a path; null when it cannot be read
+   * as one, which could be ~/.gemini. Node takes a Uint8Array for it as well: a synchronous start runs in the string
+   * it makes of it, String(cwd), which for one that is not a Buffer is a directory of comma-separated numbers, and an
+   * asynchronous start ignores it and runs in this process's own directory (measured on Node 22 and 24).
+   */
+  function cwdOf(options, how) {
     try {
       var cwd = options && options.cwd;
+      if (require('util').types.isUint8Array(cwd)) cwd = /Sync$/.test(how) ? String(cwd) : null;
       if (!cwd) return process.cwd();
       return path.resolve(typeof cwd === 'string' ? cwd : require('url').fileURLToPath(cwd));
     } catch (e) {
-      return '/';
+      return null;
     }
   }
 
@@ -247,9 +253,9 @@ if (process.platform === 'android') {
    * What follows `file` in a child_process call (an argument list, options and a
    * callback, whichever are given) as a call to `linker64 <file> <args>` with the
    * interceptor and the program's own path in its options, or null when the call
-   * is left alone. `change` may replace the argument list.
+   * is left alone. `change` may replace the argument list; `cwd` is where the call runs (cwdOf).
    */
-  function throughLinker(file, rest, change) {
+  function throughLinker(file, rest, change, cwd) {
     if (typeof file !== 'string') return null;
     // Node takes null or undefined for the argument list, and options then follow it.
     var listed = Array.isArray(rest[0]) || rest[0] == null;
@@ -258,7 +264,7 @@ if (process.platform === 'android') {
     if ((options && options.shell) || !bionicInAppData(file)) return null;
     var args = Array.isArray(rest[0]) ? rest[0] : [];
     // Not to a start that could reach ~/.gemini, the engine's own included (see ENGINE_SETTING).
-    var env = geminiNamed([file].concat(args), options, false) ? null : interceptorEnv(options && options.env, file);
+    var env = geminiNamed([file].concat(args), options, false, cwd) ? null : interceptorEnv(options && options.env, file);
     return [LINKER, [file].concat(change ? change(args) : args)].concat(env ? withOptions(tail, { env: env }) : tail);
   }
 
@@ -305,9 +311,12 @@ if (process.platform === 'android') {
   // names something in ~/.gemini (a path there, a directory it runs in or searches, or a word that spells the
   // name) and also names the linker is made as a start of what it names, without the shell, which fails the
   // same way. Only what the call spells out can be seen: a program that is told what to run (`sh -c` written as
-  // a program and its arguments, an interpreter, `env` or `nohup` in front of the linker) and a name the shell
-  // builds from a variable or a pattern are beyond this. Neither is a fence against code in the extension host, which could copy the engine anywhere;
-  // it holds back what an extension that means no harm starts on its own.
+  // a program and its arguments, an interpreter, `env` or `nohup` in front of the linker, `fork` given the linker as its `execPath`, which
+  // child_process starts through a reference of its own), a name the shell
+  // builds from a variable or a pattern, and a path that goes through a link and then back up with `..` (read as
+  // text, where the kernel follows the link first) are beyond this. Neither is a fence against code in the
+  // extension host, which could copy the engine anywhere; it holds back what an extension that means no harm
+  // starts on its own.
   //
   // Read from the machine settings file at each such call, and the way VS Code builds its settings from
   // it: the keys of the root object are split at their dots into a tree, in file order, so
@@ -429,11 +438,13 @@ if (process.platform === 'android') {
 
   /**
    * The real path of `file`, from the system's resolver where it answers as the JavaScript one does: one call where
-   * the JavaScript one looks at each part of the path in turn, which every word of a long command paid for. The
-   * JavaScript one first resolves the path as text (`..` and a trailing slash), so this does too; the two then
-   * agreed on links, `..` after a link, loops and a FIFO on Linux and macOS. Bionic's resolver was not compared
-   * there, so NATIVE_REALPATH asks both once, on this file's own directory, which a device reaches through the
-   * /data/user/0 link, and a resolver that fails or answers otherwise is not used.
+   * the JavaScript one looks at each part of the path in turn, which every word of a long command paid for (the
+   * shim's own work for a program given 20,000 arguments with ~/.gemini present: 50 ms against 80 on Linux with
+   * Node 24, 105 against 125 on macOS with Node 22). The JavaScript one first resolves the path as text (`..` and a
+   * trailing slash), so this does too; the two then agreed on links, `..` after a link, loops and a FIFO on Linux
+   * and macOS. Bionic's resolver was not compared there, so NATIVE_REALPATH asks both once, on this file's own
+   * directory, which a device reaches through the /data/user/0 link, and a resolver that fails or answers otherwise
+   * is not used.
    */
   var NATIVE_REALPATH = false;
   try {
@@ -473,16 +484,17 @@ if (process.platform === 'android') {
 
   /**
    * What a call could reach in ~/.gemini: the first of `words` (its program and arguments, or the words of its
-   * shell command when `shell` is set) that is a path there, read from the call's working directory; else
-   * ~/.gemini itself when that directory is there, a directory of the PATH the call searches is, or a word of a
-   * shell command spells the name; null for none. See ENGINE_SETTING.
+   * shell command when `shell` is set) that is a path there, read from `cwd`, the directory the call runs in
+   * (cwdOf); else ~/.gemini itself when that directory is there or cannot be read as a path, a directory of the
+   * PATH the call searches is there, or a word of a shell command spells the name; null for none. See
+   * ENGINE_SETTING.
    */
-  function geminiNamed(words, options, shell) {
+  function geminiNamed(words, options, shell, cwd) {
     var gemini = HOME ? path.join(HOME, '.gemini') : null;
     // Resolved once for the call, not once for each word: a command or an argument list may hold thousands.
     var root = gemini && path.isAbsolute(gemini) ? geminiRoot() : null;
     if (root === null) return null;
-    var cwd = cwdOf(options);
+    if (cwd === null) return gemini;
     var spelled = false;
     for (var i = 0; i < words.length; i++) {
       var word = String(words[i]);
@@ -784,52 +796,62 @@ if (process.platform === 'android') {
   /**
    * What a child_process call of `file` with `rest` after it becomes, for every start wrapped below: `call`, the
    * arguments to make it with instead, or none when it is made as written; `hub`, the relay to put in front of
-   * an engine only spawn (`relay`) starts. See ENGINE_SETTING for ~/.gemini.
+   * an engine only spawn starts. `how` names the function called (spawn, spawnSync, execFile or execFileSync).
+   * See ENGINE_SETTING for ~/.gemini.
    */
-  function startCall(file, rest, relay) {
+  function startCall(file, rest, how) {
     if (typeof file !== 'string') return {};
     var listed = Array.isArray(rest[0]) || rest[0] == null;
     var tail = rest.slice(listed ? 1 : 0);
     var options = tail[0];
-    // Options Node itself refuses are left for Node to refuse.
-    if (options != null && (Array.isArray(options) || (typeof options !== 'object' && typeof options !== 'function'))) return {};
+    // Options Node itself refuses are left for Node to refuse: a list, anything but an object or a function, and a
+    // function or null where the call takes no callback. spawn and spawnSync take neither; execFileSync takes a
+    // function in place of the argument list, and one after it reaches spawnSync as the options.
+    var callback = typeof options === 'function';
+    if (Array.isArray(options) || (options != null && typeof options !== 'object' && !callback)) return {};
+    if (/^spawn/.test(how) && (options === null || callback)) return {};
+    if (how === 'execFileSync' && listed && callback) return {};
     // Node acts on the options' own properties alone, an inherited cwd, env or shell ignored, so the call is read,
     // and made when it is rewritten, from a copy of those.
     if (options && typeof options === 'object') {
       tail = [Object.assign({}, options)].concat(tail.slice(1));
       rest = (listed ? [rest[0]] : []).concat(tail);
     }
-    if (tail[0] && tail[0].shell) return shellCall(file, rest, tail);
-    return engineCall(file, rest, relay);
+    var cwd = cwdOf(tail[0], how);
+    if (tail[0] && tail[0].shell) return shellCall(file, rest, tail, cwd);
+    return engineCall(file, rest, how === 'spawn', cwd);
   }
 
   /**
    * startCall for a command run in a shell, which Node makes of the file and the argument list joined by spaces.
    * It is made as written, with no interceptor, unless the setting refuses it (see ENGINE_SETTING). A command that
    * does not name the linker is not read further: without it the shell's own start of anything in ~/.gemini is
-   * refused, and reading every command a shell runs would cost each of them a look at every word.
+   * refused, and reading every command a shell runs would cost each of them a look at every word. So such a
+   * command does not end an earlier engine either, which the engine's own start, its version check, and the
+   * editor server's start and SIGTERM still do. `cwd` is where the command runs (cwdOf).
    */
-  function shellCall(file, rest, tail) {
+  function shellCall(file, rest, tail, cwd) {
     var text = [file].concat(Array.isArray(rest[0]) ? rest[0] : []).join(' ');
     if (!/linker64/.test(text.replace(/["']/g, ''))) return {};
-    var named = geminiNamed(text.split(/[\s;&|()<>`]+/), tail[0], true);
+    var named = geminiNamed(text.split(/[\s;&|()<>`]+/), tail[0], true, cwd);
     if (!named || engineTurnedOn()) return {};
     endEarlierHub();
     return { call: [named, []].concat(withOptions(tail, { shell: false })) };
   }
 
-  /** startCall for a call made without a shell. */
-  function engineCall(file, rest, relay) {
+  /** startCall for a call made without a shell, from `cwd` (cwdOf). */
+  function engineCall(file, rest, relay, cwd) {
     // `linker64 <program> <args>`, the linker written out by the caller, is a start of the program: the same rules
     // decide it, and a refusal is the program started without the linker. A loader option in front of the
     // program (--list) runs nothing.
     var linked = path.basename(file) === 'linker64' && Array.isArray(rest[0]) && typeof rest[0][0] === 'string' &&
       rest[0][0] !== '' && rest[0][0].charAt(0) !== '-';
     if (linked) {
-      file = path.resolve(cwdOf(rest[1]), rest[0][0]);
+      file = cwd === null ? rest[0][0] : path.resolve(cwd, rest[0][0]);
       rest = [rest[0].slice(1)].concat(rest.slice(1));
     }
-    var gemini = fromGemini(file);
+    // A program named from a directory that cannot be read as a path may be in ~/.gemini.
+    var gemini = path.isAbsolute(file) ? fromGemini(file) : linked && geminiRoot() !== null;
     var on = gemini && engineTurnedOn();
     var args = Array.isArray(rest[0]) ? rest[0] : [];
     // The options are the first of what follows, or the second after an argument list, as in throughLinker.
@@ -843,7 +865,7 @@ if (process.platform === 'android') {
     if (refused || (gemini && !on)) endEarlierHub();
     if (refused) return linked ? { call: [file].concat(rest) } : {};
     if (!relay) hub = null;
-    var call = throughLinker(file, rest, hub ? function () { return hub.args; } : null);
+    var call = throughLinker(file, rest, hub ? function () { return hub.args; } : null, cwd);
     return { call: call, hub: call && hub };
   }
 
@@ -857,7 +879,7 @@ if (process.platform === 'android') {
         return realSpawn.apply(this, args);
       }
     }
-    var gate = startCall(file, Array.prototype.slice.call(arguments, 1), true);
+    var gate = startCall(file, Array.prototype.slice.call(arguments, 1), 'spawn');
     if (!gate.call) return realSpawn.apply(this, arguments);
     var hub = gate.hub;
     if (hub) endEarlierHub();
@@ -888,30 +910,30 @@ if (process.platform === 'android') {
 
   // The call to make: the same rules as spawn, without a relay, so an engine's hub started this way with the
   // setting on is an ordinary program on the port it was given.
-  function plainCall(all) {
-    return startCall(all[0], Array.prototype.slice.call(all, 1), false).call || all;
+  function plainCall(all, how) {
+    return startCall(all[0], Array.prototype.slice.call(all, 1), how).call || all;
   }
   childProcess.execFile = function () {
-    return realExecFile.apply(this, plainCall(arguments));
+    return realExecFile.apply(this, plainCall(arguments, 'execFile'));
   };
   // util.promisify(execFile) resolves { stdout, stderr } through this property of the original.
   if (realExecFilePromised) {
     childProcess.execFile[promisify.custom] = function () {
-      return realExecFilePromised.apply(this, plainCall(arguments));
+      return realExecFilePromised.apply(this, plainCall(arguments, 'execFile'));
     };
   }
   childProcess.spawnSync = function () {
-    return realSpawnSync.apply(this, plainCall(arguments));
+    return realSpawnSync.apply(this, plainCall(arguments, 'spawnSync'));
   };
   childProcess.execFileSync = function () {
-    return realExecFileSync.apply(this, plainCall(arguments));
+    return realExecFileSync.apply(this, plainCall(arguments, 'execFileSync'));
   };
   childProcess.execSync = function (command, options) {
     // Node runs the command whatever stands in place of the options: it reads their own properties, and a string,
     // a number or a function has none it uses. So the command is read as it runs, never handed on unread.
     var read = options !== null && typeof options === 'object' ? Object.assign({}, options) : {};
     // A refusal is a start of what the command names without a shell, which execSync cannot make.
-    var gate = shellCall(command, [read], [read]);
+    var gate = shellCall(command, [read], [read], cwdOf(read, 'execSync'));
     return gate.call ? realExecFileSync.apply(this, gate.call) : realExecSync.apply(this, arguments);
   };
 }
