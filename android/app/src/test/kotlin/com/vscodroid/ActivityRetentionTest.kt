@@ -11,8 +11,8 @@ import java.io.File
  * `SafSyncEngine` starts the `saf-writeback` daemon and `stopWatching` waits two
  * seconds for it before leaving it running, rather than discarding writes the user
  * expects on their device. That worker's runnable holds the engine, the engine
- * holds its `Context`, and the manager's three notice callbacks hold whatever they
- * closed over. Built on the Activity, all of that kept a destroyed MainActivity and
+ * holds its `Context`, and every notice callback the Activity hands the manager holds
+ * whatever it closed over. Built on the Activity, all of that kept a destroyed MainActivity and
  * its whole inflated view tree alive for the length of an unbounded drain, on a
  * device where the Node server and the extension host are competing for the same
  * heap. `onDestroy` clears the service callbacks and nothing else, and the started
@@ -26,7 +26,7 @@ import java.io.File
  *  - changing `SafStorageManager(applicationContext)` back to
  *    `SafStorageManager(this)` reddens `the manager is built on the application
  *    context`.
- *  - putting `this@MainActivity` back as the Toast context in any one of the three
+ *  - putting `this@MainActivity` back as the notice's context in any one of the
  *    notices reddens `no device-folder notice closes over the Activity`.
  *  - changing one notice's `appContext.getString(` back to `getString(` reddens the
  *    same case, since an unqualified resource lookup is a call on the Activity.
@@ -60,13 +60,21 @@ class ActivityRetentionTest {
             if (marker >= 0) line.substring(0, marker) else line
         }
 
-    private val notices = listOf(
-        "safManager.onWriteBackFailed {",
-        "safManager.onUploadIncomplete {",
-        "safManager.onFilesKeptInApp {",
-        "safManager.onDocumentsNotCopied {",
-        "safManager.onKeptOnDevice {",
-    )
+    /**
+     * Every notice the Activity hands the manager, found by its shape rather than listed by
+     * name: a list written out by hand covered the first five and none of the five added
+     * after them, which is how a notice that captures the Activity would get in unread.
+     */
+    private val notices: List<String> by lazy {
+        val found = Regex("""(?m)^\s*safManager\.on\w+\s*\{""").findAll(code(source))
+            .map { it.value.trim() }.toList()
+        // The control: a pattern that stopped matching would hand both cases below an
+        // empty list, and they would pass by reading nothing.
+        assertTrue(found.size >= 10 && "safManager.onWriteBackFailed {" in found) {
+            "found only ${found.size} device-folder notices in MainActivity.kt: $found"
+        }
+        found
+    }
 
     @Test
     fun `the manager is built on the application context`() {

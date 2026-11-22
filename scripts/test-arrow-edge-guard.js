@@ -622,6 +622,8 @@ for (const tag of ['INPUT', 'TEXTAREA']) {
         const quickOpen = listen({ tagName: 'INPUT', value: '', classList: { contains: () => false } });
         quickOpen.dispatchEvent = (event) => dispatch(quickOpen, event);
         host.addEventListener('keydown', (e) => {
+            // A key the keyboard hands over as 229 is no key to the editor's keybindings.
+            if (e.keyCode === 229) return;
             log.push(`chord ${e.key}${e.ctrlKey ? ' ctrl' : ''}${e.altKey ? ' alt' : ''}${e.shiftKey ? ' shift' : ''} ${e.code} ${e.keyCode}`);
             if (page.chordTakesFocus && e.ctrlKey) { host.blur(); document.activeElement = quickOpen; }
         });
@@ -729,6 +731,20 @@ for (const tag of ['INPUT', 'TEXTAREA']) {
             key(key, keyCode) {
                 dispatch(host, { type: 'keydown', key, code: '', keyCode, bubbles: true, cancelable: true });
             },
+            // The keydown a soft keyboard sends for a key it handles itself, ahead
+            // of the text: trusted, key code 229, nothing else to read.
+            imeKey() {
+                dispatch(document.activeElement || host, {
+                    type: 'keydown', key: 'Unidentified', code: '', keyCode: 229, isTrusted: true, bubbles: true, cancelable: true,
+                });
+            },
+            // Focus going into a frame: the window is blurred with the frame's
+            // element already the active one. Without a frame, the app losing the
+            // window, the active element stays where it was.
+            blurWindow(intoFrame) {
+                if (intoFrame) document.activeElement = { tagName: 'IFRAME', classList: { contains: () => false } };
+                for (const l of window.listeners.slice()) if (l.type === 'blur' && !l.capture) l.fn.call(window, { type: 'blur', target: window });
+            },
             mods: () => window.__vscodroid,
         };
         return page;
@@ -757,11 +773,12 @@ for (const tag of ['INPUT', 'TEXTAREA']) {
         const event = received[0];
         const got = { text: p.own.text, count: received.length,
             range: event && [event.updateRangeStart, event.updateRangeEnd, event.selectionStart, event.selectionEnd],
+            caret: [p.own.selectionStart, p.own.selectionEnd],
             restored: p.host.editContext === p.own, latched: !!(p.mods().ctrl || p.mods().alt || p.mods().shift),
             chords: p.log.filter((line) => line.startsWith('chord ')).length };
         cases.push([`${modifier} preserves the complete ${JSON.stringify(text)} commit`, JSON.stringify(got),
             JSON.stringify({ text: expected, count: 1, range: [from, to, from + text.length, from + text.length],
-                restored: true, latched: false, chords: 0 })]);
+                caret: [from + text.length, from + text.length], restored: true, latched: false, chords: 0 })]);
         borrowed.fire('textupdate', { text });
         cases.push([`a returned ${modifier} context cannot insert ${JSON.stringify(text)} again`, received.length, 1]);
     }
@@ -804,6 +821,25 @@ for (const tag of ['INPUT', 'TEXTAREA']) {
     latchCase('focus leaving the host gives the editor its EditContext back, and restarts nothing',
         (p) => { p.latch({ ctrl: true }); p.host.blur(); p.flush(); return { log: p.log, editContext: p.host.editContext.name }; },
         { log: ['blur host'], editContext: 'editor' });
+    // A latch is spent by the character it was meant for even where nothing is
+    // cancelled. Left standing, a forgotten Shift turns a later tap on the row's
+    // `/` into `?`, and a Ctrl makes the next letter a chord nobody asked for.
+    latchCase('a lone Shift is spent by the character the keyboard types, which is typed as it came',
+        (p) => { p.latch({ shift: true }); const typed = p.input(p.host, 'a'); return { typed, shift: p.mods().shift }; },
+        { typed: true, shift: false });
+    latchCase('Ctrl latched, a word the keyboard inserts in one beforeinput is typed, not a chord, and spends the latch',
+        (p) => {
+            p.latch({ ctrl: true });
+            const typed = p.input(p.host, 'hello');
+            return { typed, ctrl: p.mods().ctrl, alt: p.mods().alt, shift: p.mods().shift, chords: p.log.filter((line) => line.startsWith('chord ')) };
+        },
+        { typed: true, ctrl: false, alt: false, shift: false, chords: [] });
+    latchCase('focus going into a frame spends the latch, since no chord can follow it there',
+        (p) => { p.latch({ ctrl: true, shift: true }); p.blurWindow(true); return { ctrl: p.mods().ctrl, alt: p.mods().alt, shift: p.mods().shift }; },
+        { ctrl: false, alt: false, shift: false });
+    latchCase('the window losing focus with the editor still active keeps the latch',
+        (p) => { p.latch({ ctrl: true }); p.blurWindow(false); return { ctrl: p.mods().ctrl }; },
+        { ctrl: true });
     latchCase('a selection-only update waits for the character',
         (p) => { p.latch({ ctrl: true }); p.compose(''); p.compose('p'); return state(p); },
         { log: ['chord p ctrl KeyP 80', 'blur host', 'focus host'], editContext: 'editor', ctrl: false, alt: false });
@@ -875,6 +911,15 @@ for (const tag of ['INPUT', 'TEXTAREA']) {
         { chords: ['chord k ctrl KeyK 75', 'chord z KeyZ 90'], typed: [], editContext: 'editor' });
     chordCase('the same with a keyboard that composes, as Gboard 12.4 does',
         (p) => { startFromRow(p, 'compose'); p.compose('z'); p.flush(); return chordState(p); },
+        { chords: ['chord k ctrl KeyK 75', 'chord z KeyZ 90'], typed: [], editContext: 'editor' });
+    // The keyboard sends a keydown with key code 229 for the key before its text
+    // arrives, and a task that keydown queued runs before the text: the keydown
+    // is not the key that ends the chord.
+    chordCase('a z announced by a keydown with key code 229 before its text is still the second key',
+        (p) => { startFromRow(p); p.imeKey(); p.flush(); p.commit('z'); p.flush(); return chordState(p); },
+        { chords: ['chord k ctrl KeyK 75', 'chord z KeyZ 90'], typed: [], editContext: 'editor' });
+    chordCase('the same with a keyboard that composes the z',
+        (p) => { startFromRow(p, 'compose'); p.imeKey(); p.flush(); p.compose('z'); p.flush(); return chordState(p); },
         { chords: ['chord k ctrl KeyK 75', 'chord z KeyZ 90'], typed: [], editContext: 'editor' });
     chordCase('a letter after the chord has ended at its second key is typed as ever',
         (p) => { startFromRow(p); p.commit('z'); p.flush(); p.commit('q'); return chordState(p); },

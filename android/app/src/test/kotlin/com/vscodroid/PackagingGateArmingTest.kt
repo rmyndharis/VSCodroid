@@ -63,9 +63,24 @@ class PackagingGateArmingTest {
      *
      * Anchored at the start of a line: `build.gradle.kts` is Kotlin, so a
      * commented-out `onlyIf` is not an arming and must not be read as one.
+     *
+     * An `onlyIf` in any other shape than one call of a predicate (a reason
+     * string, a condition joined to another, a second `onlyIf`) fails here
+     * rather than reading as no arming at all, which the overlap case below
+     * accepts as an unconditional gate.
      */
-    private fun armingPredicate(task: String): String? =
-        Regex("""(?m)^\s*onlyIf\s*\{\s*(\w+)\(\)\s*}""").find(taskBody(task))?.groupValues?.get(1)
+    private fun armingPredicate(task: String): String? {
+        val body = taskBody(task)
+        val armings = Regex("""(?m)^\s*onlyIf\b""").findAll(body).count()
+        if (armings == 0) return null
+        val predicate = Regex("""(?m)^\s*onlyIf\s*\{\s*(\w+)\(\)\s*}""").find(body)?.groupValues?.get(1)
+        assertTrue(
+            armings == 1 && predicate != null,
+            "the $task task is armed in a shape this test cannot read, so it cannot say whether " +
+                "the predicate covers the gate's subject. Arm it with one `onlyIf { predicate() }`.",
+        )
+        return predicate
+    }
 
     /**
      * The declaration of a top-level predicate function, comments stripped.

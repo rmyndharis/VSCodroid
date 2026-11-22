@@ -1,12 +1,20 @@
 package com.vscodroid.storage
 
 import android.content.Context
+import android.content.res.Resources
+import com.vscodroid.R
+import com.vscodroid.filesKeptInAppNotice
+import com.vscodroid.uploadIncompleteNotice
+import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.w3c.dom.Element
 import java.io.File
+import javax.xml.parsers.DocumentBuilderFactory
 
 /**
  * A write-back that gives up has to reach a screen, and nothing in the sync engine has
@@ -244,6 +252,70 @@ class WriteBackNoticeWiringTest {
             Regex("""(?m)^\s*[^/\n]*saf_open_changes_unsent\b""").containsMatchIn(source),
             "the notice does not name the string that says the changes made while the folder opened did not all go",
         )
+    }
+
+    /** The base strings, read from the file AAPT2 compiles, so a sentence is formatted as it ships. */
+    private val strings by lazy {
+        DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(File("src/main/res/values/strings.xml"))
+    }
+
+    /** The text of the string [name], or of its plural item for [quantity]. */
+    private fun template(name: String, quantity: String? = null): String {
+        val nodes = strings.getElementsByTagName(if (quantity == null) "string" else "plurals")
+        val node = (0 until nodes.length).map { nodes.item(it) as Element }.single { it.getAttribute("name") == name }
+        if (quantity == null) return node.textContent
+        val items = node.getElementsByTagName("item")
+        return (0 until items.length).map { items.item(it) as Element }
+            .single { it.getAttribute("quantity") == quantity }.textContent
+    }
+
+    /** Resources that format these notices from the base strings, as the platform does in English. */
+    private fun englishResources(): Resources = mockk {
+        for ((id, name) in listOf(
+            R.string.saf_file_kept_in_app to "saf_file_kept_in_app",
+            R.string.saf_upload_capped to "saf_upload_capped",
+        )) {
+            every { getString(id, *anyVararg()) } answers { template(name).format(*(args.last() as Array<*>)) }
+        }
+        for ((id, name) in listOf(
+            R.plurals.saf_files_kept_in_app to "saf_files_kept_in_app",
+            R.plurals.saf_upload_incomplete to "saf_upload_incomplete",
+        )) {
+            every { getQuantityString(id, any(), *anyVararg()) } answers {
+                template(name, if (secondArg<Int>() == 1) "one" else "other").format(*(args.last() as Array<*>))
+            }
+        }
+    }
+
+    /**
+     * The sentence a kept file is told in, built as it ships: the folder first, the file named,
+     * and a count only when there is more than one. Arguments handed in another order than the
+     * string's placeholders give a sentence that names the file as the folder, or fail to format.
+     */
+    @Test
+    fun `a file kept inside the app is named in the sentence for its folder`() {
+        val resources = englishResources()
+
+        val one = filesKeptInAppNotice(resources, "Docs", 1, "notes.md")
+        assertTrue(one.startsWith("Docs: ") && "notes.md" in one, one)
+        verify { resources.getString(R.string.saf_file_kept_in_app, "Docs", "notes.md") }
+
+        val three = filesKeptInAppNotice(resources, "Docs", 3, "notes.md")
+        assertTrue(three.startsWith("Docs: ") && "notes.md" in three && "3" in three, three)
+        verify { resources.getQuantityString(R.plurals.saf_files_kept_in_app, 3, 3, "Docs", "notes.md") }
+    }
+
+    @Test
+    fun `a folder that did not arrive whole is named with what it lost`() {
+        val resources = englishResources()
+
+        val lost = uploadIncompleteNotice(resources, "Docs", 4, capped = false)
+        assertTrue(lost.startsWith("Docs: ") && "4" in lost, lost)
+        verify { resources.getQuantityString(R.plurals.saf_upload_incomplete, 4, 4, "Docs") }
+
+        val capped = uploadIncompleteNotice(resources, "Docs", 4, capped = true)
+        assertTrue(capped.startsWith("Docs ") && "4" !in capped, capped)
+        verify { resources.getString(R.string.saf_upload_capped, "Docs") }
     }
 
     /**

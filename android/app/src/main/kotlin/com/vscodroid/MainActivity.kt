@@ -14,6 +14,7 @@ import android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.content.res.Resources
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
@@ -102,6 +103,7 @@ import com.vscodroid.webview.DownloadHost
 import com.vscodroid.webview.DownloadOutcome
 import com.vscodroid.webview.EditorWebView
 import com.vscodroid.webview.OpenDocument
+import com.vscodroid.webview.pageCanReadDownload
 import com.vscodroid.webview.VSCodroidWebChromeClient
 import com.vscodroid.webview.VSCodroidWebView
 import com.vscodroid.webview.VSCodroidWebViewClient
@@ -739,6 +741,12 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
             runOnUiThread { webView?.evaluateJavascript(script, null) }
         }
 
+        /**
+         * On the main thread, where the platform delivers a download and where [serverPort] is
+         * written: the page the bytes would be asked of was loaded from that port.
+         */
+        override fun pageCanRead(url: String): Boolean = pageCanReadDownload(url, serverPort)
+
         override fun report(outcome: DownloadOutcome, fileName: String, detail: String?) {
             // Both halves are page supplied and this line is not gated on a
             // debuggable build, so it ships. `fileName` arrives through
@@ -849,7 +857,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         // that was a destroyed Activity and its whole inflated view tree, on a
         // device this app is trying to leave memory on.
         safManager = SafStorageManager(applicationContext)
-        // Read into locals for the same reason, and used by all five notices below:
+        // Read into locals for the same reason, and used by every notice below:
         // a lambda that says `this@MainActivity`, `getString` or `runOnUiThread`
         // captures the Activity and hands it straight back to the engine. The
         // notices themselves have to survive, because the drain they report on is
@@ -900,13 +908,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         // mirrorDisplayName.
         safManager.onUploadIncomplete { dir, lost, capped ->
             val folder = mirrorDisplayName(storage.getPersistedFolders(), dir)
-            val message = if (capped) {
-                appContext.getString(R.string.saf_upload_capped, folder)
-            } else {
-                appContext.resources.getQuantityString(
-                    R.plurals.saf_upload_incomplete, lost, lost, folder
-                )
-            }
+            val message = uploadIncompleteNotice(appContext.resources, folder, lost, capped)
             toMainThread.post {
                 AppNotices.showNotice(appContext, message, Toast.LENGTH_LONG, screen.get())
             }
@@ -918,13 +920,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         // the upload notice above counts. One file has its own wording, as a kept edit does.
         safManager.onFilesKeptInApp { dir, count, first ->
             val folder = mirrorDisplayName(storage.getPersistedFolders(), dir)
-            val message = if (count == 1) {
-                appContext.getString(R.string.saf_file_kept_in_app, folder, first)
-            } else {
-                appContext.resources.getQuantityString(
-                    R.plurals.saf_files_kept_in_app, count, count, folder, first
-                )
-            }
+            val message = filesKeptInAppNotice(appContext.resources, folder, count, first)
             toMainThread.post {
                 AppNotices.showNotice(appContext, message, Toast.LENGTH_LONG, screen.get())
             }
@@ -1380,8 +1376,8 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         // The manager it names is what outlives the Activity, because the engine
         // leaves the write-back worker running when the drain outruns that wait,
         // which is why the manager is built on the application context and why the
-        // five notices in onCreate close over that and a main-thread Handler
-        // rather than over this Activity.
+        // device-folder notices in onCreate close over that and a main-thread
+        // Handler rather than over this Activity.
         keyboardDismissal.release()
         val stopping = if (::safManager.isInitialized) safManager else null
         val logTag = tag
@@ -1975,8 +1971,11 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 // Guarded because the window may already be gone: dismissing a
                 // dialog whose Activity has been destroyed throws, and an
                 // exception raised inside this handler would reach the scope's
-                // handler rather than being the cancellation it is.
-                if (!isFinishing && !isDestroyed) dialog.dismiss()
+                // handler rather than being the cancellation it is. Destroyed
+                // alone: a screen that is only finishing still has its window,
+                // and a dialog left on it is logged as a leaked window when the
+                // screen goes.
+                if (!isDestroyed) dialog.dismiss()
                 throw e
             } catch (e: SecurityException) {
                 // Guarded like the cancellation branch above, and for the reason
@@ -1990,7 +1989,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 // screen the user has already left. Skipping it leaves nothing on
                 // screen, because the window that carried the dialog is what has
                 // gone; the notice below is a toast and outlives it.
-                if (!isFinishing && !isDestroyed) dialog.dismiss()
+                if (!isDestroyed) dialog.dismiss()
                 // The class and not the exception: its message quotes the tree URI, see [openSafFolder].
                 Logger.e(tag, "SAF permission revoked during sync: ${e.javaClass.simpleName}")
                 reportSyncFailure(
@@ -1999,7 +1998,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 )
             } catch (e: FolderBusyException) {
                 // Guarded for the reason the handler above it is.
-                if (!isFinishing && !isDestroyed) dialog.dismiss()
+                if (!isDestroyed) dialog.dismiss()
                 // Refused before the mirror was touched, by a save, delete or rename
                 // still on its way to the provider, or by another sync of the folder.
                 // Nothing is half-written, so the watcher goes back even for the folder
@@ -2015,7 +2014,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 )
             } catch (e: Exception) {
                 // Guarded for the reason the handler above it is.
-                if (!isFinishing && !isDestroyed) dialog.dismiss()
+                if (!isDestroyed) dialog.dismiss()
                 // The class and not the exception: its message can name a path or the tree URI.
                 Logger.e(tag, "SAF sync failed: ${e.javaClass.simpleName}")
                 // Never null: many exceptions carry no message, and the sentence then
@@ -2082,10 +2081,11 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
     /**
      * The local copies of device folders, as the JSON the storage screen renders.
      *
-     * Runs on the WebView's bridge thread and walks every mirror to size it.
-     * That is slow enough to be worth naming, and the alternative is worse: a
-     * screen that offers a removal without saying what it costs is the shape this
-     * whole feature exists to replace.
+     * Runs on the bridge's disk worker (`AndroidBridge.listSafMirrors` hands it
+     * there, so the page is not held while it runs) and walks every mirror to
+     * size it. That is slow enough to be worth naming, and the alternative is
+     * worse: a screen that offers a removal without saying what it costs is the
+     * shape this whole feature exists to replace.
      */
     private fun deviceFolderCopiesAsJson(): String =
         JSONArray().apply {
@@ -2276,9 +2276,10 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
             // Taken down only when nobody answered: a button already dismissed its
             // own dialog, and dismiss() is not cancel(), so this cannot release the
             // latch a second time. Guarded like every other dialog call here,
-            // because the window may have gone while the wait ran.
+            // because the window may have gone while the wait ran; destroyed
+            // alone, because a screen that is only finishing still has it.
             runOnUiThread {
-                if (!isFinishing && !isDestroyed) shown.get()?.dismiss()
+                if (!isDestroyed) shown.get()?.dismiss()
             }
         }
         return got && confirmed.get()
@@ -3424,11 +3425,12 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         rendererCrashLoopShown = control == RELOAD_URL
         // Not under the away-from-home notice: one still waiting for the
         // previous-crash dialog is dropped, and one on screen is taken down,
-        // guarded because dismissing a dialog whose window has gone throws.
+        // guarded because dismissing a dialog whose window has gone throws, and
+        // on that alone because a screen that is only finishing still has it.
         crashDialog?.setOnDismissListener(null)
         awayFromHomePendingShow = null
         awayFromHomeNotice?.setOnDismissListener(null)
-        if (!isFinishing && !isDestroyed) awayFromHomeNotice?.dismiss()
+        if (!isDestroyed) awayFromHomeNotice?.dismiss()
         // Not answered, so the editor load that follows this page says it again.
         returnUnansweredAwayFromHome()
         AppNotices.drop(this)
@@ -4716,9 +4718,10 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * the host, for as long as it was watched; with the hook replaced by a
      * function that does nothing it stayed up. [KeyboardDismissal] therefore
      * calls the hook half a second after the report, and not if the keyboard is
-     * back by then or a change of configuration explains the report: any report
-     * within two seconds of it, and where a turn found the keyboard up and the
-     * app refocuses the editor for it, one until
+     * back by then or a turn of the screen explains the report (a change of its
+     * shape, [isScreenTurn]; a change of night mode or of the keyboard attached
+     * is not one): any report within two seconds of the turn, and where it found
+     * the keyboard up and the app refocuses the editor for it, one until
      * [KeyboardDismissal.AFTER_REFOCUS_MS] after that refocus
      * ([KeyboardDismissal.TURN_CAP_MS] after the turn at most). The cost is
      * that a scroll in that half second can raise a keyboard put away with Back,
@@ -7066,7 +7069,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
     }
 
     /**
-     * Fix #2: Injects CSS to enlarge touch targets when the pointer is a fingertip.
+     * Injects CSS to enlarge touch targets when the pointer is a fingertip.
      * Targets WCAG 2.5.5 minimum 44×44px for primary actions, 36px for list items.
      *
      * The test is `pointer: coarse`, not a viewport width, because what these rules
@@ -7175,9 +7178,9 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                     // either one alone still holds the row open.
                     '  .activitybar .action-label.separator,',
                     '  .context-view .action-label.separator { min-height: 0 !important; padding: 0 !important; line-height: normal !important; }',
-                    // Dropped whole by a WebView without :has() (Chromium 105; this
-                    // build floors at 107), which leaves the divider as it was rather
-                    // than breaking the rules around it.
+                    // Dropped whole by a WebView without :has() (before Chromium 105),
+                    // which leaves the divider as it was rather than breaking the rules
+                    // around it.
                     '  .activitybar .action-item:has(> .action-label.separator),',
                     '  .context-view .action-item:has(> .action-label.separator) { min-height: 0 !important; }',
                     // Unprefixed, so it is wider than its name: the workbench also uses
@@ -7351,7 +7354,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
     }
 
     /**
-     * Fix #7: Overrides window.open() to route external URLs through AndroidBridge.
+     * Overrides window.open() to route external URLs through AndroidBridge.
      * VS Code web's link handling (Markdown preview, "Open in Browser") calls window.open(),
      * which is blocked by shouldOverrideUrlLoading. This intercepts at the JS level instead.
      */
@@ -8935,6 +8938,29 @@ internal const val SYNC_PROGRESS_INTERVAL_MS = 100L
  */
 internal fun syncProgressIsDue(done: Int, total: Int, sinceLastMs: Long): Boolean =
     done >= total || sinceLastMs >= SYNC_PROGRESS_INTERVAL_MS
+
+/**
+ * The notice for a folder created in the editor that did not arrive whole on the device: [lost]
+ * entries short, or stopped at the cap this app sets ([capped]), which has its own wording because
+ * the limit is the app's and not the device's. [folder] is the folder's own name.
+ */
+internal fun uploadIncompleteNotice(resources: Resources, folder: String, lost: Int, capped: Boolean): String =
+    if (capped) {
+        resources.getString(R.string.saf_upload_capped, folder)
+    } else {
+        resources.getQuantityString(R.plurals.saf_upload_incomplete, lost, lost, folder)
+    }
+
+/**
+ * The notice for files an open of [folder] keeps inside the app, naming the [first] of them: one
+ * file has a sentence of its own, as a kept edit does, and [count] of them take the plural.
+ */
+internal fun filesKeptInAppNotice(resources: Resources, folder: String, count: Int, first: String): String =
+    if (count == 1) {
+        resources.getString(R.string.saf_file_kept_in_app, folder, first)
+    } else {
+        resources.getQuantityString(R.plurals.saf_files_kept_in_app, count, count, folder, first)
+    }
 
 /** Keeps the device suffix visible in a short notice. */
 internal fun preservedDeviceNameForNotice(name: String): String =
