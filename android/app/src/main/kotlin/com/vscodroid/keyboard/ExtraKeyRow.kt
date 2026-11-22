@@ -724,7 +724,9 @@ class ExtraKeyRow @JvmOverloads constructor(
      * rebuild is not free. Comparing the packed pages returns from unchanged
      * packing, except for density changes when moving to another display: those
      * must rebuild the keys and their pixel sizes even at the same logical width.
-     * The selected page and latched modifiers survive that rebuild. A font-scale
+     * The selected page number (capped at the new last page) and latched
+     * modifiers survive that rebuild; a repack that changes the page count can
+     * show other keys under that number. A font-scale
      * change still recreates the activity to resolve its text resources again.
      *
      * When it does rebuild, the latched modifiers have to be carried across by

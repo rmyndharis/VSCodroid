@@ -17,8 +17,9 @@ package com.vscodroid
  * [MAX_STATEMENT_LINES], by counting parentheses on that same prose-free view,
  * which is what keeps a `" ("` in a message from unbalancing the count.
  * [taintedNames] walks declarations to a fixpoint from the places a sensitive
- * value enters: a [SOURCES] call, and any name a signature or a property declares
- * as a [URI_NAME].
+ * value enters: a [SOURCES] call or the `url` of a name declared as a WebView, and
+ * any name a signature or a property declares as a [URI_NAME]. A log statement
+ * reading such a source itself, with no name between, is a leak as well.
  *
  * Both seeds are here rather than one per guard on purpose. A guard written from
  * the one spelling that had just been fixed catches that spelling and nothing
@@ -41,8 +42,19 @@ internal object LogTaint {
     private val SOURCES = listOf(
         Regex("""\bworkbenchUrl\("""),
         Regex("""\bgetConnectionToken\("""),
-        Regex("""\b(?:wv|webView)\??\.url\b"""),
+        // The address a WebView holds, read off any name that reads as one: `wv`,
+        // `webView`, `targetView`, a client's `view`. Spelled out as `wv` and
+        // `webView` alone, it missed MainActivity reading the page's address off
+        // `targetView`.
+        Regex("""\b\w*(?:[vV]iew|wv)\??\.url\b"""),
     )
+
+    /**
+     * A name a declaration gives a WebView type (`WebView`, `EditorWebView`), whose
+     * `url` is a source whatever the name is: [SOURCES] knows the spellings this code
+     * uses, and this the rest.
+     */
+    private val WEBVIEW_NAME = Regex("""\b([A-Za-z_]\w*)\s*:\s*\w*WebView\b""")
 
     /**
      * A name a declaration gives the type `Uri`: a parameter, a property, a local.
@@ -117,10 +129,11 @@ internal object LogTaint {
     /** Statements printing a tainted value with nothing hiding it. */
     fun leaks(source: List<String>): List<String> {
         val tainted = taintedNamesIn(source)
+        val views = webViewNamesIn(source)
         return statements(source).filter { st ->
             val code = stripTreated(st.code)
             val raw = stripTreated(st.raw)
-            tainted.any { mentions(code, it) } ||
+            tainted.any { mentions(code, it) } || readsSource(code, views) ||
                 INTERPOLATION.findAll(raw).any { hole ->
                     IDENTIFIER.findAll(hole.value).any { it.value in tainted }
                 }
@@ -148,10 +161,27 @@ internal object LogTaint {
 
     private fun logsTreatedBy(source: List<String>, calls: List<String>): List<String> {
         val tainted = taintedNamesIn(source)
+        val views = webViewNamesIn(source)
         return statements(source).filter { st ->
-            argumentsOf(st.raw, calls).any { arg -> tainted.any { mentions(arg, it) } }
+            argumentsOf(st.raw, calls).any { arg -> tainted.any { mentions(arg, it) } || readsSource(arg, views) }
         }.map { "${it.line}: ${it.raw}" }
     }
+
+    /** Every name [WEBVIEW_NAME] finds declared in [source]. */
+    private fun webViewNamesIn(source: List<String>): Set<String> =
+        source.filterNot(::isComment).map(::codeView)
+            .flatMap { line -> WEBVIEW_NAME.findAll(line).map { it.groupValues[1] }.toList() }
+            .toSet()
+
+    /**
+     * Whether [text] reads a token-bearing value where it enters, rather than through a
+     * name holding it: a [SOURCES] call, or the `url` of one of [views]. Asked of a log
+     * statement as well as of a declaration, so printing `targetView.url` with no local
+     * between is read as the leak it is.
+     */
+    private fun readsSource(text: String, views: Set<String>): Boolean =
+        SOURCES.any { it.containsMatchIn(text) } ||
+            views.any { Regex("""\b${Regex.escape(it)}\??\.url\b""").containsMatchIn(text) }
 
     private class Statement(val line: Int, val raw: String, val code: String)
 
@@ -254,6 +284,7 @@ internal object LogTaint {
 
     private fun taintedNamesIn(source: List<String>): Set<String> {
         val code = source.filterNot(::isComment).map(::codeView)
+        val views = webViewNamesIn(source)
         val names = linkedSetOf<String>()
         for (line in code) {
             for (m in URI_NAME.findAll(line)) names += m.groupValues[1]
@@ -269,7 +300,7 @@ internal object LogTaint {
                 for (m in DECLARATION.findAll(line)) {
                     val name = m.groupValues[1]
                     val initialiser = m.groupValues[2]
-                    val seeded = SOURCES.any { it.containsMatchIn(initialiser) }
+                    val seeded = readsSource(initialiser, views)
                     val derived = names.toList()
                         .any { mentions(stripTreated(initialiser), it) }
                     if (seeded || derived) names += name
