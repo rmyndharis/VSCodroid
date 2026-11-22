@@ -28,12 +28,13 @@ import java.lang.reflect.InvocationTargetException
  * The setup files that were still written straight to their destination:
  * `.bash_profile`, `.tmux.conf`, `~/.ssh/config` and the welcome README.
  *
- * All four are guarded by their own existence and all are reached only from
- * `runSetupLocked`, which `isFirstRun()` gates on versionName or versionCode:
- * no per-launch repair reads any of those paths, and `repairTruncatedSetupFiles`
- * covers `.bashrc` and settings.json alone. `writeText` creates and truncates
- * before writing a byte, so a write that failed left a file that satisfied the
- * guard for the life of the install, and one Retry tap cemented it.
+ * All four are guarded by their own existence and all are reached from
+ * `runSetupLocked`, which `isFirstRun()` gates on versionName or versionCode.
+ * The per-launch `repairTruncatedSetupFiles` writes the three dotfiles only
+ * through a link whose file has gone, and never reads what is in them.
+ * `writeText` creates and truncates before writing a byte, so a write that
+ * failed left a file that satisfied the guard for the life of the install, and
+ * one Retry tap cemented it.
  *
  * For the two shell files what that costs is confined to INTERACTIVE LOGIN
  * shells, which is what a tmux window is: they read `.bash_profile` and never
@@ -43,8 +44,8 @@ import java.lang.reflect.InvocationTargetException
  * through `BASH_ENV`) are unaffected, and `PROJECTS_DIR` still arrives through
  * the process environment.
  *
- * For `~/.ssh/config` it costs every clone, fetch and push over ssh: the file is
- * what `GIT_SSH_COMMAND` passes with `-F`, and the Termux ssh resolves `~` to
+ * For `~/.ssh/config` it costs every clone, fetch and push over ssh: a truncated
+ * file is still readable, so `GIT_SSH_COMMAND` passes it with `-F`, and the Termux ssh resolves `~` to
  * its own compiled-in prefix, so without the absolute `IdentityFile` and
  * `UserKnownHostsFile` it looks for the key in a directory this app cannot read.
  * The welcome README costs a greeting, which is why it warns rather than throws.
