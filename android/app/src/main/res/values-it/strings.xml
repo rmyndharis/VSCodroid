@@ -199,6 +199,7 @@
          that got there first, and the only thing the user needs is to stop tapping. -->
     <string name="toolchain_already_installing">Quella toolchain è già in fase di installazione.</string>
     <string name="toolchain_failed_internal">Installazione non riuscita. I dettagli sono nel log dell\'app.</string>
+    <string name="toolchain_remove_failed">Impossibile rimuovere quella toolchain. I dettagli sono nel log dell\'app.</string>
     <string name="toolchain_install_after_setup">Attendi la fine della configurazione, poi installa di nuovo.</string>
     <string name="progress_cancel">Annulla</string>
     <string name="progress_retry">Riprova</string>

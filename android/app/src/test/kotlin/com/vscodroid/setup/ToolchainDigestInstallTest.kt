@@ -1501,4 +1501,59 @@ class ToolchainDigestInstallTest {
         assertEquals(300_000_000L, File(filesDir, "usr/opt/test/old-a.bin").length())
         assertEquals(1, timesRequested(zipPath), "the refusal should come after the download, not before it")
     }
+
+    // ── what a killed copy left is given back before a refusal ───────────
+
+    /**
+     * Where the atomic writer of a copy that was killed partway left its temporary file: beside the file it was
+     * replacing, under the name the writer gives it. Only the next write into that folder removes it, and that comes
+     * after the checks of free room.
+     */
+    private fun strayCopy(folder: String, bytes: Long): File {
+        val hash = Integer.toUnsignedString("libbig.so".hashCode(), 16)
+        val stray = File(filesDir, "$folder/.vscodroid-$hash-${java.util.UUID.randomUUID()}.tmp~")
+        sparse(stray.relativeTo(filesDir).path, bytes)
+        return stray
+    }
+
+    /** The same device as the refusal above, which a killed copy's 100 MB file is all that keeps from installing. */
+    @Test
+    fun `a pre-flight about to refuse first takes back what a killed copy left`() {
+        zipBytes = packZip(2_048)
+        publishFrom(releaseDir, unpackedBytes = 400_000_000L)
+        publishManifest("$zipDigest  toolchain_test.zip\n")
+        val stray = strayCopy("usr/lib", 100_000_000L)
+        every { anyConstructed<StatFs>().availableBytes } answers {
+            800_000_000L + if (stray.exists()) 0L else 100_000_000L
+        }
+
+        installAndWait()
+
+        assertEquals(AssetPackStatus.COMPLETED, statuses().last(), "refused for room a killed copy held: $events")
+        assertFalse(stray.exists(), "the killed copy's temporary file is still there")
+    }
+
+    /**
+     * The check after the extraction asks the same. The stray sits outside the recorded tree, so the first check,
+     * which the credit passes, has no reason to look for it.
+     */
+    @Test
+    fun `the check after the extraction also takes back what a killed copy left`() {
+        zipBytes = packZip(2_048)
+        publishFrom(releaseDir, unpackedBytes = 400_000_000L)
+        publishManifest("$zipDigest  toolchain_test.zip\n")
+        recordInstalled()
+        sparse("usr/opt/test/old-a.bin", 300_000_000L)
+        sparse("usr/opt/test/old-b.bin", 100_000_000L)
+        val stray = strayCopy("usr/lib", 100_000_000L)
+        var reads = 0
+        every { anyConstructed<StatFs>().availableBytes } answers {
+            if (reads++ == 0) 800_000_000L else 420_000_000L + if (stray.exists()) 0L else 100_000_000L
+        }
+
+        installAndWait()
+
+        assertEquals(AssetPackStatus.COMPLETED, statuses().last(), "refused for room a killed copy held: $events")
+        assertFalse(stray.exists(), "the killed copy's temporary file is still there")
+    }
 }
