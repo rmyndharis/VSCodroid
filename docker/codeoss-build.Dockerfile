@@ -9,7 +9,12 @@
 # remote/ native modules (which remote/.npmrc forces to build_from_source) need
 # no qemu at all. Microsoft's own pipeline reaches for multiarch/qemu-user-static
 # precisely because it builds arm64 on x64; we can skip that whole layer.
-FROM ubuntu:24.04
+#
+# The base image is pinned by digest, for the reason the Node tarball below is:
+# a tag is whatever the registry serves that day, and this image compiles every
+# server tree an APK ships. To move it, read the index digest the tag names now
+# (`docker buildx imagetools inspect ubuntu:24.04`) and replace the one here.
+FROM ubuntu:24.04@sha256:9c7f200c07e3d4a03e7249d2c16bf66a51120fb876aa2242cf31451412543289
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -36,29 +41,36 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Verified against SHASUMS256.txt rather than piped straight into tar.
-# download-npm.sh and build-native-addons.sh already hold the same nodejs.org
-# artifact to this bar, and this one has further reach than either: it is the
-# Node that compiles the server tree every APK ships, so a tampered host runtime
-# is baked into the output rather than confined to a build step.
+# What node-v$NODE_VERSION-linux-<arch>.tar.xz must hash to, one per build
+# architecture this file accepts. Pinned here rather than read from the
+# SHASUMS256.txt beside the tarball, because a file fetched from the same host
+# as the tarball attests nothing the host could not also change. Moving
+# NODE_VERSION means replacing both, from the release's SHASUMS256.txt; the
+# arm64 one is the digest download-npm.sh pins while the two versions agree.
+ARG NODE_SHA256_ARM64=58c9520501f6ae2b52d5b210444e24b9d0c029a58c5011b797bc1fe7105886f6
+ARG NODE_SHA256_X64=55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742
+
+# Checked against the digest pinned above rather than piped straight into tar.
+# download-npm.sh and build-native-addons.sh hold their nodejs.org artifacts to
+# the same bar, and this one has further reach than either: it is the Node that
+# compiles the server tree every APK ships, so a tampered host runtime is baked
+# into the output rather than confined to a build step.
 #
-# grep exits non-zero when the release does not list the file, and `set -eux`
-# turns that into a failed build -- fail closed, not an empty expectation that
-# sha256sum would then accept.
+# An empty digest is refused before sha256sum sees it, so a build argument
+# cleared by mistake fails closed rather than comparing against nothing.
 RUN set -eux; \
     case "$(dpkg --print-architecture)" in \
-        arm64) node_arch=arm64 ;; \
-        amd64) node_arch=x64 ;; \
+        arm64) node_arch=arm64; node_sha256="$NODE_SHA256_ARM64" ;; \
+        amd64) node_arch=x64; node_sha256="$NODE_SHA256_X64" ;; \
         *) echo "unsupported build arch: $(dpkg --print-architecture)" >&2; exit 1 ;; \
     esac; \
+    test -n "$node_sha256"; \
     tarball="node-v${NODE_VERSION}-linux-${node_arch}.tar.xz"; \
     cd /tmp; \
     curl -fsSL -o "$tarball" "https://nodejs.org/dist/v${NODE_VERSION}/$tarball"; \
-    curl -fsSL -o SHASUMS256.txt "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt"; \
-    grep " $tarball\$" SHASUMS256.txt > expected.sha256; \
-    sha256sum -c expected.sha256; \
+    echo "$node_sha256  $tarball" | sha256sum -c -; \
     tar -xJf "$tarball" -C /usr/local --strip-components=1; \
-    rm -f "$tarball" SHASUMS256.txt expected.sha256; \
+    rm -f "$tarball"; \
     node --version; \
     npm --version
 

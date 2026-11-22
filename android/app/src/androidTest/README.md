@@ -13,8 +13,8 @@ has since been measured too, and it fails for the same underlying reason. See
 
 Because nothing schedules them, the cadence is a person's. `CONTRIBUTING.md`
 names the moments; the one that belongs to this directory is **after touching
-MainActivity, SplashActivity, NodeService, ProcessManager or FirstRunSetup**, and
-before tagging a release.
+MainActivity, SplashActivity, NodeService, ProcessManager, FirstRunSetup,
+SafSyncEngine or SafStorageManager**, and before tagging a release.
 
 ## Why CI cannot run them
 
@@ -27,8 +27,8 @@ Measured on both runner families:
 | `ubuntu-latest` | x86_64 | present, but only accelerates x86_64 images |
 | `ubuntu-24.04-arm` | aarch64 | absent, and no `vmx`/`svm` flag either |
 
-So an arm64 image would run under pure software emulation, for a 340 MB APK
-that boots a Node server. This is the same wall `scripts/device-test.sh`
+So an arm64 image would run under pure software emulation, for an APK of
+several hundred megabytes that boots a Node server. This is the same wall `scripts/device-test.sh`
 documents for the same reason.
 
 ## The route that has now been measured
@@ -63,8 +63,9 @@ What that leaves, none of it tried here:
 
 - self-hosted hardware, where the virtualisation is real;
 - a physical device attached to a runner;
-- nothing else. Software emulation of a 340 MB APK that boots a Node server was
-  never a serious option, and it is the only thing these runners can offer.
+- nothing else. Software emulation of an APK of several hundred megabytes that
+  boots a Node server was never a serious option, and it is the only thing these
+  runners can offer.
 
 One item from the old estimate is worth keeping, because it stays true and is
 cheap: `build.yml`'s asset cache key is `assets-${{ env.NDK_VERSION }}-${{ hashFiles(...) }}` with no
@@ -115,17 +116,20 @@ prints nothing in Gradle's console output.
 
 **At HEAD there are 140 tests across 25 classes.** That figure is not kept by
 hand: `scripts/check-instrumented-inventory.py` counts the sources with
-`grep -cE '^\s*@Test'` and fails the build when this file disagrees with them,
+`grep -cE '^\s*@Test'` over this directory, Kotlin and Java alike, and fails
+the build when this file disagrees with them,
 because it had said 22 and then 37 while the suite was neither, and a stale
 count in a document whose subject is coverage is worse than no count.
 
-The recorded run in this checkout is a Pixel 7 Pro AVD on API 33, 2026-08-23:
-50 tests, no failures, no skips, **66.8 s** of suite time. Where it goes is
-lopsided and worth knowing before you wait on it: `SplashActivityTest` 21.4 s
-and `ServerHealthTest` 14.2 s are two thirds of it, both of them waiting on real
-extraction and a real server; `TextEntryInstrumentedTest` and
-`GestureTrackpadTouchInstrumentedTest` together cost 0.03 s. Read your own run's
-XML rather than trusting this paragraph, which is what it is here to encourage.
+The most recent recorded run is an API 29 AVD, 2026-11-21: 140 tests, no
+failures, two skips (the two that skip by design, named in the table below),
+**89.7 s** of suite time. Where it goes is lopsided and worth knowing before you
+wait on it: `SplashActivityTest` 22.9 s, `ExtraKeyButtonTouchInstrumentedTest`
+13.0 s, `EditorShutdownOnDeviceTest` 12.6 s and `ServerHealthTest` 11.3 s are
+two thirds of it, three of them waiting on real extraction or a real server;
+`TextEntryInstrumentedTest` and `GestureTrackpadTouchInstrumentedTest` together
+cost 0.08 s. Read your own run's XML rather than trusting this paragraph, which
+is what it is here to encourage.
 
 ## What is here, and what it is worth
 
@@ -137,15 +141,15 @@ XML rather than trusting this paragraph, which is what it is here to encourage.
 | `EditorGatewayOnDeviceTest` | Runs the actual Android filesystem-socket relay against disposable local backends. Checks binary bytes and the HTTP Host header, response delivery after a client half-close, Unicode socket paths, recovery after a native read polling timeout, bounded connection setup when the Unix listen backlog is full, retention of the public listener after backend failure or withdrawal, and the room made for a new client, on a gateway of four slots so that four child processes fill it: with every slot held by connections another process opened (`toybox nc` children), a client of the test process is served and the oldest of the others is closed; with every slot held by the test process a client of another process is refused and none of its own is closed; and a connection another process makes from an address and a port it chose (`ChosenSourceClient`, run by `app_process`: from another loopback address with the listener's port number, or with the port number of one of the test process's own connections) is still closed for a client of the test process. It does not start the packaged editor or qualify workbench activation. |
 | `PipGuidanceOnDeviceTest` | Runs the generated interactive pip helpers and noninteractive `BASH_ENV` through the APK's `libbash.so` under the app uid. A substituted Python command produces pip error records without network access or package installation. Build failures retain stderr and exit status, receive accurate toolchain advice once per shell, and remove temporary records; missing packages receive no build advice and successful calls stay quiet. An older interactive helper is upgraded while preserving user content and avoiding repeated appends. This does not establish compatibility of third-party packages or wheels. |
 | `ProfileExtensionPreservationOnDeviceTest` | Runs bundled-extension extraction and manifest reconciliation with real APK assets in isolated app-private storage. Named profiles retain an older copy of an extension the user installed, bytes and manifest, while the default profile advances, including absolute-path references and malformed or unreadable manifests. A profile's entry for one of the app's own extensions follows the update instead (also when it names the directory by path alone, and without listing the extension twice), and the older copy is removed. Unreferenced copies are removed, and removing a profile reference allows reclamation after reopening the setup context. A fetched extension's new version reaches the default profile even when only another profile lists a gallery copy of it. No first-run setup or running editor is required; these cases do not establish workbench activation. |
-| `ServerHealthTest` | The server becomes reachable, answers its readiness probe, and survives activity recreation. None of this is reachable from a JVM test. |
-| `MainActivityTest` | WebView and ExtraKeyRow initial state; the About dialog's trademark disclaimer, which is a stated legal requirement rather than cosmetic. |
+| `ServerHealthTest` | The server becomes reachable on the port the app's gateway bound, answers its readiness probe with the commit of the tree this install extracted, and survives activity recreation. None of this is reachable from a JVM test. |
+| `MainActivityTest` | WebView and ExtraKeyRow initial state, and that the WebView first shows the placeholder or the workbench and never an error page; that the consent to leave a page the app gives its own navigation ends when the next page starts, and not when an older page finishes; the About dialog's title and its trademark disclaimer, which is a stated legal requirement rather than cosmetic. |
 | `SplashActivityTest` | First-run extraction, and that a later launch skips it. The slow ones. |
 | `FileObserverTreeSemanticsTest` | The platform behaviour the SAF write-back rests on: that a watch covers a directory and not a tree, that the path an event reports is the bare entry name, and that inotify's directory flag survives the trip through FileObserver. Needs no app state at all, so it has no precondition that a skip could hide. |
 | `SafWatchWiringTest` | That those semantics are wired up: a save two directories down and a `.vscode/` settings file are both queued for write-back, a persistent `.tmp` file is queued while an internal staging file ending in `.vscodroid-partial` is not, deleting a watched directory releases its watch, and a skipped directory is never watched at all. The layer above `FileObserverTreeSemanticsTest`: that one proves the platform behaves as assumed, this one proves the assumption was used. |
 | `SafDirectoryWatchTeardownTest` | Holds a real directory enumeration across shutdown or watch-session replacement and checks that the old callback cannot register observers into the current session. A stale directory removal must also leave replacement observers installed. Uses disposable app-private directories and captures worker failures. |
 | `StorageAnchoredCleanupTest` | Exercises Android's descriptor-relative directory operations and the production cleanup boundary with canonical paths, trusted app-root aliases, redirected descendants, directory replacement and unreadable subtrees. Checks preservation of unrelated bytes and the count of bytes actually removed. Uses only disposable cache fixtures. Hard-link cleanup is covered by the host filesystem tests because Android apps cannot create hard links. |
 | `ResourceFileOnDeviceTest` | Exercises resource-file opening through Android descriptors: ordinary and empty files, links within admitted roots, Unicode paths, replacement by an external link or redirected parent, and refusal of directories or FIFOs. Checks descriptor closure and bounds the FIFO case without a writer. Uses only disposable cache fixtures; it does not qualify rendered extension webviews. |
-| `ExclusiveMoveOnDeviceTest` | Runs the packaged `libmove-noreplace.so` as the app runs it, on disposable cache directories. Checks that a taken name is refused with both files whole, that a free name takes the entry, that a directory is moved and refused the same way, that a path leading to another directory moves nothing, that a missing entry is not reported as a taken name, and that ten moves end well inside the second the platform's timed wait for a process would take. It is the only place that shows the app may start the helper, that the kernel lets an app make the call, and that the directory identity `java.nio` prints is the one the helper reads back. |
+| `ExclusiveMoveOnDeviceTest` | Runs the packaged `libmove-noreplace.so` as the app runs it, on disposable cache directories. Checks that a taken name is refused with both files whole, that a free name takes the entry, that a directory is moved and refused the same way, that a path leading to another directory moves nothing, that a missing entry is not reported as a taken name, and that ten moves take little longer than ten bare starts of the helper, where the platform's timed wait for a process would add up to a tenth of a second to each. It is the only place that shows the app may start the helper, that the kernel lets an app make the call, and that the directory identity `java.nio` prints is the one the helper reads back. |
 | `SafDataPreservationInstrumentedTest` | A file-backed DocumentsProvider in a separate process receives watched saves and file creations, returning the same bytes on reopening. A stable delivered save follows an external deletion through two reopens without recreating the document; an undelivered edit with the same length and timestamp survives that deletion. A failed upload-journal write must refuse the operation before creating or opening a provider document for writing, retain the local bytes and any existing device copy, and report the refusal. A blocked provider read overlaps a local edit with unchanged size and timestamp; both versions must survive the download and reopening. Directory deletes retain provider-only or changed children and refuse an unavailable child listing, with a known-content recursive delete as the control and a real watcher case for a provider-only child. The cleanup cases retain unrecorded workspace bytes and reclaim a fully vouched mirror. The fixture grants and revokes temporary tree access; these cases do not establish revocation of a persisted URI permission. Fixtures use only disposable private directories; a test-only receiver guarded by the shell's DUMP permission grants and revokes access to their fixed tree for the debug application. |
 | `ToolchainInsetsTest` | With edge-to-edge enforced, the Toolchains screen stays out of both system bars: toolbar below the status bar, grid above the navigation bar. The screen shipped drawing its title under the clock, so this is the regression the padding exists to prevent. |
 | `ExecTrampolineOnDeviceTest` | The one claim no JVM test can settle: that the trampoline starts a program the app is otherwise forbidden to run. SELinux denies `execute_no_trans` on `app_data_file`, so nothing under `filesDir` can be execve'd whatever its mode, and only a test running as the app itself can ask that -- `adb shell run-as` runs in a domain that is allowed to execute files this one may not, so it reports success for a binary that fails on the device. The control is asserted first and is not optional: if a direct execve of the copied payload SUCCEEDS here, nothing was being denied on this device, and the case that runs it through the trampoline would pass for a reason that has nothing to do with the trampoline. The whole toolchain design rests on this. |
@@ -179,13 +183,13 @@ Two consequences worth knowing before the first red run:
 
 - On a freshly wiped device the fix is to **launch the app once** and re-run.
   Arranging that inside `setUp` was attempted, did not work, and was not shipped.
-- These tests probe whichever port `PortFinder.getOrAllocatePort()` recorded,
-  read back through `ServerReadyHelper.waitForServer`, so a device where 13337
-  is held sends them to the port the app actually moved to. They probed 13337
-  by literal once, and on such a device went red for a reason that had nothing
-  to do with the server. The one case left is a scan range full end to end,
-  where the app falls back to an ephemeral port it deliberately does not
-  record; the failure message names it.
+- These tests probe the port the app's editor gateway bound, read back through
+  `ServerReadyHelper.waitForServer` from the gateway itself (the service runs in
+  the test's process), so a device where the home port is held sends them to the
+  port the app actually moved to. They probed 13337 by literal once, and then
+  `PortFinder`'s record, which names only the home port: a start that finds home
+  busy binds another port for that process and never records it, and on such a
+  device all three went red for a reason that had nothing to do with the server.
 
 ## Two things this directory has already taught us
 

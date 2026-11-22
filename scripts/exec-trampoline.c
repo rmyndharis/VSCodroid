@@ -80,6 +80,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 // The loader the app is allowed to execute. Hardcoded rather than read from the
@@ -89,15 +90,10 @@
 // process trees.
 static const char *kLoader = "/system/bin/linker64";
 
-// Two absolute paths (a target and an optional script argument), their tab, a
-// command name, and slack. A line longer than this is skipped rather than
-// truncated and used: a truncated path is a command that fails naming a path the
-// user never chose.
-#define MAX_LINE (2 * PATH_MAX + 64)
-
 // How many arguments a row may carry after its target. Eight covers the longest
 // row written today (a JDK launcher's three VM options) with room; a longer one
-// is refused whole rather than cut, for the reason MAX_LINE gives.
+// is refused whole rather than cut, since a row run without some of its
+// arguments is a command the table never named.
 #define MAX_ROW_ARGS 8
 
 // The exit status a shell reports for "command not found". Used for every way
@@ -158,45 +154,21 @@ int main(int argc, char **argv) {
     char *args[MAX_ROW_ARGS];
     int nargs = 0;
 
-    char line[MAX_LINE];
-    for (;;) {
-        // Planted before every read, and gone only when fgets filled the
-        // buffer: fgets writes its terminator after the last character it read,
-        // so the very last byte is written by no read except one that used every
-        // byte there is. That is the question the drain below has to ask, and
-        // strlen cannot answer it. strlen stops at the first NUL, so a short
-        // record carrying one in the middle is indistinguishable from a record
-        // too long to fit, and draining for it swallows the record after it as
-        // well: fgets has already consumed this record's newline, so the drain
-        // runs to the end of the NEXT one, and a perfectly good entry
-        // disappears without a word.
-        //
-        // Planted here rather than re-armed after the read, because on a full
-        // buffer the byte it sits in holds fgets's terminator, and writing over
-        // that would leave strlen below walking off the end of the array.
-        line[sizeof(line) - 1] = '\n';
-        if (!fgets(line, sizeof(line), f)) break;
-        int filled = line[sizeof(line) - 1] == '\0';
-        size_t len = strlen(line);
-        if (len == 0) continue;
-        // The line did not fit: every byte of the buffer was used and the last
-        // of them does not end a line. Drain the rest of it so the next fgets
-        // starts on a real line rather than on this one's tail, which would
-        // otherwise be read as a record of its own.
-        if (filled && line[sizeof(line) - 2] != '\n' && !feof(f)) {
-            int c;
-            while ((c = fgetc(f)) != EOF && c != '\n') { }
-            continue;
-        }
-        // A record that fitted, did not end a line, and is not the last thing in
-        // the file: fgets stopped at a newline it consumed, so what strlen sees
-        // ending early means a NUL inside the record. Skipped rather than parsed,
-        // and this is the whole reason to test for it. strlen would hand the tab
-        // scan below a path cut off at that byte, and an absolute path cut short
-        // is still absolute, so it would reach the loader as a real request to
-        // run something the table never named. Not drained, because fgets already
-        // took this record's newline and the next record is intact.
-        if (!filled && line[len - 1] != '\n' && !feof(f)) {
+    // One whole record per read, however long. A fixed buffer had to choose
+    // between cutting a long record, which hands the loader a path the table
+    // never named and reads the rest as a record of its own, and dropping it,
+    // which loses a row the app wrote without a word; getline does neither.
+    char *line = NULL;
+    size_t capacity = 0;
+    ssize_t got;
+    while ((got = getline(&line, &capacity, f)) != -1) {
+        size_t len = (size_t)got;
+        // A NUL inside the record, wherever it sits and whether or not a newline
+        // ends it: strlen stops there, so every string function below would see
+        // the record cut at that byte, and an absolute path cut short is still
+        // absolute. It would reach the loader as a real request to run
+        // something the table never named, so the record is skipped instead.
+        if (strlen(line) != len) {
             fprintf(stderr, "vscodroid: %s: skipping a damaged toolchain entry\n", name);
             continue;
         }
@@ -261,7 +233,9 @@ int main(int argc, char **argv) {
 
     // Closed before the exec, not left to it. Nothing here sets FD_CLOEXEC,
     // so an open descriptor on the table would be inherited by every
-    // toolchain command this starts.
+    // toolchain command this starts. The matched row was copied out of the
+    // line buffer, so the buffer can go with it.
+    free(line);
     fclose(f);
 
     if (!target) {

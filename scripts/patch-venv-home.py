@@ -131,16 +131,26 @@ def patch(path):
     if MARKER in source:
         return False
 
-    if ANCHOR not in source:
+    found = source.count(ANCHOR)
+    if found == 0:
         raise SystemExit(
             f'{path}: the two lines this rewrite anchors on are gone.\n'
             'CPython moved `context.python_dir = dirname` in ensure_directories.\n'
             'Re-read venv/__init__.py and re-anchor rather than loosening the match:\n'
             'a silent miss here ships a Python whose venv cannot install pip.'
         )
+    # Exactly once, because the marker is what --check reads: rewriting the
+    # first of two would leave a second assignment writing the old home behind
+    # a marker that says the module is fixed.
+    if found > 1:
+        raise SystemExit(
+            f'{path}: the two lines this rewrite anchors on appear {found} times.\n'
+            'Re-read ensure_directories and anchor on the assignment that sets\n'
+            'the home rather than rewriting whichever comes first.'
+        )
 
     with open(path, 'w', encoding='utf-8') as handle:
-        handle.write(source.replace(ANCHOR, REPLACEMENT, 1))
+        handle.write(source.replace(ANCHOR, REPLACEMENT))
     return True
 
 
@@ -216,6 +226,22 @@ def self_test():
         empty = os.path.join(root, 'nowhere')
         assert _decide(native, empty) == native, 'the guard invented a home'
 
+        # An anchor met twice is refused, and nothing is written. Rewriting the
+        # first alone left the marker in the file, so --check passed a module
+        # whose second copy of the assignment still wrote the old home.
+        doubled = os.path.join(root, 'doubled', 'venv', '__init__.py')
+        os.makedirs(os.path.dirname(doubled))
+        with open(doubled, 'w', encoding='utf-8') as handle:
+            handle.write(ANCHOR + '\n' + ANCHOR)
+        refused = False
+        try:
+            patch(doubled)
+        except SystemExit:
+            refused = True
+        with open(doubled, encoding='utf-8') as handle:
+            assert refused and handle.read() == ANCHOR + '\n' + ANCHOR, \
+                'an anchor that appears twice was rewritten once'
+
         # A target that is not there is refused in both modes. The write mode is
         # the one download-python.sh runs, and a silent exit 0 there ships a
         # Python with no venv module at all, which the Gradle gate cannot notice
@@ -229,8 +255,9 @@ def self_test():
                 refused = True
             assert refused, 'a target that does not exist was accepted'
     print('ok -- venv home decided correctly for an installation, a bare '
-          'directory, an active environment and a missing base prefix, and a '
-          'target that does not exist refused in both modes')
+          'directory, an active environment and a missing base prefix, an '
+          'anchor met twice refused, and a target that does not exist refused '
+          'in both modes')
 
 
 def main(argv):
