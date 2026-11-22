@@ -14,6 +14,7 @@ import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeFalse
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -500,9 +501,8 @@ class ResourceInterceptionWiringTest {
     @Test
     fun `a refused resource is never opened`() {
         check(sshKey.setReadable(false, false)) { "could not make the fixture unreadable" }
-        check(!sshKey.canRead()) {
-            "the fixture is still readable, so this test would pass without proving anything"
-        }
+        // An open by an account that reads whatever the mode says would succeed and log nothing.
+        assumeFalse(sshKey.canRead(), "This account bypasses file read permissions")
 
         intercept(sshKey.path, openFolder = null)
 
@@ -538,9 +538,7 @@ class ResourceInterceptionWiringTest {
             writeText("body{}")
             check(setReadable(false, false)) { "could not make the fixture unreadable" }
         }
-        check(!locked.canRead()) {
-            "the fixture is still readable, so this test would pass without proving anything"
-        }
+        assumeFalse(locked.canRead(), "This account bypasses file read permissions")
 
         intercept(locked.path, openFolder = null)
 

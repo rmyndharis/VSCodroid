@@ -7,6 +7,7 @@ import io.mockk.mockkStatic
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeFalse
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -27,7 +28,8 @@ import java.nio.file.attribute.PosixFilePermission
  * The refusal is made real rather than mocked: the file sits in a directory with its
  * write bit cleared, which is what `unlink` consults. That is also why every case here
  * asserts the file survived. Run as root the permission would not bite, and without that
- * assertion this file would pass by measuring an ordinary successful delete.
+ * assertion this file would pass by measuring an ordinary successful delete; an account
+ * that still writes the sealed directory, as root does, skips the case instead.
  */
 class ClearCachesAccountingTest {
 
@@ -88,6 +90,7 @@ class ClearCachesAccountingTest {
         val gone = write("tmp/scratch.bin", 100)
         val stays = write("npm-cache/sealed/big.bin", 1_000)
         seal(sealed)
+        assumeFalse(sealed.canWrite(), "This account bypasses directory write permissions")
 
         val freed = StorageManager.clearCaches(context)
 

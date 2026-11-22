@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeFalse
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -100,7 +101,7 @@ class ToolchainReinstallRecoveryTest {
         val source = File(filesDir, "source").apply { writeText("replacement") }
         val dest = File(filesDir, "dest").apply { writeText("previous") }
         assertTrue(source.setReadable(false, false))
-        assertFalse(source.canRead(), "the fixture needs an unreadable source file")
+        assumeFalse(source.canRead(), "This account bypasses file read permissions")
         try {
             assertThrows(IOException::class.java) { copyDirectoryTree(source, dest) }
 
