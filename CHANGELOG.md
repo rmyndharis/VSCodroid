@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - The process monitor warns, naming the file, when Settings shows **Vscodroid > Antigravity: Run Engine** on but the settings file keeps it off: an error VS Code works around, over 1 MiB, or nesting past 64 levels.
-- A notice says when not every change made while a device folder opened reached the device.
+- A notice says when sending the changes a program made while a device folder, or another folder, opened fails partway.
 
 ### Changed
 
@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A file made or saved in a subfolder just after it is renamed, or a save held back there, is sent under the new name instead of staying inside VSCodroid.
 - A file deleted in a device folder's subfolder just after the subfolder is renamed is deleted on the device too.
 - A folder renamed twice in quick succession, or inside a folder just renamed, ends up on the device under its last name only.
+- A folder renamed onto a name and deleted there before another folder is renamed onto that name is deleted on the device instead of coming back at the next open, or a notice says it stays.
 - Renaming a folder in a device folder no longer sends again files you have not changed since they were sent, a leftover of an earlier rename that gave way to another onto the same name.
 - A folder moved out of a device folder is no longer taken for the rename of an unrelated folder arriving within the same second, which overwrote the departed folder's files on the device.
 - A folder renamed onto an existing empty folder in a device folder is watched under that name, so saves directly inside it reach the device.
