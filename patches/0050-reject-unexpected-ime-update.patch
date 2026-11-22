@@ -529,36 +529,42 @@ No other letter is judged, because a step on a reopened letter would
 have this shape where its keyboard writes it, though no recording here
 holds such a step, nor a stale letter of those scripts: a letter with a
 stroke, which NFD does not take apart (đ over d, which a Telex dd
-writes), a
-transliteration (a Devanagari ka picked over k), a phonetic or
-multi-tap step (a Bengali kha over ka, a Cyrillic be over a), a final
+writes), a transliteration (a Devanagari ka picked over k), a phonetic
+or multi-tap step (a Bengali kha over ka, a Cyrillic be over a), a final
 form (an Arabic teh marbuta over heh), a Turkish dotless i over i. Han,
 kana and Hangul are left out with them, as the fourth rule leaves them
 out, and digits are not letters. What it costs: a stale letter of those
-scripts written over the last letter still replaces it, since nothing
-it says tells it from such a step. A last letter outside the basic plane
-is two units and is not judged. An earlier form of this rule took only
-the basic Latin alphabet without accents, so an é written over a
-different last letter still replaced it (line twé). The earlier word's
-range ends before the caret without
-touching it, its text is the range's own text and one letter more, and
-the caret is asked right after the written text: a correction of the
-word before a space asks for the caret to move by the change in length,
-and the word under the caret touches it. Nor is the caret asked where it
-is: a keyboard that commits the word before a single space asks for
-that, because Chromium puts the caret at the end of a commit (then over
-the of the and a space, the caret asked at 4), which an earlier form of
-this rule took for the stale write, typing the n after the space; the
-stale write moved it back (7 against 13). The count of forced restarts
-goes on across the letters typed this way, and after six in a row, with
-nothing else typed and less than half a minute between them, the letter
-is still typed at the caret and no restart is forced for it: a keyboard
-that answers every restart with the same stale write is not asked to
-read the text again, and the replay ends. An earlier form of this patch
-applied the seventh write as it came, which put the letter alone over
-the word (line x). The letter typed is the one the keyboard wrote. In 5
-of the 645 runs of the batches below it was not the key that was tapped,
-3 of them in plain typing, which no rule here sees.
+scripts written over the last letter still replaces it, since nothing it
+says tells it from such a step. A last letter outside the basic plane is
+two units and is not judged. An earlier form of this rule took only the
+basic Latin alphabet without accents, so an é written over a different
+last letter still replaced it (line twé). The earlier word's range ends
+before the caret without touching it, its text is the range's own text
+and one letter more, and the caret is asked right after the written
+text: a correction of the word before a space asks for the caret to move
+by the change in length, and the word under the caret touches it. Nor is
+the caret asked where it is: a keyboard that commits the word before a
+single space asks for that, because Chromium puts the caret at the end
+of a commit (then over the of the and a space, the caret asked at 4),
+which an earlier form of this rule took for the stale write, typing the
+n after the space; the stale write moved it back (7 against 13). What it
+costs: a stale growth of the word right before a single space asks for
+the caret where it is as well, and goes into that word (to to and a
+space with the caret after it, toe over 3..5 with the caret asked at 6,
+gives to toe and a space), where that earlier form typed the letter at
+the caret (to to e). The count of forced restarts goes on across the
+letters typed this way, and after six in a row, with nothing else typed
+and less than half a minute between them, the letter is still typed at
+the caret and no restart is forced for it: a keyboard that answers every
+restart with the same stale write is not asked to read the text again,
+and the replay ends. What it costs: such a keyboard has the letter of
+one key typed seven times (x over 5..8 sent after every restart gives
+line twoxxxxxxx); no recorded keyboard replays a stale write so. An
+earlier form of this patch applied the seventh write as it came, which
+put the letter alone over the word (line x). The letter typed is the one
+the keyboard wrote. In 5 of the 645 runs of the batches below it was not
+the key that was tapped, 3 of them in plain typing, which no rule here
+sees.
 
 A keyboard that did not read the text again after its stale letter was
 typed goes on with the range it kept. In a line holding line two, x over
@@ -569,29 +575,47 @@ None of the shapes above sees it there: the caret is past the range now,
 and no rule but the guard judges an update with no composition open. The
 range of the update whose letter was typed is kept with the version of
 the model and the primary selection that the letter left, and while the
-model is at that version and the caret where the letter left it, an
+model is at that version and the caret is where the letter left it, an
 update of the same range whose text is one letter, or the range's own
-text and one letter, is the next letter sent the same way and is typed
-at the caret too, with a composition open or none, as a stale letter is.
-A keyboard that read the text again names the caret and the word at it,
-not that range, and any edit of the model moves the version. A caret
-that has moved since was told to the keyboard, and the same offsets then
-name another place: after the stale toe over 4..6 in tob to tod to, a
-tap at the end of the earlier to and a Backspace send t over 4..6, a
-deletion of the o there, and on the next line, once the buffer starts
-at the caret's line, i over 4..6 deletes the f of if. So the update is
-judged on its own once the caret has moved. Nor is the first letter of a
-word of two letters written over both taken for the next letter: it is a
-Backspace, which the fourth rule passes as well, and it is applied where
-the keyboard sends it. The range's own text is kept with it as the
-buffer held it when the letter was typed: the letter's own cursor event
-can start the buffer at the caret's line, and the keyboard goes on with
-the offsets of the buffer before, so with line one above tob to tod to,
-the grown toe over 13..15 and then tof over 13..15 name text that the
-buffer from the caret's line no longer holds there. No recording holds a
-Backspace sent over that range either. Neither
-Gboard recorded did this: after every restart recorded the keyboard read
-the text again.
+text and one letter, and that asks for the caret right after what it
+writes, as the stale letter did, is the next letter sent the same way
+and is typed at the caret too, with a composition open or none, as a
+stale letter is. A keyboard that read the text again names the caret and
+the word at it, not that range, and any edit of the model moves the
+version. A caret that is elsewhere was told to the keyboard, and the
+same offsets then name another place: after the stale toe over 4..6 in
+tob to tod to, a tap at the end of the earlier to and a Backspace send t
+over 4..6, a deletion of the o there, and on the next line, once the
+buffer starts at the caret's line, i over 4..6 deletes the f of if. So
+the update is judged on its own while the caret is elsewhere. The caret
+is compared, not followed: moved away and back with no edit between, it
+reads the range again. An update of the range that asks for the caret
+anywhere but right after what it writes is judged on its own as well: a
+keyboard that corrects the earlier to of that line to top asks for the
+caret moved by the change in length (top over 4..6, the caret asked at
+15), and the correction is applied (tob top tod toe), where a test of
+the range and the text alone would type the p at the caret (tob to tod
+toep). Nor is the first letter of a word of two letters written over
+both taken for the next letter: it is a Backspace, which the fourth rule
+passes as well, and it is judged on its own. It is told by the text the
+range held when the letter was typed and by the text the range holds
+now, which differ once the letter's cursor event starts the buffer at
+the caret's line: with xx to above zz a, the stale toe over 3..5 is
+typed as zz ae, and a Backspace on ae sends a over 3..5, which a test of
+the text the range held alone would take for the next letter (zz aea).
+What it costs: a next letter sent over the old offsets whose text starts
+a text of two letters that the buffer holds there now is taken for that
+Backspace and judged on its own. The range's own text is kept with it as
+the buffer held it when the letter was typed: the letter's own cursor
+event can start the buffer at the caret's line, and the keyboard goes on
+with the offsets of the buffer before, so with line one above tob to tod
+to, the grown toe over 13..15 and then tof over 13..15 name text that
+the buffer from the caret's line no longer holds there. More than one
+letter over the range, or a combining mark alone, is judged on its own,
+as before the range was kept (xy over 5..8 after the x gives line xyx).
+No recording holds a Backspace or a correction sent over that range
+either. Neither Gboard recorded did this: after every restart recorded
+the keyboard read the text again.
 
 A keyboard can also take back a correction that the editor applied for
 it, and the take-back has the shape of one letter over a reopened word:
@@ -800,7 +824,7 @@ and Japanese lines typed, converted and turned came out as typed in 224
 updates with no refusal.
 
 diff --git a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
-index babfbb09..97167319 100644
+index babfbb09..5d04f066 100644
 --- a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
 +++ b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
 @@ -87,9 +87,28 @@ export class NativeEditContext extends AbstractEditContext {
@@ -876,7 +900,7 @@ index babfbb09..97167319 100644
  			this._focusTracker.pause();
  			domNode.blur();
  			domNode.focus();
-@@ -544,6 +575,65 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -544,6 +575,66 @@ export class NativeEditContext extends AbstractEditContext {
  		}
  		const selectionEndOffset = this._previousEditContextSelection.endExclusive;
  		const selectionStartOffset = this._previousEditContextSelection.start;
@@ -893,7 +917,8 @@ index babfbb09..97167319 100644
 +		// update: six restarts forced by different updates, under different rules, spend it as six forced by the same update do. Refusals that go on leave the person with input
 +		// that does nothing until something else is typed, so the update is passed, as the editor without this patch passes it, and the count starts again when the model's version moves
 +		// or half a minute passes with no forced restart. A stale letter is the exception: typing it at the caret does something, so it is typed past the bound as before it, and
-+		// no restart is forced for it there, which ends the replay of a keyboard that answers every restart with the same stale write.
++		// no restart is forced for it there, which ends the replay of a keyboard that answers every restart with the same stale write. What that costs: such a keyboard has the
++		// letter of one key typed seven times (line twoxxxxxxx).
 +		const staleLetter = this._staleLetter(e, selectionStartOffset, selectionEndOffset);
 +		if (staleLetter !== undefined || this._refusalRestarts < 6 && (this._isBeyondBuffer(e) || this._isRememberedWordRewrite(e, selectionStartOffset, selectionEndOffset) ||
 +			this._isTailDropOnReopen(e, selectionStartOffset, selectionEndOffset) ||
@@ -942,7 +967,7 @@ index babfbb09..97167319 100644
  		this._previousEditContextSelection = new OffsetRange(e.selectionStart, e.selectionEnd);
  
  		// With several cursors, an update that reaches outside the primary selection is about the
-@@ -570,6 +660,7 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -570,6 +661,7 @@ export class NativeEditContext extends AbstractEditContext {
  				this._expectedCaretOffset = e.selectionStart;
  				this._onType(viewController, input);
  				this._expectedCaretOffset = undefined;
@@ -950,7 +975,7 @@ index babfbb09..97167319 100644
  				return;
  			}
  			this._dismissOtherCursors();
-@@ -633,6 +724,242 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -633,6 +725,250 @@ export class NativeEditContext extends AbstractEditContext {
  		this._expectedCaretOffset = e.selectionStart === e.selectionEnd ? e.selectionStart : undefined;
  		this._onType(viewController, typeInput);
  		this._expectedCaretOffset = undefined;
@@ -1026,21 +1051,28 @@ index babfbb09..97167319 100644
 +	// (_isOneUnitOverWord), over the last letter of it (_isLetterOverLastLetter), or onto an earlier word that it grew by that letter (_isGrowthOfEarlierWord). The range
 +	// and the text the keyboard wrote are from a composition it kept from before the turn, and the letter is the only part of the update that is new: it is typed at the
 +	// caret, where the person typed it, and the update is refused as it was, so that the keyboard reads the text again. A keyboard that did not read it goes on with
-+	// that range: with the model and the caret as the letter left them (its version and the primary selection), an update of the same range that writes one letter, or
-+	// the range's own text and one letter, is the next letter sent the same way, with a composition open or none, since one that read the text again names the caret and
-+	// not that range (in line two, x over 5..8 typed as line twox, then y over 5..8, which wrote line yx). A caret moved since then (a tap, a cursor key) was told to the
-+	// keyboard, and the same offsets then name the word tapped, or another line once the buffer starts at the caret's: the update is judged on its own. Nor is the first
-+	// letter of a word of two letters written over both a letter: it is a Backspace, passed here as _isOneUnitOverWord passes it. The range's own text is the one it held
-+	// when the letter was typed: the letter's own cursor event can start the buffer at the caret's line, while the keyboard goes on with the offsets of the buffer before
-+	// (with line one above tob to tod to, the grown toe over 13..15 and then tof over 13..15, which the buffer from the caret's line holds only in part). The exact take-back
-+	// of a correction the editor applied is not a stale letter: see _takesBackReplacement.
++	// that range: with the model at the version the letter left and the primary selection where it left it, an update of the same range that writes one letter, or the
++	// range's own text and one letter, and asks for the caret right after what it writes, as the stale letter did, is the next letter sent the same way, with a composition
++	// open or none, since one that read the text again names the caret and not that range (in line two, x over 5..8 typed as line twox, then y over 5..8, which wrote line
++	// yx). A caret that is elsewhere when the update comes (a tap, a cursor key) was told to the keyboard, and the same offsets then name the word tapped, or another line
++	// once the buffer starts at the caret's: the update is judged on its own. The caret is compared, not followed: moved away and back with no edit between, it reads the
++	// range again. An update that asks for the caret elsewhere is judged on its own too: a correction of the earlier word asks for the caret moved by the change in length
++	// (after the stale toe over 4..6 of tob to tod to, top over 4..6 with the caret asked at 15). Nor is the first letter of a word of two letters written over both a letter:
++	// it is a Backspace, passed here as _isOneUnitOverWord passes it, and it is told by the text the range held when the letter was typed and by the text it holds now, which
++	// differ once the buffer starts at the caret's line (xx to above zz a, the stale toe over 3..5 typed as zz ae, then a Backspace on ae, a over 3..5). What it costs: a next
++	// letter sent over the old offsets whose text starts a text of two letters that the buffer holds there now is taken for that Backspace and judged on its own. The range's
++	// own text is the one it held when the letter was typed: the letter's own cursor event can start the buffer at the caret's line, while the keyboard goes on with the
++	// offsets of the buffer before (with line one above tob to tod to, the grown toe over 13..15 and then tof over 13..15, which the buffer from the caret's line holds only in
++	// part). The exact take-back of a correction the editor applied is not a stale letter: see _takesBackReplacement.
 +	private _staleLetter(e: ITextUpdateEvent, selectionStartOffset: number, selectionEndOffset: number): string | undefined {
 +		const repeated = this._staleLetterRange;
 +		if (repeated?.version === this._context.viewModel.model.getVersionId() && this._primarySelection.equalsSelection(repeated.selection) &&
-+			e.updateRangeStart === repeated.start && e.updateRangeEnd === repeated.end) {
++			e.updateRangeStart === repeated.start && e.updateRangeEnd === repeated.end &&
++			e.selectionStart === e.selectionEnd && e.selectionStart === e.updateRangeStart + e.text.length) {
 +			const own = repeated.text;
 +			const letter = e.text.startsWith(own) ? e.text.slice(own.length) : e.text;
-+			if (this._isOneLetter(letter) && !(Array.from(own).length === Array.from(e.text).length + 1 && own.startsWith(e.text))) {
++			const now = this._previousEditContextText.slice(e.updateRangeStart, e.updateRangeEnd);
++			if (this._isOneLetter(letter) && ![own, now].some(held => Array.from(held).length === Array.from(e.text).length + 1 && held.startsWith(e.text))) {
 +				return letter;
 +			}
 +		}
@@ -1094,7 +1126,8 @@ index babfbb09..97167319 100644
 +	// into it). The range ends before the caret and does not touch it, which no honest update does with the caret moved to its own end: a correction of the word before a space
 +	// asks for the caret to move by the change in length, and the word under the caret touches it. Nor is the caret asked where it is: a keyboard that commits the word before
 +	// a single space asks for that, because Chromium puts the caret at the end of a commit (then over the of the and a space, the caret asked at 4), and the stale write moves it
-+	// back. Judged only as the first update of a composition that has typed nothing.
++	// back. What it costs: a stale growth of the word right before a single space asks for the caret where it is too, and is applied (to to and a space, toe over 3..5 with the
++	// caret asked at 6, gives to toe and a space). Judged only as the first update of a composition that has typed nothing.
 +	private _isGrowthOfEarlierWord(e: ITextUpdateEvent, selectionStartOffset: number, selectionEndOffset: number): boolean {
 +		if (!isAndroid || !this._compositionOpen || this._compositionTyped || selectionStartOffset !== selectionEndOffset || e.selectionStart !== e.selectionEnd ||
 +			!(e.updateRangeStart >= 0 && e.updateRangeStart < e.updateRangeEnd && e.updateRangeEnd < selectionStartOffset && selectionStartOffset <= this._previousEditContextText.length)) {
@@ -1193,7 +1226,7 @@ index babfbb09..97167319 100644
  	}
  
  	// Whether the update changes no text. It replaces nothing with nothing, or its text is the cached
-@@ -755,6 +1082,21 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -755,6 +1091,21 @@ export class NativeEditContext extends AbstractEditContext {
  		this._applyingInputMethodEdit = false;
  	}
  

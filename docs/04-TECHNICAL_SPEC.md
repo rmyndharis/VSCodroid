@@ -1258,10 +1258,23 @@ is not applied either, and the typo stays. A letter typed after a turn while the
 holds the range it reopened can arrive as a write into that range: alone over the word (`x`
 over `two` of `line two`), over the word's last letter, or as an earlier word with the same
 text grown by the letter. Each of these is refused and its letter typed at the caret as one
-edit (`line twox`), and while nothing else has changed the text and the caret has not moved, the
-next letter sent over the same range, which a keyboard that did not read the text again sends,
-is typed at the caret too, with a composition open or none; a Backspace on a word of two letters,
-which writes the first letter over both, is a deletion and is applied. A letter over the last
+edit (`line twox`), and while nothing else has changed the text and the caret is where the
+letter left it, the next letter sent over the same range with the caret asked right after it,
+which a keyboard that did not read the text again sends, is typed at the caret too, with a
+composition open or none. The caret is compared, not followed, so a caret moved away and back
+with no edit between reads the range again. That next letter is one letter, or the range's text
+and one letter: more text over the range, or a combining mark alone, is judged as before (`xy`
+over the range after `x` gives `line xyx`). An update of the range that asks for the caret
+anywhere else, as a correction of the earlier word does, is judged on its own, and so is a
+Backspace on a word of two letters, which writes the first letter over both and is told from a
+letter by the text the range held when the letter was typed and by the text it holds now. A
+keyboard that answers every restart with the same stale write has the letter of that one key
+typed seven times (`line twoxxxxxxx`). The earlier word grown by the letter is told by the
+caret it asks for, right after the letter and away from the caret. A word right before a single
+space that grows by a letter with the caret asked where it is, which is how a keyboard commits
+`the` as `then`, is applied. A stale growth of that word asks for the same caret and goes into
+the word (`to to` and a space, then `toe` over 3..5, give `to toe` and a space). A letter over
+the last
 letter is taken for one when both are letters of the basic Latin alphabet, accented or not, with
 different base letters once case and the accents are set aside, so that an accent or a Telex step
 (`é` over `e`, `â` over `a`) is applied. No other letter is judged: a letter with a stroke (`đ`
