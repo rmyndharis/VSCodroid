@@ -358,6 +358,7 @@
         <item quantity="one">%2$s: %1$d Datei, %3$s, bleibt nur in VSCodroid, da sie im Geräteordner gelöscht worden sein kann. Speichern Sie sie erneut, um sie dorthin zu senden.</item>
         <item quantity="other">%2$s: %1$d Dateien, darunter %3$s, bleiben nur in VSCodroid, da sie im Geräteordner gelöscht worden sein können. Speichern Sie eine Datei erneut, um sie dorthin zu senden.</item>
     </plurals>
+    <string name="saf_open_changes_unsent">%1$s: Nicht jede Änderung, die während des Öffnens vorgenommen wurde, hat den Geräteordner erreicht. Eine in dieser Zeit gespeicherte Datei wird gesendet, wenn Sie sie erneut speichern. Eine in dieser Zeit gelöschte Datei erscheint beim nächsten Öffnen wieder, und ein in dieser Zeit umbenannter Ordner behält auf dem Gerät seinen alten Namen.</string>
 
     <!-- The Toolchains toolbar's only icon-only control, and the app's only visible
          way back out of that screen. Without it a screen reader announces an

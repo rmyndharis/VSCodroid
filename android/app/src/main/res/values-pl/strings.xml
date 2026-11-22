@@ -370,6 +370,7 @@
         <item quantity="many">%2$s: %1$d plików, w tym %3$s, pozostaje tylko w VSCodroid, bo mogły zostać usunięte z folderu na urządzeniu. Zapisz plik ponownie, aby go tam wysłać.</item>
         <item quantity="other">%2$s: %1$d pliku, w tym %3$s, pozostaje tylko w VSCodroid, bo mogły zostać usunięte z folderu na urządzeniu. Zapisz plik ponownie, aby go tam wysłać.</item>
     </plurals>
+    <string name="saf_open_changes_unsent">%1$s: nie wszystkie zmiany wprowadzone podczas otwierania trafiły do folderu na urządzeniu. Plik zapisany w tym czasie zostanie wysłany, gdy zapiszesz go ponownie. Plik usunięty w tym czasie pojawi się ponownie przy następnym otwarciu folderu, a folder, którego nazwę zmieniono w tym czasie, zachowa na urządzeniu poprzednią nazwę.</string>
 
     <!-- The Toolchains toolbar's only icon-only control, and the app's only visible
          way back out of that screen. Without it a screen reader announces an

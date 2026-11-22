@@ -352,6 +352,7 @@
     <plurals name="saf_files_kept_in_app">
         <item quantity="other">%2$s: %3$s を含む %1$d 個のファイルは、デバイスのフォルダーで削除された可能性があるため、VSCodroid の中にだけ残っています。送信するには、ファイルをもう一度保存してください。</item>
     </plurals>
+    <string name="saf_open_changes_unsent">%1$s: 開いている間に行われた変更の一部が、デバイスのフォルダーに届きませんでした。その間に保存したファイルは、もう一度保存すると送信されます。その間に削除したファイルは次にフォルダーを開いたときに再び表示され、その間に名前を変更したフォルダーはデバイス上では元の名前のままです。</string>
 
     <!-- The Toolchains toolbar's only icon-only control, and the app's only visible
          way back out of that screen. Without it a screen reader announces an

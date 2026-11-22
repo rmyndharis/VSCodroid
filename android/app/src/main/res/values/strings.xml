@@ -376,6 +376,11 @@
         <item quantity="one">%2$s: %1$d file, %3$s, stays only in VSCodroid, because it may have been deleted in the device folder. Save it again to send it there.</item>
         <item quantity="other">%2$s: %1$d files, %3$s among them, stay only in VSCodroid, because they may have been deleted in the device folder. Save a file again to send it there.</item>
     </plurals>
+    <!-- Shown once when sending what a program changed while a device folder opened stopped
+         partway. What was not sent is one of three things, and the sentence covers each: a
+         save that stays inside VSCodroid, a deletion the device did not make, and a rename it
+         did not make. -->
+    <string name="saf_open_changes_unsent">%1$s: not every change made while it was opening reached the device folder. A file saved then is sent when you save it again. A file deleted then comes back at the next open, and a folder renamed then keeps its old name on the device.</string>
 
     <!-- The Toolchains toolbar's only icon-only control, and the app's only visible
          way back out of that screen. Without it a screen reader announces an

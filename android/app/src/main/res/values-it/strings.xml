@@ -364,6 +364,7 @@
         <item quantity="many">%2$s: %1$d file, tra cui %3$s, restano solo in VSCodroid, perché potrebbero essere stati eliminati nella cartella del dispositivo. Salva di nuovo un file per inviarlo lì.</item>
         <item quantity="other">%2$s: %1$d file, tra cui %3$s, restano solo in VSCodroid, perché potrebbero essere stati eliminati nella cartella del dispositivo. Salva di nuovo un file per inviarlo lì.</item>
     </plurals>
+    <string name="saf_open_changes_unsent">%1$s: non tutte le modifiche fatte durante l\'apertura sono arrivate nella cartella del dispositivo. Un file salvato in quel momento viene inviato quando lo salvi di nuovo. Un file eliminato in quel momento ricompare alla prossima apertura, e una cartella rinominata in quel momento mantiene il nome precedente sul dispositivo.</string>
 
     <!-- The Toolchains toolbar's only icon-only control, and the app's only visible
          way back out of that screen. Without it a screen reader announces an

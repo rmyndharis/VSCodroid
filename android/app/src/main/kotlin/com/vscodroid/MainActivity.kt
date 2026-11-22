@@ -930,6 +930,18 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
             }
         }
 
+        // Sending what a program changed while the folder opened failed partway. What was not sent then is a save
+        // inside the app, a deletion or a rename the device did not get; one sentence says all three.
+        safManager.onOpenChangesUnsent { dir ->
+            val message = appContext.getString(
+                R.string.saf_open_changes_unsent,
+                mirrorDisplayName(storage.getPersistedFolders(), dir),
+            )
+            toMainThread.post {
+                AppNotices.showNotice(appContext, message, Toast.LENGTH_LONG, screen.get())
+            }
+        }
+
         // The other direction: documents the device holds that did not reach the editor.
         // Its own wording, because "the only copy is inside VSCodroid" is the opposite of
         // true for these, and would send the user looking for a file that is safe.

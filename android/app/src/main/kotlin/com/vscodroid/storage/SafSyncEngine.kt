@@ -1744,6 +1744,7 @@ class SafSyncEngine(private val context: Context) {
         recordedDigest: (String) -> ByteArray?,
     ) {
         val vouched = recorded.toHashSet()
+        val recordedFor = recorded.associateBy { it.substringBefore('\t') }
         var budget = keptCopyDigestBytes
         for (doc in documents.sortedByDescending { it.lastModified }) {
             if (doc.isDirectory) continue
@@ -1803,7 +1804,14 @@ class SafSyncEngine(private val context: Context) {
                     )
                 }
             } catch (_: Exception) {
-                // An unreadable or redirected kept copy remains unvouched.
+                // An unreadable or redirected kept copy remains unvouched. One a program deleted after phase 2 kept
+                // it has nothing left to open, and without a digest its delete kept the device's copy as changed by
+                // another app: it takes the previous record's digest of the copy phase 2 recorded, unread, as a file
+                // deleted before the open reached it does, and the delete is checked against the device's bytes.
+                if (!file.exists() && !isLink(file)) recordedFor[escapeRecordPath(doc.relativePath)]?.let { line ->
+                    val digest = recordedDigest(line) ?: return@let
+                    deviceSeen.replace(file.absolutePath, seen, DeviceState(seen.stamp, digest, line.substringAfterLast('\t').toLong()))
+                }
             }
         }
     }
@@ -3501,7 +3509,15 @@ class SafSyncEngine(private val context: Context) {
             // thread that is already running. What the open recorded goes first, off this
             // lock, because turning it into jobs asks the provider.
             val worker = thread(start = false, name = "saf-writeback", isDaemon = true) {
-                changes?.let { replayChangesDuringOpen(it, mirrorDir, safUri, opening) }
+                // Contained, and the loop runs whatever became of it: an exception that ended the thread here left
+                // the saves held behind the replay, and every save after them, in a queue nothing polled.
+                if (changes != null) try {
+                    replayChangesDuringOpen(changes, mirrorDir, safUri, opening)
+                } catch (t: Throwable) {
+                    Logger.w(tag, "Could not send what changed while ${mirrorDir.name} opened: ${t.javaClass.simpleName}")
+                    if (t is InterruptedException) Thread.currentThread().interrupt()
+                    onOpenChangesUnsent(mirrorDir)
+                }
                 runWriteBackLoop(opening) { opening.running }
             }
             opening.worker = worker
@@ -3545,9 +3561,9 @@ class SafSyncEngine(private val context: Context) {
                     interrupted = true
                     break
                 }
-                val job = session.queue.poll()
+                val job = session.take()
                 if (job != null) {
-                    processWriteBack(session, job)
+                    try { processWriteBack(session, job) } finally { session.finished() }
                 } else if (!retryHeldBack(session)) {
                     // Parked, not slept: a stop wakes it with unpark. An interrupt lands in whatever the
                     // thread is doing, and in the middle of a save the next read of the local file fails
@@ -3568,10 +3584,10 @@ class SafSyncEngine(private val context: Context) {
         // carrying the flag, losing exactly what this drain exists to save.
         if (Thread.interrupted()) interrupted = true
 
-        var remaining = session.queue.poll()
+        var remaining = session.take()
         while (remaining != null) {
-            processWriteBack(session, remaining)
-            remaining = session.queue.poll()
+            try { processWriteBack(session, remaining) } finally { session.finished() }
+            remaining = session.take()
         }
         // Said after the last poll rather than before it, so the flag is never set while
         // this thread could still deliver: an event that reads it answers "nothing will
@@ -5087,7 +5103,8 @@ class SafSyncEngine(private val context: Context) {
      * Told when something the editor deleted is still on the device folder because the
      * delete did not happen there: the provider refused it, or the engine could not name the
      * document to ask it about, as when a folder was renamed and removed again inside one
-     * poll and the device had no document of the new name yet.
+     * poll, the device had no document of the new name yet, and this engine had not read
+     * what the rename carried there ([SafSyncEngine.resolvedAtRun]).
      *
      * Its own seam rather than [onKeptOnDevice], which reads as a decision this
      * app made and explains it with a reason that is false here: the editor did
@@ -5109,10 +5126,19 @@ class SafSyncEngine(private val context: Context) {
      * Its own seam rather than [onDeleteRefused], whose sentence says the device folder
      * refused and sends the person to delete the file in their file manager. Nothing
      * refused here, and the file comes back at the next open, where deleting it again
-     * works. Not retried: the delete has to name the document it resolved when the event
-     * arrived, and a later lookup by path finds whatever stands there by then.
+     * works. Not retried: the delete has to name the document it resolved, and a later
+     * lookup by path finds whatever stands there by then.
      */
     internal var onDeleteBusy: (File) -> Unit = {}
+
+    /**
+     * Told, with the mirror ROOT, when the replay of what a program changed while the folder opened
+     * ([replayChangesDuringOpen]) failed before it had sent all of it. What it had not sent then stays as the
+     * replay found it: a save inside the app until the file is saved again, a deletion or a rename not made on the
+     * device, so the next open brings the device's copy back. Its own seam because none of the others is true of
+     * all three. A no-op by default for the reason [onWriteBackFailed] is.
+     */
+    internal var onOpenChangesUnsent: (File) -> Unit = {}
 
     /**
      * Told when mirror copies or conflicting local entries are set aside under `.local-`
@@ -6310,28 +6336,29 @@ class SafSyncEngine(private val context: Context) {
 
     // -- Internal: Write-back Processing --
 
-    private fun processWriteBack(session: WatchSession, job: SyncJob) {
-        val mirrorRoot = job.mirrorRoot ?: session.root
+    private fun processWriteBack(session: WatchSession, queued: SyncJob) {
+        val mirrorRoot = queued.mirrorRoot ?: session.root
         val access = mirrorRoot?.let {
-            outboundAccess(it, job.generation ?: session.generation)
+            outboundAccess(it, queued.generation ?: session.generation)
         }
         // A rename's dropped saves leave the session before the debounce below can skip the job: one
         // that gives way to a later rename onto its name has nowhere to send them, and left behind
         // they were sent again by the next rename of the same old name.
-        val claimedSaves = if (job.type == SyncType.RENAME) {
-            job.previousPath?.let { takeClaimedDrops(session, it) }.orEmpty()
+        val claimedSaves = if (queued.type == SyncType.RENAME) {
+            queued.previousPath?.let { takeClaimedDrops(session, it) }.orEmpty()
         } else emptyList()
         // Small debounce: skip a job that a more recent one for the same path makes
         // pointless, see [supersededByLaterJob]. Scoped to the session the job came off,
         // so it cannot see, or be blinded by, the jobs of a folder that is closing or one
         // that has just opened.
         if (session.queue.any {
-                it.localPath == job.localPath && it.timestamp > job.timestamp &&
-                    supersededByLaterJob(job, it)
+                it.localPath == queued.localPath && it.timestamp > queued.timestamp &&
+                    supersededByLaterJob(queued, it)
             }
         ) {
             return
         }
+        val job = if (queued.resolveAtRun) resolvedAtRun(queued, access) else queued
 
         Logger.d(tag, "Write-back: ${job.type} ${job.localPath}")
 
@@ -6419,12 +6446,12 @@ class SafSyncEngine(private val context: Context) {
                 // A rename queued ahead of this job is the other way a document that was
                 // missing when the event arrived is there by now: after `mv a b && rm -r b`
                 // in one poll the rename runs first, and the children of `b` exist on the
-                // device under that name. That is reported too, and not looked up again by
-                // path and deleted. A deletion cannot be undone, and a lookup at the drain
-                // finds whatever sits at the path by then, which is no longer the document
-                // the event named. The Explorer's own folder delete already leaves the
-                // device copy for the same reason, and deleting the folder again after the
-                // next open resolves it at once.
+                // device under that name. Such a job is looked up again when it runs only
+                // where this engine read what the rename carried there, so the delete goes
+                // through [keepsDeviceDocument]'s comparison of the bytes ([resolvedAtRun]).
+                // Anywhere else it is reported, not looked up by path and deleted: a deletion
+                // cannot be undone, and a lookup at the drain finds whatever sits at the path
+                // by then, which nothing here can tell from the document the event named.
                 var replacedLocally = false
                 var busyRefusal = false
                 val refused = when {
@@ -6518,16 +6545,16 @@ class SafSyncEngine(private val context: Context) {
                 // leave the new name absent from the device entirely, which is worse than
                 // the duplicate this job exists to avoid.
                 //
-                // A rename that succeeds does not re-upload anything, and it should not:
-                // the watcher has been writing every change in that subtree back as it
-                // happened, so re-sending it would be a file-by-file rewrite of a copy
-                // that is already correct, 1500 provider writes for a renamed `src/`,
-                // with every save queued behind them. What that rewrite would also have
-                // done is push mirror files that never reached the device because their
-                // directory fell past [MAX_WATCHED_DIRECTORIES] and no observer ever
-                // reported them. Those stay mirror-only. They were mirror-only before the
-                // rename too, this does not lose them, it just stops incidentally
-                // rescuing them.
+                // A rename that succeeds does not re-upload what the device already holds,
+                // and it should not: the watcher has been writing every change in that
+                // subtree back as it happened, so re-sending it would be a file-by-file
+                // rewrite of a copy that is already correct, 1500 provider writes for a
+                // renamed `src/`, with every save queued behind them. It sends what the
+                // record does not vouch for under the new name instead ([notVouchedUnder]):
+                // what was made or saved in the folder while no watch of it ran, between
+                // the rename on disk and the start of the watch of its new name, and with
+                // it a changed file whose directory fell past [MAX_WATCHED_DIRECTORIES],
+                // which no observer reported.
                 //
                 // A move to a different directory is a second call and has to come first:
                 // `moveDocument` returns the document's URI in its new home, and renaming
@@ -6635,7 +6662,8 @@ class SafSyncEngine(private val context: Context) {
                                                         it.localPath.startsWith(localFile.absolutePath + File.separator)
                                                 }.map { it.relativePath }
                                             } else emptyList()
-                                            replayRenamedWrites(session, job, actualMirror, replay + following, mutation)
+                                            val unvouched = notVouchedUnder(session, actualMirror, job)
+                                            replayRenamedWrites(session, job, actualMirror, replay + following + unvouched, mutation)
                                         } else {
                                             // The device stored another name and the mirror could not take it too,
                                             // so these stay under the name the person gave, where nothing sends them.
@@ -6680,6 +6708,72 @@ class SafSyncEngine(private val context: Context) {
                 }
             }
         }
+    }
+
+    /**
+     * What [dir], a folder a rename has just carried to its new name on the device, holds that the record does not
+     * vouch for under that name, as paths for [replayRenamedWrites]: a file whose copy no row names, and a folder no
+     * row lies under, which goes whole. The watcher stops the watch of a folder at its departure and starts the watch
+     * of its new name at its arrival, so what a program makes or saves in it between the rename on disk and that start
+     * raises no event, and the rename carries only what the device already held. Read once the rows have moved with
+     * the rename ([renameDeviceMemoryUnder]), and nothing where the record cannot be read, since then nothing tells a
+     * copy the device holds from one it lacks. A path a queued job sends, and a folder a rename queued behind this one
+     * moves, is left to that job.
+     */
+    private fun notVouchedUnder(session: WatchSession, dir: File, job: SyncJob): List<String> {
+        val root = job.mirrorRoot ?: return emptyList()
+        val lines = readSyncedRecord(File(root.path + SYNCED_RECORD_SUFFIX))
+        if (lines?.firstOrNull() != RECORD_HEADER) return emptyList()
+        val rows = lines.drop(1).mapTo(HashSet()) { splitRecordLine(it).first }
+        val folders = HashSet<String>()
+        for (row in rows) {
+            var folder = parentPathOf(unescapeRecordPath(row.substringBefore('\t')))
+            while (folder.isNotEmpty() && folders.add(folder)) folder = parentPathOf(folder)
+        }
+        val queued = session.queue.toList()
+        val queuedPaths = queued.mapTo(HashSet()) { it.localPath }
+        val whole = queued.filter { it.type == SyncType.RENAME }.mapTo(ArrayList()) { it.localPath + File.separator }
+        val found = ArrayList<String>()
+        for (entry in uploadPlan(dir, MAX_UPLOAD_ENTRIES).entries) {
+            val path = entry.absolutePath
+            if (path in queuedPaths || whole.any { path.startsWith(it) }) continue
+            val relative = entry.toRelativeString(root)
+            if (if (entry.isDirectory) relative in folders else identityLine(relative, entry) in rows) continue
+            if (entry.isDirectory) whole += path + File.separator
+            found += job.relativePath + "/" + entry.toRelativeString(dir)
+        }
+        return found
+    }
+
+    /**
+     * [job] with the device documents it names looked up now, for a job whose event came while a rename of its path,
+     * or of a folder above it, was still queued ([SyncJob.resolveAtRun]); that rename has run by now, in queue order.
+     *
+     * A delete names its document only where this engine has read what stands at the path under the name that rename
+     * carried it to: a file's bytes, or what is under a folder. [keepsDeviceDocument] then checks the device's copy
+     * against them, as for any delete. Elsewhere a lookup by path finds whatever stands there by now, so the delete is
+     * left as one that could not name its document.
+     *
+     * A rename names its source and, for a move, the folder the source is in. Where the device holds no source, or
+     * already holds the new name, the folder is made from the mirror, as a pair that was not claimed is.
+     */
+    private fun resolvedAtRun(job: SyncJob, access: OutboundAccess?): SyncJob {
+        val tree = job.safTreeUri ?: return job
+        val root = job.mirrorRoot ?: return job
+        if (job.type == SyncType.DELETE) {
+            val read = if (job.isDirectory) deviceSeen.keys.any { it.startsWith(job.localPath + File.separator) }
+                else deviceSeen[job.localPath]?.sha256 != null
+            return if (read) job.copy(safDocUri = resolveDocumentUri(tree, job.relativePath, access)) else job
+        }
+        if (job.type != SyncType.RENAME) return job
+        val from = File(job.previousPath ?: return job).relativeTo(root).path
+        val target = job.safParentUri ?: resolveDocumentUri(tree, parentPathOf(job.relativePath), access)
+        val source = if (providerHolds(tree, job.relativePath) == false) resolveDocumentUri(tree, from, access) else null
+        val crosses = parentPathOf(from) != parentPathOf(job.relativePath)
+        val sourceParent = if (source != null && crosses) resolveDocumentUri(tree, parentPathOf(from), access) else null
+        if (source == null || crosses && sourceParent == null) return job.copy(type = SyncType.CREATE, safParentUri = target)
+        withCurrentMemory(access) { forgetCachedSubtree(tree, from) }
+        return job.copy(safDocUri = source, safParentUri = target, safSourceParentUri = sourceParent)
     }
 
     /**
@@ -6977,10 +7071,12 @@ class SafSyncEngine(private val context: Context) {
      * The open's own work raises events too, and what is on disk once it has finished tells
      * them apart from the person's:
      * - a delete or a move away stands only where nothing is at the path now and the device
-     *   held a document there; the open sets a copy aside and puts another in its place, and
-     *   removes only what the device no longer holds. A folder moved away also stands where a
-     *   folder made since stands at its name (`mv a b; mkdir a`), told apart by its identity,
-     *   which goes with it to [handleMirrorEvent] so only its own arrival can claim it;
+     *   held a document there, or will once a rename this pass queued has run, which the job
+     *   then looks up ([SyncJob.resolveAtRun]); the open sets a copy aside and puts another in
+     *   its place, and removes only what the device no longer holds. A folder moved away also
+     *   stands where a folder made since stands at its name (`mv a b; mkdir a`), told apart by
+     *   its identity, which goes with it to [handleMirrorEvent] so only its own arrival can
+     *   claim it;
      * - a file made or saved stands only where its copy is not the one the open's record
      *   vouches for, which is every copy the open put in place, kept, or sent itself, nor
      *   one the open keeps inside the app with a row without a digest
@@ -7053,7 +7149,8 @@ class SafSyncEngine(private val context: Context) {
             var heldByDevice = false
             val replay = when {
                 removal(event) -> when {
-                    isLink(file) || !onDevice() -> null
+                    // Not on the device under this name may only mean that a rename this pass queued has not run.
+                    isLink(file) || !onDevice() && !renameQueuedOver(owner, file) -> null
                     file.exists() && !(type(event) == FileObserver.MOVED_FROM && identity != null &&
                         file.isDirectory && directoryKeyOf(file) != identity) -> null
                     (event and IN_ISDIR) != 0 -> event
@@ -7464,6 +7561,12 @@ class SafSyncEngine(private val context: Context) {
         if (renamedFrom != null && renamedFromUri != null) {
             withCurrentMemory(access) { forgetCachedSubtree(safTreeUri, renamedFrom) }
         }
+        // A source the device holds under another name until a rename still queued, of it or of a folder above it,
+        // has run, as after `mv a b; mv b c` or `mv a b; mv b/sub b/sub2` inside one poll. Its job looks it up
+        // then ([resolvedAtRun]); declined here, the folder was made again under its new name beside the one that
+        // rename carries.
+        val sourceAfterRename = renamedFrom != null && renamedFromUri == null &&
+            renameQueuedOver(target, File(rootDir, renamedFrom))
 
         // Only for a pair that crosses directories, and resolved from where the document
         // actually is rather than from the destination: `moveDocument` refuses a source
@@ -7491,7 +7594,7 @@ class SafSyncEngine(private val context: Context) {
         // skipped. Declining the pairing puts the job back on the ordinary create path,
         // which is what an unclaimed move has always fallen back to, and leaves the old
         // copy standing on the device where the user can see it.
-        val pairedRename = renamedFromUri != null && !(crossesDirectories && sourceParentUri == null)
+        val pairedRename = renamedFromUri != null && !(crossesDirectories && sourceParentUri == null) || sourceAfterRename
 
         // Asked before the offer, never after. A session that has stopped being polled
         // never starts again, so an answer taken here cannot go stale in the two
@@ -7536,9 +7639,25 @@ class SafSyncEngine(private val context: Context) {
                 generation = access.generation,
                 renamedSaves = renamedSaves,
                 previousPath = if (pairedRename) File(rootDir, renamedFrom).absolutePath else null,
+                // A delete that named nothing because the device holds it under another name until a queued rename runs.
+                resolveAtRun = sourceAfterRename ||
+                    type == SyncType.DELETE && safDocUri == null && renameQueuedOver(target, localFile),
             ),
             live = !replayed,
         )
+    }
+
+    /**
+     * Whether a rename of [file], or of a folder above it, is queued or being sent and has not landed, so the device
+     * holds what [file] names, if anything, under another name until it has; see [SyncJob.resolveAtRun]. The one being
+     * sent counts: seen while it is on its way to the device, the next rename found no source there and made the
+     * folder again under its new name.
+     */
+    private fun renameQueuedOver(session: WatchSession, file: File): Boolean {
+        val path = file.absolutePath
+        return session.underway().any {
+            it.type == SyncType.RENAME && (path == it.localPath || path.startsWith(it.localPath + File.separator))
+        }
     }
 
     /**
@@ -9051,6 +9170,12 @@ internal data class SyncJob(
     val renamedSaves: List<String> = emptyList(),
     /** The full previous mirror path whose provider state moves only after relocation. */
     val previousPath: String? = null,
+    /**
+     * Whether the device documents this job names are looked up when it runs rather than when its event arrived: the
+     * event came while a rename of its path, or of a folder above it, was still queued, so the device held them, if at
+     * all, under another name. Set for a DELETE and for a RENAME's source; see [SafSyncEngine.resolvedAtRun].
+     */
+    val resolveAtRun: Boolean = false,
 )
 
 internal enum class SyncType {
@@ -9382,6 +9507,20 @@ internal class WatchSession(
 
     /** What is queued and what is held, in the order it will be sent. */
     fun pending(): List<SyncJob> = synchronized(queue) { queue.toList() + heldForReplay.orEmpty() }
+
+    /**
+     * The job the write-back thread has taken off [queue] and not finished, set under the same lock as the poll, so a
+     * job not yet finished is always in one of the two. Guarded by [queue].
+     */
+    private var inFlight: SyncJob? = null
+
+    fun take(): SyncJob? = synchronized(queue) { queue.poll().also { inFlight = it } }
+
+    fun finished() = synchronized(queue) { inFlight = null }
+
+    /** [pending] and the job being sent, first; see [SafSyncEngine.renameQueuedOver]. */
+    fun underway(): List<SyncJob> = synchronized(queue) { listOfNotNull(inFlight) + queue.toList() + heldForReplay.orEmpty() }
+
     /** One-shot inode checks for directory names already followed after provider creation or rename. */
     val normalizedDirectories = ConcurrentHashMap<String, Pair<String, Any>>()
 

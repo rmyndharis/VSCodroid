@@ -364,6 +364,7 @@
         <item quantity="many">%2$s : %1$d fichiers, dont %3$s, restent uniquement dans VSCodroid, car ils ont peut-être été supprimés dans le dossier de l\'appareil. Enregistrez un fichier de nouveau pour l\'y envoyer.</item>
         <item quantity="other">%2$s : %1$d fichiers, dont %3$s, restent uniquement dans VSCodroid, car ils ont peut-être été supprimés dans le dossier de l\'appareil. Enregistrez un fichier de nouveau pour l\'y envoyer.</item>
     </plurals>
+    <string name="saf_open_changes_unsent">%1$s : les modifications faites pendant son ouverture n\'ont pas toutes atteint le dossier de l\'appareil. Un fichier enregistré à ce moment-là est envoyé quand vous l\'enregistrez de nouveau. Un fichier supprimé à ce moment-là réapparaît à la prochaine ouverture, et un dossier renommé à ce moment-là garde son ancien nom sur l\'appareil.</string>
 
     <!-- The Toolchains toolbar's only icon-only control, and the app's only visible
          way back out of that screen. Without it a screen reader announces an

@@ -482,18 +482,21 @@ class SafPendingDirectoryRenameTest {
         assertTrue("old/f.txt" in kept)
     }
 
-    @Test fun `a chained rename fallback retains guards at the provider path actually moved`() {
+    @Test fun `a chained rename retains guards at the provider path actually moved`() {
         add("unread-id", "directory-id", "unread.txt", "unread provider bytes")
         failedReads += "unread-id"
         open()
         renameDirectory("old", "middle")
         renameDirectory("middle", "final")
         drain()
-        assertEquals("unread provider bytes", contents("middle/unread.txt"))
+        // The second rename names its source once the first has run, so the device's folder moves twice, with the
+        // file the open could not read inside it, instead of a second folder being made from the mirror.
+        assertEquals(null, entry("middle"))
+        assertEquals("unread provider bytes", contents("final/unread.txt"))
         assertEquals("baseline", contents("final/f.txt"))
-        createThenDelete("middle/unread.txt")
+        createThenDelete("final/unread.txt")
         drain()
-        assertEquals("unread provider bytes", contents("middle/unread.txt"), "the fallback moved an unread marker off its real provider path")
+        assertEquals("unread provider bytes", contents("final/unread.txt"), "the chained rename moved an unread marker off its real provider path")
         assertFalse("unread-id" in deleted)
     }
 

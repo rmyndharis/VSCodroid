@@ -364,6 +364,7 @@
         <item quantity="many">%2$s: %1$d arquivos, entre eles %3$s, ficam só no VSCodroid, porque podem ter sido excluídos na pasta do dispositivo. Salve um arquivo novamente para enviá-lo para lá.</item>
         <item quantity="other">%2$s: %1$d arquivos, entre eles %3$s, ficam só no VSCodroid, porque podem ter sido excluídos na pasta do dispositivo. Salve um arquivo novamente para enviá-lo para lá.</item>
     </plurals>
+    <string name="saf_open_changes_unsent">%1$s: nem todas as alterações feitas enquanto a pasta abria chegaram à pasta do dispositivo. Um arquivo salvo nesse momento é enviado quando você o salva novamente. Um arquivo excluído nesse momento volta na próxima vez que a pasta for aberta, e uma pasta renomeada nesse momento mantém o nome antigo no dispositivo.</string>
 
     <!-- The Toolchains toolbar's only icon-only control, and the app's only visible
          way back out of that screen. Without it a screen reader announces an

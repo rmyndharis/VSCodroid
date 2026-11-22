@@ -1526,8 +1526,9 @@ class SafProviderClaimWaitTest {
     }
 
     @Test
-    fun `current release uploads pre-rename edits to final via fallback create while leaving intermediate folder on device`() {
-        // Without chained identity tracking, mid -> final lacks safDocUri and falls back to createInSaf.
+    fun `a folder renamed twice before the first rename is sent carries earlier edits to its last name and leaves no intermediate folder`() {
+        // mid has no document when mid -> final arrives, since the device still holds it as old: the second rename
+        // looks its source up when it runs, after old -> mid, instead of making final beside the renamed mid.
         val harness = VirtualSafHarness()
         harness.addDir("treeA", "old")
         harness.addFile("treeA", "old/child.txt", "initial")
@@ -1557,7 +1558,7 @@ class SafProviderClaimWaitTest {
         engine.runWriteBackLoop { false }
 
         assertNull(harness.findByPath("treeA", "old"))
-        assertNotNull(harness.findByPath("treeA", "mid"))
+        assertNull(harness.findByPath("treeA", "mid"), "the folder is on the device under its intermediate name too")
         assertEquals(
             "edited before renames",
             harness.findByPath("treeA", "final/child.txt")?.bytes?.toString(Charsets.UTF_8),
@@ -1870,8 +1871,9 @@ class SafProviderClaimWaitTest {
     }
 
     @Test
-    fun `current release leaves moved subfolder under renamed parent when parent and child rename before drain`() {
-        // Without path tracking through queued parent renames, p1_mid/old misses safDocUri at event time.
+    fun `a subfolder moved out of a folder whose rename is still queued leaves only its new place on the device`() {
+        // p1_mid/old has no document at event time, since the device still holds it as p1/old: the move's job looks
+        // it up when it runs, after the parent's rename, instead of leaving it under the renamed parent.
         val harness = VirtualSafHarness()
         val p1Id = harness.addDir("treeA", "p1")
         val p1Node = harness.findByPath("treeA", "p1")!!
@@ -1919,7 +1921,8 @@ class SafProviderClaimWaitTest {
 
         engine.runWriteBackLoop { false }
 
-        assertNotNull(harness.findByPath("treeA", "p1_mid/old"))
+        assertNotNull(harness.findByPath("treeA", "p1_mid"))
+        assertNull(harness.findByPath("treeA", "p1_mid/old"), "the moved subfolder stayed under the renamed folder too")
         assertEquals("deep", harness.findByPath("treeA", "p2/moved/child.txt")?.bytes?.toString(Charsets.UTF_8))
     }
 

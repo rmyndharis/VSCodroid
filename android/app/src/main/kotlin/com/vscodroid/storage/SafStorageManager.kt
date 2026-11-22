@@ -225,6 +225,15 @@ class SafStorageManager(context: Context) {
         syncEngine.onFilesKeptInApp = announce
     }
 
+    /**
+     * Told when what a program changed while a folder opened could not all be sent; see
+     * [SafSyncEngine.onOpenChangesUnsent]. Unthrottled, like [onUploadIncomplete]: it fires at
+     * most once per folder open.
+     */
+    fun onOpenChangesUnsent(announce: (File) -> Unit) {
+        syncEngine.onOpenChangesUnsent = announce
+    }
+
     private val lastFailureAnnouncedAt = AtomicLong(NEVER_ANNOUNCED)
     private val lastKeptAnnouncedAt = AtomicLong(NEVER_ANNOUNCED)
 
