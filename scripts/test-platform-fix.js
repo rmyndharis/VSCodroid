@@ -368,6 +368,14 @@ for (const prefix of [BARE_PREFIX, null]) {
         checked++;
     }
 }
+// A directory where the interceptor should be is no more a library Bionic can map than a missing file is.
+{
+    const DIR_PREFIX = path.join(tmp, 'dir-usr');
+    fs.mkdirSync(path.join(DIR_PREFIX, 'lib/libtermux-exec.so'), { recursive: true });
+    assert.deepStrictEqual(spawnedUnder([ENGINE, TOOL_ARGS, SPAWN_OPTIONS], { prefix: DIR_PREFIX }), [BIONIC_LINKER, [ENGINE, ...TOOL_ARGS], SPAWN_OPTIONS],
+        'a directory at the interceptor\'s path: the call gained an environment that names it as a preload');
+    checked++;
+}
 // A call's own environment is copied and kept: the interceptor goes before any preload it names, the variables
 // the interceptor reads come from this process when the call leaves them out, and a second pass of the same
 // start (the linker already in front, the interceptor already in place) changes nothing.
@@ -1140,6 +1148,13 @@ for (const [how, call, expected] of [
     ['execSync', ['linker64 "$HOME/.gemini/bin/agy" --hub'], ['execFileSync', OFF_ENGINE, [], { shell: false }]],
     ['execSync', ['cd ~/.gemini/bin; /system/bin/linker64 ./agy'], ['execFileSync', OFF_BIN, [], { shell: false }]],
     ['execSync', ['X=$HOME/.gem""ini/bin/agy; linker64 $X --hub'], ['execFileSync', path.join(OFF_HOME, '.gemini'), [], { shell: false }]],
+    // The shell takes quotes and backslashes out of a word, and a backslash before a line break out with the
+    // break, so each of these runs /system/bin/linker64 ~/.gemini/bin/agy (checked with sh -c).
+    ['execSync', ['link""er64 ~/.gemini/bin/agy --hub'], ['execFileSync', OFF_ENGINE, [], { shell: false }]],
+    ['execSync', ['/system/bin/linker\\64 ~/.gemini/bin/agy --hub'], ['execFileSync', OFF_ENGINE, [], { shell: false }]],
+    ['execSync', ['linker64 ~/.gem\\ini/bin/agy --hub'], ['execFileSync', OFF_ENGINE, [], { shell: false }]],
+    ['execSync', ['/system/bin/link\\\ner64 ~/.gem\\\nini/bin/agy --hub'], ['execFileSync', OFF_ENGINE, [], { shell: false }]],
+    ['exec', [`linker\\64 ${OFF_ENGINE} --hub`, CALLBACK], ['execFile', OFF_ENGINE, [], { shell: false }, null]],
     ['spawn', [BIONIC_LINKER, [OFF_ENGINE, '--hub'], { ...SPAWN_OPTIONS, shell: true }], ['spawn', OFF_ENGINE, [], { ...SPAWN_OPTIONS, shell: false }]],
     ['spawnSync', [`${BIONIC_LINKER} ${OFF_ENGINE}`, { shell: true }], ['spawnSync', OFF_ENGINE, [], { shell: false }]],
     ['execFile', [BIONIC_LINKER, [OFF_ENGINE], { shell: true }, CALLBACK], ['execFile', OFF_ENGINE, [], { shell: false }, null]],
@@ -1284,6 +1299,7 @@ for (const [how, call, cwd] of [
     ['exec', [`${BIONIC_LINKER} ${OFF_ENGINE} --hub`]],
     ['execSync', ['linker64 ~/.gemini/bin/agy --hub', { stdio: 'ignore' }]],
     ['execSync', ['X=$HOME/.gem""ini/bin/agy; linker64 $X --hub', { stdio: 'ignore' }]],
+    ['execSync', ['/system/bin/linker\\64 ~/.gem\\ini/bin/agy --hub', { stdio: 'ignore' }]],
     ['spawn', [BIONIC_LINKER, [OFF_ENGINE, '--hub'], { shell: true }]],
     // A Buffer for the cwd: where a synchronous start runs, and an asynchronous start run from the files directory.
     ['execSync', ['linker64 ./agy --hub', { cwd: bytes(OFF_BIN), stdio: 'ignore' }]],
@@ -1382,8 +1398,12 @@ for (const [label, extra] of [
     ['--hub twice', ['--hub']],
     ['an argument the extension does not build', ['--remote-control']],
     ['a bare word', ['serve']],
+    // Node starts an argument that is not a string as its text, so it is read as one, never thrown on.
+    ['a number, which Node starts as its text', [8080]],
 ]) {
-    const call = [HUB_ENGINE, [...EXTENSION_ARGS, ...extra], SPAWN_OPTIONS];
+    // With the token in the environment, which the first loop above starts, so the added argument is the only
+    // thing that can refuse the start. Without it every case here was refused for the token flag alone.
+    const call = [HUB_ENGINE, [...EXTENSION_ARGS, ...extra], withToken('0123abcd')];
     assert.deepStrictEqual(spawnedUnder(call, { home: HUB_HOME }), call, `a hub start with ${label} was started`);
     checked++;
 }

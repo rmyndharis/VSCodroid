@@ -194,7 +194,7 @@ function hostFixture(mode) {
         '0036-exit-when-the-editor-cannot-bind.patch',
         { console: { error() {} }, process: { exit(code) { calls.exits.push(code); throw exited; } } },
         'installListenerErrors', source => { listenerSource = source; return source; });
-    execFileSync('python3', ['-c', `
+    execFileSync('python3', ['-B', '-c', `
 import importlib.util, pathlib, sys
 root = pathlib.Path(sys.argv[1])
 spec = importlib.util.spec_from_file_location('fingerprints', root / 'scripts/check-patch-fingerprints.py')

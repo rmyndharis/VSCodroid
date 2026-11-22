@@ -81,13 +81,15 @@ const request = http.request(
         },
     },
     (response) => {
-        response.resume();
-        response.on('end', () => {
-            if (response.statusCode === 200) {
-                process.exit(0);
-            }
-            fail(`the editor answered ${response.statusCode}`);
-        });
+        // Decided on the status line, which the editor writes only once the open
+        // has finished, so the body cannot change the answer. Waiting for the
+        // body's end could: an answer cut short ends in neither 'end' nor 'error'
+        // (Node emits a response's 'error' only to a listener), so the process ran
+        // out of work and exited 0 whatever the status said.
+        if (response.statusCode === 200) {
+            process.exit(0);
+        }
+        fail(`the editor answered ${response.statusCode}`);
     },
 );
 request.on('error', (err) => fail(err.message));

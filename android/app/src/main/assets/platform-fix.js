@@ -103,8 +103,10 @@ if (process.platform === 'android') {
   // Here and not as a link at the extension's path: the extension updates itself
   // into a new directory with a fresh copy of the unrunnable binary, and a link
   // would be missing from it until the next time the app came to the foreground.
-  // Only spawn is wrapped, which is the call the extension makes: execFile and
-  // fork reach the same function through a reference of their own.
+  // Only spawn is redirected, which is the call the extension makes. execFile,
+  // the synchronous starts and fork reach Node's internal spawn and spawnSync
+  // through references of their own; the wrappers further down for all but fork
+  // carry the rules below, not this redirect.
   var fs = require('fs');
   var path = require('path');
   var childProcess = require('child_process');
@@ -307,13 +309,14 @@ if (process.platform === 'android') {
   // that names a path there among its program and arguments, runs there, or searches a PATH directory there,
   // and the engine itself, which runs as it always did. A command run in a shell gets no interceptor at all, so
   // the shell's own start of anything there is refused; but the shell can run the linker. So the command is read
-  // as words, quotes taken out and a leading `~` or `$HOME` read as the home, and with the setting off one that
+  // as words, quotes and backslashes taken out (a backslash before a line break with the break, which the shell
+  // joins) and a leading `~` or `$HOME` read as the home, and with the setting off one that
   // names something in ~/.gemini (a path there, a directory it runs in or searches, or a word that spells the
   // name) and also names the linker is made as a start of what it names, without the shell, which fails the
   // same way. Only what the call spells out can be seen: a program that is told what to run (`sh -c` written as
   // a program and its arguments, an interpreter, `env` or `nohup` in front of the linker, `fork` given the linker as its `execPath`, which
-  // child_process starts through a reference of its own), a name the shell
-  // builds from a variable or a pattern, and a path that goes through a link and then back up with `..` (read as
+  // child_process starts through a reference of its own), a name the shell builds from a variable, a pattern or
+  // an escape it expands itself (`$'\x36'`), and a path that goes through a link and then back up with `..` (read as
   // text, where the kernel follows the link first) are beyond this. Neither is a fence against code in the
   // extension host, which could copy the engine anywhere; it holds back what an extension that means no harm
   // starts on its own.
@@ -498,7 +501,7 @@ if (process.platform === 'android') {
     var spelled = false;
     for (var i = 0; i < words.length; i++) {
       var word = String(words[i]);
-      if (shell) word = word.replace(/["']/g, '').replace(/^(?:~|\$\{HOME\}|\$HOME)(?=\/|$)/, HOME);
+      if (shell) word = word.replace(/["'\\]/g, '').replace(/^(?:~|\$\{HOME\}|\$HOME)(?=\/|$)/, HOME);
       if (!word) continue;
       var full = path.resolve(cwd, word);
       if (within(root, full)) return full;
@@ -569,7 +572,10 @@ if (process.platform === 'android') {
    * runs as an ordinary program would, with no relay and no note.
    */
   function antigravityHub(file, args, env) {
-    if (!ANTIGRAVITY_ENGINE.test(file) || args.indexOf('--hub') < 0) return null;
+    if (!ANTIGRAVITY_ENGINE.test(file)) return null;
+    // Node starts an argument that is not a string as its text, so it is read as that text.
+    args = args.map(String);
+    if (args.indexOf('--hub') < 0) return null;
     var ports = args.filter(function (arg) { return /^--hub-port=/.test(arg); });
     if (!ports.length) return null;
     var token = env && typeof env === 'object' && typeof env[TOKEN_ENV] === 'string' ? env[TOKEN_ENV] : '';
@@ -831,8 +837,9 @@ if (process.platform === 'android') {
    * editor server's start and SIGTERM still do. `cwd` is where the command runs (cwdOf).
    */
   function shellCall(file, rest, tail, cwd) {
-    var text = [file].concat(Array.isArray(rest[0]) ? rest[0] : []).join(' ');
-    if (!/linker64/.test(text.replace(/["']/g, ''))) return {};
+    // A backslash before a line break joins the two lines, in a word as anywhere else, so the pair goes first.
+    var text = [file].concat(Array.isArray(rest[0]) ? rest[0] : []).join(' ').replace(/\\\n/g, '');
+    if (!/linker64/.test(text.replace(/["'\\]/g, ''))) return {};
     var named = geminiNamed(text.split(/[\s;&|()<>`]+/), tail[0], true, cwd);
     if (!named || engineTurnedOn()) return {};
     endEarlierHub();

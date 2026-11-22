@@ -71,6 +71,11 @@ const DATA = '/data/user/0/com.vscodroid/files/home/.vscodroid/data';
 // Environment.getSafMirrorDir builds. It is where the editor is pointed, so
 // every path under it is a workspace path the user chose.
 const MIRROR = '/data/user/0/com.vscodroid/files/saf-mirrors/a1b2c3';
+// The app's files directory, and the system loader every program stored under it is started through on a
+// device: SELinux refuses to exec a file there, so the toolchain trampoline (exec-trampoline.c), the Codex
+// launcher and platform-fix.js hand the file to the loader, which leaves the loader as argv[0].
+const FILES = '/data/user/0/com.vscodroid/files';
+const LINKER = '/system/bin/linker64';
 
 // The status bar extension, loaded for its label table alone.
 //
@@ -177,6 +182,9 @@ function checkLabelCoverage(snapshot) {
  * wrapper and loader launches put in front of the target binary
  * (`--preload <shim>` and `--library-path <dir>`), so the row names the program
  * rather than `--preload libclaude-launch.so` or `--preload libseccomp-shim.so`.
+ * The system loader rows are the same question for `/system/bin/linker64`, which
+ * every program stored in the app's files directory runs under: named after the
+ * loader, clangd, Codex and the Antigravity engine all read `linker64`.
  * Both failures are asserted for, and the
  * expectations are compared as a set so that a pid dropping out of the snapshot
  * cannot quietly empty the check.
@@ -197,6 +205,13 @@ function checkCommandNames(snapshot, byPid) {
         [1063, '-bash'],
         [1064, ''],
         [1065, 'claude'],
+        [1066, 'clangd'],
+        [1067, 'python3 pylsp'],
+        [1068, 'codex'],
+        [1069, 'agy'],
+        [1071, 'linker64'],
+        [1072, 'linker64'],
+        [1073, 'clangd'],
     ]);
     for (const [pid, want] of expected) {
         const got = byPid.get(pid);
@@ -637,6 +652,30 @@ function run(tmp, proc, signals) {
         [1063, ['-bash'], 'unknown'],
         [1064, ['/data/app/pkg/lib/arm64/libldmusl.so', '--preload'], 'unknown'],
         [1065, ['/data/app/pkg/lib/arm64/libldmusl.so', '--preload=/data/user/0/com.vscodroid/files/usr/lib/libseccomp-shim.so', '/data/user/0/com.vscodroid/files/home/.vscodroid/extensions/anthropic.claude-code-2.1.112-linux-arm64/resources/native-binary/claude'], 'unknown'],
+        // Programs stored in the app's files directory as a device really starts them: the system loader is
+        // argv[0] and the program argv[1]. Read as the loader, every one of these was 'unknown' and listed as
+        // 'linker64', clangd included, so the one language server of the C/C++ toolchain was never marked idle.
+        // clangd comes through its trampoline row, with the resource directory in front of the client's own
+        // arguments (ToolchainManager.addLauncherRows).
+        [1066, [LINKER, `${FILES}/usr/bin/clangd`, `--resource-dir=${FILES}/usr/lib/clang/21`, '--background-index'],
+            'langserver'],
+        // A server pip installed, through its row: the interpreter is the loader's program and the script
+        // follows it, so the interpreter's own rules still find the entry point.
+        [1067, [LINKER, PY, `${FILES}/usr/bin/pylsp`], 'langserver'],
+        // The Codex engine (its launcher, codex.sh) and the Antigravity engine (platform-fix.js), named for
+        // what they are.
+        [1068, [LINKER, `${FILES}/usr/libexec/codex/lib/codex`, 'app-server'], 'unknown'],
+        [1069, [LINKER, `${FILES}/home/.gemini/bin/agy`, '--hub', '--hub-port=41000'], 'unknown'],
+        // The loader's program decides, never a later argument.
+        [1070, [LINKER, `${FILES}/home/projects/a.out`, '/tmp/tsserver.js'], 'unknown'],
+        // A loader option in front of the file runs no program (`--list` prints the libraries it needs), and
+        // the loader alone runs nothing, so both stay the loader.
+        [1071, [LINKER, '--list', `${FILES}/usr/bin/clangd`], 'unknown'],
+        [1072, [LINKER], 'unknown'],
+        // The terminal's exec interceptor builds another shape: it keeps the caller's argv[0] and puts the
+        // program's real path after it (modifyExecArgs in termux-exec), so argv[0] already names the program.
+        // Read from that source, not measured on a device.
+        [1073, ['clangd', `${FILES}/usr/bin/clangd`, '--log=error'], 'langserver'],
     ];
     for (const [pid, argv] of cases) {
         writeProc(proc, pid, argv);
