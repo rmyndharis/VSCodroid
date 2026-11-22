@@ -53,6 +53,13 @@ echo "  tarball : $TARBALL_NAME"
 
 mkdir -p "$ROOT_DIR/server"
 
+# Removed on every exit: the download's temporary directory and the tree being
+# checked (see Extract). One trap for both, because a second `trap ... EXIT`
+# replaces the first.
+tmp=""
+STAGE=""
+trap 'rm -rf ${tmp:+"$tmp"} ${STAGE:+"$STAGE"}' EXIT
+
 # What the release says this tarball should hash to, into `expected`.
 #
 # `|| true` collapsed three outcomes into one empty string: gh not installed, gh
@@ -173,7 +180,6 @@ fi
 if [ -n "${VSCODE_OSS_URL:-}" ]; then
     echo "  source  : VSCODE_OSS_URL"
     tmp="$(mktemp -d)"
-    trap 'rm -rf "$tmp"' EXIT
     curl -L --fail --show-error -o "$tmp/$TARBALL_NAME" "$VSCODE_OSS_URL"
     mv "$tmp/$TARBALL_NAME" "$TARBALL"
 elif [ -f "$TARBALL" ]; then
@@ -183,7 +189,6 @@ else
     # Download to a temporary name so an interrupted transfer cannot be picked up
     # as a cache hit on the next run.
     tmp="$(mktemp -d)"
-    trap 'rm -rf "$tmp"' EXIT
     if ! gh release download "server-$VSCODE_VERSION" \
             --repo "$REPO" --pattern "$TARBALL_NAME" --dir "$tmp"; then
         cat >&2 <<EOF
@@ -303,11 +308,22 @@ fi
 
 echo
 echo "=== Extract ==="
+# Into a directory beside DEST, moved into place only once every gate below has
+# passed. Extracted straight into DEST, the tree was there before the pin,
+# branding, shape, patch and ripgrep gates had read it, so a fetch that one of
+# them refused still left it where package-assets.sh copies from, and a
+# developer who ran that next packaged the refused server. DEST is removed
+# first, so a fetch refused from here on leaves no tree at all and
+# package-assets.sh stops, rather than finding the previous one, which an
+# earlier pin or patch set passed and which this checkout no longer describes.
+# mktemp makes the directory 0700; it gets the mode mkdir gave DEST, since
+# package-assets.sh copies it on.
 rm -rf "$DEST"
-mkdir -p "$DEST"
-tar -xzf "$TARBALL" -C "$DEST"
-echo "  into    : $DEST"
-du -sh "$DEST" | awk '{print "  size    : "$1}'
+STAGE="$(mktemp -d "$ROOT_DIR/server/.vscode-reh.XXXXXX")"
+chmod "$(umask -S)" "$STAGE"
+tar -xzf "$TARBALL" -C "$STAGE"
+echo "  into    : $STAGE, moved to $DEST once checked"
+du -sh "$STAGE" | awk '{print "  size    : "$1}'
 
 echo
 echo "=== Pin ==="
@@ -332,7 +348,7 @@ echo "=== Pin ==="
 # Reported by this script rather than by verify-server-tree.py, which runs in
 # three places including inside the build container, where only /scripts,
 # /patches and /branding are mounted and the pin files are not readable at all.
-if ! python3 - "$DEST/product.json" "$VSCODE_COMMIT" "$VSCODE_VERSION" <<'PIN'; then
+if ! python3 - "$STAGE/product.json" "$VSCODE_COMMIT" "$VSCODE_VERSION" <<'PIN'; then
 import json
 import sys
 
@@ -387,7 +403,7 @@ echo "=== Branding ==="
 # unapplied the same way. So the overlay is applied to a copy of the tree's
 # product.json exactly as build-vscode-oss.sh applies it, and any difference
 # fails the fetch.
-if ! python3 - "$ROOT_DIR/branding/product.json" "$DEST/product.json" <<'BRANDING'; then
+if ! python3 - "$ROOT_DIR/branding/product.json" "$STAGE/product.json" <<'BRANDING'; then
 import json
 import sys
 
@@ -425,7 +441,7 @@ echo "=== Verify ==="
 # redundant: the tarball may predate a change to that script, and this is the
 # last point before the tree is copied into the APK. It checks the tree's shape,
 # not its branding values or patches; the stages either side of it do that.
-python3 "$ROOT_DIR/scripts/verify-server-tree.py" "$DEST"
+python3 "$ROOT_DIR/scripts/verify-server-tree.py" "$STAGE"
 
 echo
 echo "=== Patches ==="
@@ -439,7 +455,7 @@ echo "=== Patches ==="
 # shape of the tree, and a tree missing a patch has exactly the right shape.
 # Without this, a patch could sit in patches/ while every build quietly shipped a
 # server that predates it, and the first symptom would be on a user's device.
-if ! python3 "$ROOT_DIR/scripts/check-patch-fingerprints.py" "$DEST"; then
+if ! python3 "$ROOT_DIR/scripts/check-patch-fingerprints.py" "$STAGE"; then
     cat >&2 <<EOF
 
   This server tree is missing at least one patch this checkout applies.
@@ -462,7 +478,7 @@ echo "=== ripgrep ==="
 # execute_no_trans on app_data_file for targetSdk >= 29, so anything under
 # filesDir is unexecutable no matter how it is chmodded; binaries have to be
 # packaged as lib*.so in jniLibs, which Android extracts into nativeLibraryDir
-# with execute permission. FirstRunSetup.kt:270-288 then symlinks
+# with execute permission. FirstRunSetup.setupRipgrepVscodeSymlink then symlinks
 # node_modules/@vscode/ripgrep-universal/bin/linux-arm64/rg at it, which is the
 # path VS Code's search service looks for. That path moved in 1.133 -- the
 # package used to be @vscode/ripgrep with a single bin/rg.
@@ -471,7 +487,7 @@ echo "=== ripgrep ==="
 # without it Search returns nothing and nothing else fails.
 JNILIBS_DIR="$ROOT_DIR/android/app/src/main/jniLibs/arm64-v8a"
 mkdir -p "$JNILIBS_DIR"
-RG_SRC="$DEST/node_modules/@vscode/ripgrep-universal/bin/linux-arm64/rg"
+RG_PATH="node_modules/@vscode/ripgrep-universal/bin/linux-arm64/rg"
 
 # The same gate every other binary in jniLibs already gets, and this was the one
 # without it. verify-server-tree.py above reads rg's e_machine and stops there:
@@ -494,8 +510,13 @@ RG_SRC="$DEST/node_modules/@vscode/ripgrep-universal/bin/linux-arm64/rg"
 # ./gradlew assembleDebug directly would package the very binary this refused --
 # and no later gate would notice, because verify-server-tree.py reads e_machine
 # and that is not what is wrong with it.
-python3 "$ROOT_DIR/scripts/verify-android-elf.py" "$RG_SRC"
+python3 "$ROOT_DIR/scripts/verify-android-elf.py" "$STAGE/$RG_PATH"
 
-cp "$RG_SRC" "$JNILIBS_DIR/libripgrep.so"
+# Every gate has passed: the tree takes its place, and rg is copied from there.
+mv "$STAGE" "$DEST"
+STAGE=""
+echo "  checked : $DEST"
+
+cp "$DEST/$RG_PATH" "$JNILIBS_DIR/libripgrep.so"
 chmod +x "$JNILIBS_DIR/libripgrep.so"
 echo "  rg -> libripgrep.so ($(du -h "$JNILIBS_DIR/libripgrep.so" | cut -f1))"

@@ -154,14 +154,17 @@ rules, spend it as six forced by the same update do. After six of them
 without a change of text, each no more than half a minute after the one
 before, the update that follows within that time is no longer refused:
 it is applied as the editor without this patch applies it, so that a
-keyboard that answers every restart with the same update, or a pick the
-rules cannot tell from a stale write, is not refused for ever and the
+keyboard that answers every restart with the same update, or a pick a
+rule cannot tell from a stale write, is not refused for ever and the
 person is not left with input that does nothing until something else is
 typed. A stale letter (below) is the exception: typing its letter at the
 caret does something, so it is typed past the bound as before it, and no
-restart is forced for it there. The bound does not ask whether the
-keyboard went on with the same update: after six such restarts nothing
-more is refused, whatever those six refused. The count starts again
+restart is forced for it there. The bound therefore does nothing for a
+pick that has the shape of a stale letter: it is never applied, however
+often it is tried, and each try types its letter after the word (below).
+The bound does not ask whether the keyboard went on with the same
+update: after six such restarts nothing more is refused, whatever those
+six refused. The count starts again
 after an update that changes the text has been applied by the editor,
 that is when the text of the update differs from the cached text of its
 range and the model's version is not the one it had before the edit, and
@@ -566,6 +569,26 @@ the keyboard wrote. In 5 of the 645 runs of the batches below it was not
 the key that was tapped, 3 of them in plain typing, which no rule here
 sees.
 
+What the stale letters cost. A pick of one letter from the suggestion
+strip over a word that the keyboard reopened, with nothing typed in that
+composition, has the shape of a stale letter, and nothing it says tells
+it from one. Over a word of more letters it is the letter alone over the
+word: is, a space and a Backspace, then I picked over is, gives isI, and
+d picked over cl gives cld. Over a word of one letter it is the letter
+over the last letter when both are letters of the basic Latin alphabet,
+accented or not, with different base letters: c picked over x gives xc,
+and é picked over a gives aé, which the earlier form of that rule, which
+took no accented letter, applied. The pick is typed after the word as a
+stale letter is, and trying again does not help: each try has the same
+shape over the word as it has grown, its letter is typed after it again,
+and past the bound of restarts it is still typed, with no restart forced
+(seven tries of I over is give isIIIIIII). Applied as before are the
+word's own first letter picked over a word of two letters, which is a
+Backspace's shape, a pick over a word of one letter that differs from it
+by case or accents alone or is not of the basic Latin alphabet, and a
+pick of Han, kana, Hangul or a symbol. The person sees the letter after
+the word at once and the word stays as it was.
+
 A keyboard that did not read the text again after its stale letter was
 typed goes on with the range it kept. In a line holding line two, x over
 5..8 is typed at the caret and the line reads line twox, and the next
@@ -623,10 +646,16 @@ u corrected to you and a space, the space deleted with a Backspace, and
 you reopened and written back as u over 0..3 with the caret asked at 1,
 which typed the u after the word (youu). The last update the editor
 applied that changed the text is kept with the version of the model it
-left, where it starts, the text it replaced and the text it wrote, and a
+left, where it starts, the text it replaced and the text it wrote. A
 deletion at the end of the text it wrote, which is what the Backspace on
-the space sends, keeps it with that text cut. An update that writes the
-replaced text back, from where that update started, over the text it
+the space sends, keeps it with that text cut, and an insertion at that
+end of a text with no letter, digit or mark in it keeps it with that
+text added: a keyboard that sends the correction and its space as two
+updates (you over 0..1, then a space at 3..3) sends the space so, and
+before the space was kept the take-back after its Backspace typed the u
+after the word as well. A letter, a digit or a mark typed there goes on
+with the word and is kept as an update of its own. An update that writes
+the replaced text back, from where that update started, over the text it
 wrote (the buffer holds that text there), with the model at that
 version, is not a stale letter: it is judged by the other rules, which
 apply it. A text that starts with what it replaced is a word completed
@@ -634,11 +663,14 @@ or grown as it is typed (t to the), not a correction, and the first
 letter written over it after a turn stays the stale letter it looks
 like. Anything else that edits the model ends what is kept, a Backspace
 that the editor runs as a key press among them (Gboard 17.7 and 18.4
-send it so), and the take-back after it is typed as a stale letter. What
-it costs: the same letter typed after a turn that follows such a
-correction, with nothing typed between, cannot be told from the
-take-back and is applied (u typed after a turn that follows u corrected
-to you gives u). Not run on a device: no recording holds a take-back.
+send it so): that edit is the editor's own and no update reports it, so
+the take-back after it is typed as a stale letter (youu), as it was
+before anything was kept. What it costs: the same letter typed after a
+turn that follows such a correction, with nothing typed between but a
+space or a punctuation mark at the end of the correction or a deletion
+there, cannot be told from the take-back and is applied (u typed after a
+turn that follows u corrected to you gives u). Not run on a device: no
+recording holds a take-back.
 
 What the patch does not do. A letter that the keyboard never sends is
 not typed: no update carried it in 3 of 212 runs without this patch and
@@ -662,15 +694,19 @@ carried the third rule, with a harness that is not in the repository.
 What the repository runs is scripts/check-editcontext-ime.js, which
 build-vscode-oss.sh runs on the patched tree: named cases over this file
 as the series leaves it, among them each rule here, the bound, the
-refusal of a range beyond the buffer, and the letter after a refusal
-replayed with a composition that starts again and with none.
+refusal of a range beyond the buffer, the letter after a refusal
+replayed with a composition that starts again and with none, the stale
+letters, the take-back of a correction and the picks the stale letters
+cost. It runs the real emit method over the real composition and replace
+operations, with the model, the cursor list and the EditContext replaced
+by fakes and no undo stack, on a host Node and not the Android runtime,
+and its update events are objects whose fields are getters on a
+prototype, as the browser's are.
 
-Source checks run the real emit method over the real composition and
-typing operations, with the model, the cursor list, the undo stack and
-the EditContext replaced by adapters, on a host Node and not the Android
-runtime. The update events are objects whose fields are getters on a
-prototype, as the browser's are. 250 named cases cover the recorded
-damage, the device rows above, the Tab and the joined letter, the tail
+The harness outside the repository ran the same method with the model,
+the cursor list, the undo stack and the EditContext replaced by
+adapters. Its named cases covered the recorded damage, the device rows
+above, the Tab and the joined letter, the tail
 drops, what the rules cost, the restart, the bound, the refusal that
 stands, the cases the rules cannot tell from a stale write, which are
 kept as known limits and say what the patch does, for the seventh rule,
@@ -824,7 +860,7 @@ and Japanese lines typed, converted and turned came out as typed in 224
 updates with no refusal.
 
 diff --git a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
-index babfbb09..5d04f066 100644
+index babfbb09..2f1d684a 100644
 --- a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
 +++ b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
 @@ -87,9 +87,28 @@ export class NativeEditContext extends AbstractEditContext {
@@ -852,7 +888,7 @@ index babfbb09..5d04f066 100644
 +	// of the model and the primary selection that letter left: see _staleLetter.
 +	private _staleLetterRange: { version: number; selection: Selection; start: number; end: number; text: string } | undefined;
 +	// The last update the editor applied that changed the text, kept for the version of the model it left, where it started, the text it replaced and the text it
-+	// wrote: see _takesBackReplacement.
++	// wrote, or the one before it when the update only cut or extended its end: see _afterAppliedEdit and _takesBackReplacement.
 +	private _lastReplacement: { version: number; start: number; old: string; text: string } | undefined;
  
  	// Overflow guard container
@@ -975,7 +1011,7 @@ index babfbb09..5d04f066 100644
  				return;
  			}
  			this._dismissOtherCursors();
-@@ -633,6 +725,250 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -633,6 +725,252 @@ export class NativeEditContext extends AbstractEditContext {
  		this._expectedCaretOffset = e.selectionStart === e.selectionEnd ? e.selectionStart : undefined;
  		this._onType(viewController, typeInput);
  		this._expectedCaretOffset = undefined;
@@ -1146,10 +1182,12 @@ index babfbb09..5d04f066 100644
 +	}
 +
 +	// Whether the update takes back the last replacement the editor applied for the keyboard: it writes the text that replacement replaced over the text it wrote, and the
-+	// model is as that replacement left it, but for a deletion at the end of what it wrote. A keyboard that corrected u to you and a space, whose Backspace then deleted the
-+	// space, reopened you and wrote u over it with the caret after the u: the shape of one letter over a reopened word, which would have typed the u after you. A text that
-+	// starts with what it replaced is a word completed or grown as it is typed (t to the), not a correction, and the first letter written over it after a turn is the stale
-+	// letter it looks like. What it costs: the same letter typed after a turn that follows such a correction, with nothing typed between, is taken for the take-back.
++	// model is as that replacement left it, but for a deletion at the end of what it wrote and a space or a punctuation mark inserted there (see _afterAppliedEdit). A
++	// keyboard that corrected u to you and a space, in one update or two, whose Backspace then deleted the space, reopened you and wrote u over it with the caret after the
++	// u: the shape of one letter over a reopened word, which would have typed the u after you. A text that starts with what it replaced is a word completed or grown as it
++	// is typed (t to the), not a correction, and the first letter written over it after a turn is the stale letter it looks like. What it costs: the same letter typed after
++	// a turn that follows such a correction, with nothing typed between but a space or a punctuation mark at its end or a deletion there, is taken for the take-back. A
++	// Backspace that the editor runs as a key press (Gboard 17.7 and 18.4) is an edit of its own that no update reports, so the take-back after it is a stale letter.
 +	private _takesBackReplacement(e: ITextUpdateEvent): boolean {
 +		const last = this._lastReplacement;
 +		return last?.version === this._context.viewModel.model.getVersionId() && e.text === last.old && e.updateRangeStart === last.start &&
@@ -1226,22 +1264,27 @@ index babfbb09..5d04f066 100644
  	}
  
  	// Whether the update changes no text. It replaces nothing with nothing, or its text is the cached
-@@ -755,6 +1091,21 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -755,6 +1093,26 @@ export class NativeEditContext extends AbstractEditContext {
  		this._applyingInputMethodEdit = false;
  	}
  
 +	// After the edit, once the model has applied an update that changes the text (its version is not the one it had before the edit): the composition has typed, and
-+	// the count of the restart bound, part 4 of 4, starts again. See _emitTypeEvent. The update is kept as the last replacement, but that a deletion at the end of the
-+	// text the last one wrote, as a Backspace on the space after a correction sends, keeps that one with its text cut: see _takesBackReplacement.
++	// the count of the restart bound, part 4 of 4, starts again. See _emitTypeEvent. The update is kept as the last replacement, with two exceptions that keep the last
++	// one, applied on the version before: a deletion at the end of the text it wrote, as a Backspace on the space after a correction sends, keeps it with its text cut,
++	// and an insertion at that end of a text with no letter, digit or mark in it, as a keyboard that sends a correction and its space as two updates sends the space,
++	// keeps it with the text added. A letter there goes on with the word and is kept as a replacement of its own. See _takesBackReplacement.
 +	private _afterAppliedEdit(changesText: boolean, versionBefore: number, e: ITextUpdateEvent, replaced: string): void {
 +		const version = this._context.viewModel.model.getVersionId();
 +		if (changesText && version !== versionBefore) {
 +			this._compositionTyped = true;
 +			this._refusalRestarts = 0;
 +			const last = this._lastReplacement;
-+			this._lastReplacement = last?.version === versionBefore && e.text === '' && last.start < e.updateRangeStart && e.updateRangeEnd === last.start + last.text.length
++			const end = last?.version === versionBefore ? last.start + last.text.length : -1;
++			this._lastReplacement = last && e.text === '' && last.start < e.updateRangeStart && e.updateRangeEnd === end
 +				? { ...last, version, text: last.text.slice(0, e.updateRangeStart - last.start) }
-+				: { version, start: e.updateRangeStart, old: replaced, text: e.text };
++				: last && e.updateRangeStart === end && e.updateRangeEnd === end && !/[\p{L}\p{N}\p{M}]/u.test(e.text)
++					? { ...last, version, text: last.text + e.text }
++					: { version, start: e.updateRangeStart, old: replaced, text: e.text };
 +		}
 +	}
 +

@@ -87,6 +87,14 @@
 # not reaching the target's graph is exactly what a fingerprint is for.
 0003 ptyHost bridge|out/bootstrap-fork.js|__vsc_disconnect
 0004 extHost worker|out/server-main.js|worker_thread Extension Host
+# 0004 again, for the half of it that is the extension host's own bundle. The
+# row above is satisfied entirely by extensionHostConnection.ts, which the server
+# pulls into out/server-main.js; the loop that dials the server's pipe again
+# after a client goes away lives in src/vs/workbench/api/node/
+# extensionHostProcess.ts and becomes out/vs/workbench/api/node/
+# extensionHostProcess.js, which no row named. Without it every extension dies
+# at the first WebSocket drop, and the server half alone would still pass.
+0004 extHost reconnect|out/vs/workbench/api/node/extensionHostProcess.js|could not reattach to the server
 0005 webview csp|out/vs/workbench/contrib/webview/browser/pre/index.html|script-src 'unsafe-inline'
 0006 callback relay|out/vs/code/browser/workbench/callback.html|intent://callback
 0006 callback URI decoding|out/vs/code/browser/workbench/callback.html|const path = params.get('vscode-path')
