@@ -365,6 +365,135 @@ class ToolchainCardStateTest {
     }
 
     @Nested
+    inner class CancelsWhoseEndIsStillToBeReported {
+
+        /**
+         * Play reports a download it stopped through the listener, after the Cancel tap, and that CANCELED ends the
+         * manager's request for the pack by name. With Install offered at the tap, an Install made before the report
+         * had its own request ended by it: the screen took the pack off its outstanding list, could hand the Play
+         * listener back while the new download ran, and the toolchain was installed only at the next launch. In the
+         * two states a running download reports, the card offers nothing until the end; progress queued before the
+         * cancel took does not end the wait.
+         */
+        @Test
+        fun `a Play download that was running offers nothing until its cancel is reported`() {
+            for (running in listOf(AssetPackStatus.DOWNLOADING, AssetPackStatus.PENDING)) {
+                val state = manager()
+                state.updateState(go, running, 30)
+
+                assertTrue(state.setCancelling(go), "the card does not wait in state $running")
+
+                val waiting = state.card(go)
+                assertNull(waiting.action, "the card offers ${waiting.action} before the cancel in $running is reported")
+                assertNull(waiting.progressPercent, "a download being cancelled is drawn as still running")
+                state.updateState(go, AssetPackStatus.DOWNLOADING, 31)
+                assertNull(state.card(go).action, "progress queued before the cancel ended the wait")
+
+                state.updateState(go, AssetPackStatus.CANCELED, 0)
+                assertEquals(ToolchainAction.INSTALL, state.card(go).action)
+            }
+        }
+
+        /**
+         * For every other state, and for a card that knows no state, nothing shows that Play reports after its
+         * cancel, and a card that waits with no button is worse than the old race. Not held: the screen draws the
+         * pack as cancelled at once.
+         */
+        @Test
+        fun `a Play download in any other state is not held for a report`() {
+            val others = listOf(
+                AssetPackStatus.WAITING_FOR_WIFI,
+                AssetPackStatus.REQUIRES_USER_CONFIRMATION,
+                AssetPackStatus.TRANSFERRING,
+                AssetPackStatus.COMPLETED,
+                AssetPackStatus.FAILED,
+                AssetPackStatus.UNKNOWN,
+            )
+            for (other in others) {
+                val state = manager()
+                state.updateState(go, other, 0)
+                assertFalse(state.setCancelling(go), "the card waits in state $other for a report nothing shows will come")
+            }
+            assertFalse(manager().setCancelling(go), "a card that knows no state waits for a report")
+        }
+
+        @Test
+        fun `an installed toolchain keeps its badge while its new download is cancelled`() {
+            val state = manager()
+            state.setInstalled(listOf("ruby"))
+            state.updateState(ruby, AssetPackStatus.DOWNLOADING, 30)
+
+            state.setCancelling(ruby)
+
+            assertEquals(ToolchainCard(badge = ToolchainBadge.INSTALLED), state.card(ruby))
+            state.updateState(ruby, AssetPackStatus.CANCELED, 0)
+            assertEquals(ToolchainAction.REMOVE, state.card(ruby).action)
+        }
+
+        /** A report this screen did not hear holds the card no longer than the screen's next start. */
+        @Test
+        fun `the screen's next start ends every wait`() {
+            val state = manager()
+            state.updateState(go, AssetPackStatus.DOWNLOADING, 30)
+            state.setCancelling(go)
+
+            state.endCancelWaits()
+
+            assertEquals(ToolchainAction.CANCEL, state.card(go).action, "the card is not drawn from its last report")
+        }
+
+        /**
+         * A cancelled HTTP transfer holds the pack until it stops, so an Install tapped before then was refused and
+         * the screen said the toolchain was already being installed. The card waits for the transfer's end, which
+         * the manager reports on every way out of it, also while the process still lists it as running.
+         */
+        @Test
+        fun `a cancelled transfer offers nothing until it reports its end`() {
+            val state = manager()
+            state.updateState(go, AssetPackStatus.DOWNLOADING, 30, 7)
+            state.setDownloading(mapOf(go to ToolchainDownloadProgress(7, 30)))
+
+            assertTrue(state.setCancelling(go, 7))
+
+            assertNull(state.card(go).action, "the card offers ${state.card(go).action} while the transfer holds the pack")
+            state.updateState(go, AssetPackStatus.DOWNLOADING, 31, 7)
+            state.setDownloading(mapOf(go to ToolchainDownloadProgress(7, 31)))
+            assertNull(state.card(go).action, "progress of the transfer being cancelled ended the wait")
+
+            state.updateState(go, AssetPackStatus.CANCELED, 0, 7)
+            assertEquals(ToolchainAction.INSTALL, state.card(go).action)
+        }
+
+        /**
+         * A transfer another manager began reports its end to that manager only, a rebuilt screen's case. Its token
+         * leaving the process's snapshot is the end this screen can see.
+         */
+        @Test
+        fun `a cancelled transfer this screen hears nothing from ends when it leaves the snapshot`() {
+            val state = manager()
+            state.setDownloading(mapOf(go to ToolchainDownloadProgress(7, 30)))
+
+            assertTrue(state.setCancelling(go, 7))
+            state.setDownloading(mapOf(go to ToolchainDownloadProgress(7, 40)))
+            assertNull(state.card(go).action, "the card offers ${state.card(go).action} while the transfer holds the pack")
+
+            state.setDownloading(emptyMap())
+            assertEquals(ToolchainAction.INSTALL, state.card(go).action)
+        }
+
+        @Test
+        fun `a cancel waiting on one toolchain leaves the other card alone`() {
+            val state = manager()
+            state.updateState(go, AssetPackStatus.DOWNLOADING, 30)
+            state.updateState(ruby, AssetPackStatus.DOWNLOADING, 40)
+
+            state.setCancelling(go)
+
+            assertEquals(ToolchainAction.CANCEL, state.card(ruby).action)
+        }
+    }
+
+    @Nested
     inner class DownloadsThisScreenWasNotTold {
 
         /**

@@ -86,6 +86,24 @@ class ToolchainPickerAdapter(
     }
 
     /**
+     * MANAGER mode: a cancelled download whose end is still to be reported.
+     *
+     * See [ToolchainCardState.setCancelling] for why the card offers nothing until it is, and when.
+     */
+    fun setCancelling(packName: String, transferId: Long?): Boolean {
+        if (!cards.setCancelling(packName, transferId)) return false
+        val pos = cards.positionOf(packName)
+        if (pos >= 0) notifyItemChanged(pos, PAYLOAD_REBIND)
+        return true
+    }
+
+    /** MANAGER mode: see [ToolchainCardState.endCancelWaits]. */
+    fun endCancelWaits() {
+        cards.endCancelWaits()
+        notifyItemRangeChanged(0, itemCount, PAYLOAD_REBIND)
+    }
+
+    /**
      * MANAGER mode: replaces the downloads this screen was never told about.
      *
      * See [ToolchainCardState.setDownloading]. Called when the screen starts,

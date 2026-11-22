@@ -159,6 +159,62 @@ class ToolchainQueuedCancelTest {
     }
 
     /**
+     * A cancelled transfer holds the pack until it stops, so an Install tapped at once is refused, and the
+     * toolchain screen offered exactly that tap: it drew Install at the Cancel and answered it with "already being
+     * installed". The cancel now says the transfer will report its end, which the screen waits for; once it has, an
+     * Install starts a new transfer.
+     */
+    @Test
+    fun `a cancelled transfer says it will report its end, and an Install after that end starts again`() {
+        val m = manager()
+        val gate = holdTheQueue(m)
+        m.install("toolchain_ruby")
+
+        assertEquals(true, m.cancel("toolchain_ruby"), "the screen is not told the transfer will report its end")
+        m.install("toolchain_ruby")
+        gate.countDown()
+
+        assertTrue(settled.await(10, TimeUnit.SECONDS), "the cancelled transfer never reported its end")
+        assertEquals(
+            listOf(AssetPackStatus.PENDING, AssetPackStatus.UNKNOWN, AssetPackStatus.CANCELED), statuses(),
+            "an Install before the end was not refused, or the end was not reported: $events",
+        )
+        val again = holdTheQueue(m)
+        m.install("toolchain_ruby")
+        assertEquals(AssetPackStatus.PENDING, statuses().last(), "an Install after the end was refused: $events")
+        // Ended before the fixture goes, so the second transfer does not outlive it.
+        m.cancel("toolchain_ruby")
+        again.countDown()
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+        while (statuses().count { it == AssetPackStatus.CANCELED } < 2 && System.nanoTime() < deadline) Thread.sleep(10)
+        assertEquals(2, statuses().count { it == AssetPackStatus.CANCELED }, "the second transfer never ended: $events")
+    }
+
+    /** Nothing running, nothing to wait for: the screen draws the cancel at once. */
+    @Test
+    fun `a cancel with no transfer running says no end will be reported`() {
+        assertEquals(false, manager().cancel("toolchain_ruby"))
+    }
+
+    /**
+     * The end is reported on every way out of a cancelled transfer, an error the task does not catch included,
+     * because the screen waits for it. The cancel lands while the task is in its space check, which then throws.
+     */
+    @Test
+    fun `a cancelled transfer reports its end when it leaves by an error`() {
+        val m = manager()
+        every { anyConstructed<StatFs>().availableBytes } answers {
+            m.cancel("toolchain_ruby")
+            throw StackOverflowError("the space check failed")
+        }
+
+        m.install("toolchain_ruby")
+
+        assertTrue(settled.await(10, TimeUnit.SECONDS), "the cancelled transfer never reported its end")
+        assertEquals(listOf(AssetPackStatus.PENDING, AssetPackStatus.CANCELED), statuses())
+    }
+
+    /**
      * The control: the same queue and the same full disk, with nothing
      * cancelled, is still refused for space. The check moved in front of the
      * pre-flight; it did not replace it.
