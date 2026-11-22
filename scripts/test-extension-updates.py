@@ -28,6 +28,8 @@ class ExtensionUpdatesTest(unittest.TestCase):
         (self.directory / "package.nls.json").write_text('{"title":"Original","enabled":false}')
         self.git("add", "--", str(self.directory.relative_to(self.root)))
         self.git("commit", "-qm", "Add extension")
+        # Released, so every case below edits a directory a device may already hold.
+        self.git("tag", "v1.0.0")
         self.check = self.root / "scripts/check-extension-updates.py"
         self.check.parent.mkdir()
         shutil.copyfile(CHECK, self.check)
@@ -88,6 +90,55 @@ class ExtensionUpdatesTest(unittest.TestCase):
         self.git("add", "--", relative)
         self.git("commit", "-qm", "Restore extension")
         self.assertNotEqual(0, self.check_status().returncode)
+
+    def test_unreleased_directory_takes_further_commits(self):
+        # A bumped directory no release carries yet is on no device a user holds, so a
+        # second commit to it, such as a fix-up in the same pull request, needs no
+        # second bump.
+        bumped = self.directory.with_name("vscodroid.example-1.0.1")
+        self.directory.rename(bumped)
+        manifest = bumped / "package.json"
+        manifest.write_text(manifest.read_text().replace('"1.0.0"', '"1.0.1"'))
+        self.git("add", "--", str(self.directory.relative_to(self.root)), str(bumped.relative_to(self.root)))
+        self.git("commit", "-qm", "Bump extension")
+        (bumped / "package.nls.json").write_text('{"title":"Fixed","enabled":false}')
+        self.git("add", "--", str(bumped.relative_to(self.root)))
+        self.git("commit", "-qm", "Fix the title")
+        result = self.check_status()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        # Once a release carries it, the same edit needs a new directory again.
+        self.git("tag", "v1.0.1")
+        (bumped / "package.nls.json").write_text('{"title":"Again","enabled":false}')
+        self.assertNotEqual(0, self.check_status().returncode)
+
+    def test_released_content_is_the_baseline(self):
+        # Changed in place after it was added but before any release carried it, then
+        # released: what devices hold is the released content, so that is what an edit
+        # is measured against, not the commit that first added the directory.
+        directory = self.directory.with_name("vscodroid.later-1.0.0")
+        directory.mkdir()
+        nls = directory / "package.nls.json"
+        (directory / "package.json").write_text('{"name":"later","version":"1.0.0"}')
+        nls.write_text('{"title":"Draft"}')
+        self.git("add", "--", str(directory.relative_to(self.root)))
+        self.git("commit", "-qm", "Add another extension")
+        nls.write_text('{"title":"Shipped"}')
+        self.git("add", "--", str(directory.relative_to(self.root)))
+        self.git("commit", "-qm", "Reword it")
+        self.git("tag", "v1.1.0")
+        result = self.check_status()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        nls.write_text('{"title":"Changed after release"}')
+        self.assertNotEqual(0, self.check_status().returncode)
+
+    def test_no_release_tag_is_refused_instead_of_passed(self):
+        # With no release tag in sight every directory reads as unreleased, so an
+        # edit to one that shipped would pass. A clone made without tags is refused.
+        self.git("tag", "-d", "v1.0.0")
+        self.manifest.write_text('{"name":"example","version":"1.0.0","displayName":"Changed"}')
+        result = self.check_status()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("release tag", result.stdout + result.stderr)
 
     def test_shallow_clone_is_refused_instead_of_passed(self):
         # In a depth-1 clone the tip is the oldest commit git can see, so it reads as the

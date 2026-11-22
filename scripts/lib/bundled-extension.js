@@ -2,13 +2,17 @@
 
 // Resolving a bundled extension by its version is how a self-check rots.
 //
-// Bumping the version of a bundled extension is mandatory in this repository
-// whenever its contents change: a device only re-extracts a directory whose name
-// it does not already have. So a path pinned to one version is a path that
-// breaks on the next correct change, and the version written into it is stale
-// the moment anyone edits the extension. That is not hypothetical; it is how
-// `scripts/test-process-monitor-extension.js` came to fail on a branch whose
-// only fault was bumping the extension it tests.
+// Bumping the version of a bundled extension is required in this repository
+// whenever its manifest, translations or browser entry change after a release
+// has shipped it (check-extension-updates.py). Setup, which every upgrade runs,
+// unpacks our own extensions again, so the new bytes do reach the disk; what
+// does not follow is the editor server's scan of the manifests, which it keeps
+// until extensions.json changes, and that changes when a directory name does
+// (BundledExtensionVersionTest says more). So a path pinned to one version is a
+// path that breaks on the next correct change, and the version written into it
+// is stale the moment anyone edits the extension. That is not hypothetical; it
+// is how `scripts/test-process-monitor-extension.js` came to fail on a branch
+// whose only fault was bumping the extension it tests.
 //
 // Ordered by parsed version rather than by name, because 1.10.0 sorts below
 // 1.9.0 as text. `check-welcome-claims.py` sorts its directory the same way for
