@@ -283,10 +283,17 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
      * being true the day the storage message moved, and nothing could notice,
      * because each divisor was a literal beside its own caller. Nothing computes
      * with these strings: every pre-flight works in raw bytes.
+     *
+     * [locale] is the language of the screen. The default locale is the app's own
+     * language, the per-app choice included, which is also how the editor's
+     * language is picked (`EditorLocale.forDevice`).
      */
-    fun sizeFigures(info: ToolchainRegistry.ToolchainInfo): SizeFigures = SizeFigures(
-        download = StorageManager.formatSize(info.downloadSize),
-        installed = StorageManager.formatSize(info.estimatedSize),
+    fun sizeFigures(
+        info: ToolchainRegistry.ToolchainInfo,
+        locale: java.util.Locale = java.util.Locale.getDefault(),
+    ): SizeFigures = SizeFigures(
+        download = StorageManager.formatSize(info.downloadSize, locale),
+        installed = StorageManager.formatSize(info.estimatedSize, locale),
     )
 
     /** The card to draw for [packName] on this screen. */

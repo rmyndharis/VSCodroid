@@ -199,6 +199,9 @@
          that got there first, and the only thing the user needs is to stop tapping. -->
     <string name="toolchain_already_installing">Esse toolchain já está sendo instalado.</string>
     <string name="toolchain_failed_internal">A instalação falhou. Os detalhes estão no log do app.</string>
+    <!-- Shown on the splash screen when Install or Retry was tapped on the Toolchains screen while this
+         build's setup had not finished. The tap goes to the splash screen, which runs setup, and the
+         install is not carried over, so the person is told to wait for setup and install again. -->
     <string name="toolchain_install_after_setup">Aguarde o fim da configuração e instale de novo.</string>
     <string name="progress_cancel">Cancelar</string>
     <string name="progress_retry">Repetir</string>
@@ -213,10 +216,11 @@
     <string name="toolchain_remove_confirm_message">Isso vai excluir todos os arquivos do %s. Você pode reinstalar quando quiser.</string>
     <string name="toolchain_older_build">%1$s está instalado. Remova-o e instale novamente para obter %2$s.</string>
 
-    <!-- Launcher shortcut: in practice the only route to the toolchain screen.
-         The activity is not exported and has no launcher entry, and the one
-         command that could reach it through the WebView is sent by no bundled
-         extension. SplashActivity.publishToolchainShortcut records both.
+    <!-- Launcher shortcut: one of two routes to the toolchain screen, and the
+         only one that works while the editor is not up. The activity is not
+         exported and has no launcher entry; the other route is the bundled
+         saf-bridge extension's Manage Toolchains command, which needs a loaded
+         workbench. SplashActivity.publishToolchainShortcut records both.
 
          The long label is the one that has to survive truncation, not the short
          one. The launcher's touch-and-hold menu shows longLabel: read off a
@@ -240,8 +244,9 @@
         <item quantity="many">%1$d arquivos não puderam ser copiados para o editor. Eles continuam inalterados na pasta do dispositivo.</item>
         <item quantity="other">%1$d arquivos não puderam ser copiados para o editor. Eles continuam inalterados na pasta do dispositivo.</item>
     </plurals>
-    <!-- The same shortfall when the sizes the provider reported did not fit in the space
-         left. Named separately because it is the one the user can act on. -->
+    <!-- The same shortfall when the space left did not fit what the provider reported,
+         or free space fell below the floor at which the open stops copying. Named
+         separately because it is the one the user can act on. -->
     <plurals name="saf_documents_not_copied_no_room">
         <item quantity="one">Espaço livre insuficiente: %1$d arquivo não pôde ser copiado para o editor. Ele continua inalterado na pasta do dispositivo.</item>
         <item quantity="many">Espaço livre insuficiente: %1$d arquivos não puderam ser copiados para o editor. Eles continuam inalterados na pasta do dispositivo.</item>
@@ -269,19 +274,23 @@
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">%1$s continua na pasta do dispositivo: outro app pode ter alterado um arquivo dentro dela desde a última vez que o editor o leu ou salvou. Exclua por lá se não precisar mais.</string>
     <string name="saf_delete_refused">Não foi possível excluir %1$s da pasta do dispositivo, então ele voltará na próxima vez que a pasta for aberta. Exclua-o no gerenciador de arquivos do dispositivo.</string>
+    <!-- A delete that waited out another write to the same storage and gave up. Worded
+         apart from saf_delete_refused, which says the device folder refused and sends the
+         user to delete the file in their file manager: nothing refused here, and deleting
+         it again once the folder has been opened again works. -->
     <string name="saf_delete_busy">%1$s não foi excluído da pasta do dispositivo porque outra gravação no mesmo armazenamento ainda estava em andamento. Ele voltará na próxima vez que a pasta for aberta; exclua-o novamente nesse momento.</string>
     <!-- Device and app edits kept beside their file instead of being overwritten -->
     <string name="saf_device_copy_preserved">Edição do dispositivo ao lado: %1$s.</string>
     <plurals name="saf_device_copies_preserved">
-        <item quantity="one">%1$d edição mantida. Procure .device- seguido de um horário.</item>
-        <item quantity="many">%1$d edições mantidas. Procure .device- seguido de um horário.</item>
-        <item quantity="other">%1$d edições mantidas. Procure .device- seguido de um horário.</item>
+        <item quantity="one">%1$d edição do dispositivo mantida. Procure .device- seguido de um horário.</item>
+        <item quantity="many">%1$d edições do dispositivo mantidas. Procure .device- seguido de um horário.</item>
+        <item quantity="other">%1$d edições do dispositivo mantidas. Procure .device- seguido de um horário.</item>
     </plurals>
-    <string name="saf_local_copy_preserved">Edição do aplicativo ao lado: %1$s.</string>
+    <string name="saf_local_copy_preserved">Edição do app ao lado: %1$s.</string>
     <plurals name="saf_local_copies_preserved">
-        <item quantity="one">%1$d edição do aplicativo mantida. Procure .local- seguido de um horário.</item>
-        <item quantity="many">%1$d edições do aplicativo mantidas. Procure .local- seguido de um horário.</item>
-        <item quantity="other">%1$d edições do aplicativo mantidas. Procure .local- seguido de um horário.</item>
+        <item quantity="one">%1$d edição do app mantida. Procure .local- seguido de um horário.</item>
+        <item quantity="many">%1$d edições do app mantidas. Procure .local- seguido de um horário.</item>
+        <item quantity="other">%1$d edições do app mantidas. Procure .local- seguido de um horário.</item>
     </plurals>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
@@ -348,7 +357,8 @@
          rather than naming them, because the failure is usually folder-wide and forty
          separate notices is another way of telling the user nothing. Deliberately not
          worded like saf_write_back_failed: most of the folder did arrive, so "the only
-         copy is inside VSCodroid" would overstate. -->
+         copy is inside VSCodroid" would overstate. Also said once when a folder opens, for
+         the files only the app's copy holds that the open tried to send and could not. -->
     <plurals name="saf_upload_incomplete">
         <item quantity="one">%2$s: um item não chegou à pasta do dispositivo.</item>
         <item quantity="many">%2$s: %1$d itens não chegaram à pasta do dispositivo.</item>
@@ -358,12 +368,24 @@
          separately because the cause is a limit this app chose, not the device saying
          no, and the user's next move is to copy the rest out by hand. -->
     <string name="saf_upload_capped">%1$s é grande demais para copiar por inteiro. O restante continua dentro do VSCodroid.</string>
+    <!-- Files only the app's copy holds that an open keeps inside the app because it cannot
+         tell them from a document deleted in the device folder: an earlier version may have
+         lost its note of them, or the folder lists as empty, or its record cannot be read.
+         Named, because the person decides about each, and kept apart from
+         saf_upload_incomplete, which also counts folders and files whose folder never reached
+         the device, which saving again does not send. Saving a kept file again in the editor
+         does send it. The string is for one file (%1$s the folder, %2$s the file); the plural
+         is used for two or more and names the first of them (%3$s). -->
     <string name="saf_file_kept_in_app">%1$s: o arquivo %2$s fica só no VSCodroid, porque pode ter sido excluído na pasta do dispositivo. Salve-o novamente para enviá-lo para lá.</string>
     <plurals name="saf_files_kept_in_app">
         <item quantity="one">%2$s: %1$d arquivo, %3$s, fica só no VSCodroid, porque pode ter sido excluído na pasta do dispositivo. Salve-o novamente para enviá-lo para lá.</item>
         <item quantity="many">%2$s: %1$d arquivos, entre eles %3$s, ficam só no VSCodroid, porque podem ter sido excluídos na pasta do dispositivo. Salve um arquivo novamente para enviá-lo para lá.</item>
         <item quantity="other">%2$s: %1$d arquivos, entre eles %3$s, ficam só no VSCodroid, porque podem ter sido excluídos na pasta do dispositivo. Salve um arquivo novamente para enviá-lo para lá.</item>
     </plurals>
+    <!-- Shown once when sending what a program changed while a device folder opened stopped
+         partway. What was not sent is one of three things, and the sentence covers each: a
+         save that stays inside VSCodroid, a deletion the device did not make, and a rename it
+         did not make. -->
     <string name="saf_open_changes_unsent">%1$s: nem todas as alterações feitas enquanto a pasta abria chegaram à pasta do dispositivo. Um arquivo salvo nesse momento é enviado quando você o salva novamente. Um arquivo excluído nesse momento volta na próxima vez que a pasta for aberta, e uma pasta renomeada nesse momento mantém o nome antigo no dispositivo.</string>
 
     <!-- The Toolchains toolbar's only icon-only control, and the app's only visible
@@ -378,7 +400,13 @@
          translator must leave alone, but the sentence around them is language,
          and a Kotlin constant is the same sentence in every locale. The registry
          carries the resource id instead. displayName and shortLabel stay plain
-         strings on purpose; "Ruby" and "Java 25" are the products' own names. -->
+         strings on purpose; "Ruby", "Java 25" and "C/C++" are the products' own
+         names.
+
+         The C/C++ sentence is also the one place a card says what the toolchain
+         needs: its programs start only through the exec interceptor the terminal
+         preloads, so LD_PRELOAD has to be left alone. The variable name and the
+         command names are literal and stay as they are. -->
     <string name="toolchain_ruby_description">Ruby com irb, gem, bundler</string>
     <string name="toolchain_java_description">OpenJDK 25 (javac, jar, jshell)</string>
     <string name="toolchain_cpp_description">C e C++ (clang, lld, clangd). Precisa do interceptador de exec do terminal: não funciona com LD_PRELOAD definido como null.</string>
@@ -438,6 +466,8 @@
          not translatable and is carried through as it stands. It is there because the
          alternative is a folder that failed to open for no stated reason. -->
     <string name="saf_sync_denied">Permissão negada.</string>
+    <!-- The reason when a save or another sync still holds the folder. A whole sentence,
+         like the one above, because it is joined to the consequence sentences below. -->
     <string name="saf_sync_busy">A pasta ainda está sendo sincronizada. Tente abri-la de novo em instantes.</string>
     <string name="saf_sync_failed">Não foi possível abrir a pasta: %1$s.</string>
     <string name="saf_sync_failed_other_folder_watched">%1$s A pasta que já estava aberta não foi afetada.</string>
@@ -488,7 +518,7 @@
          The floor is substituted as %2$s rather than %2$d although it is an Int.
          It is a version number, not a quantity: nothing about the sentence
          changes when it does, and passing it as a number invites a translator to
-         treat "105 and newer" as something to inflect. -->
+         treat "%2$s or newer" as a count to inflect. -->
     <string name="webview_below_minimum_title">O Android System WebView está desatualizado</string>
     <string name="webview_below_minimum">O Android System WebView deste aparelho está na versão %1$s. O VSCodroid precisa da %2$s ou mais recente: abaixo dela, as visualizações de Markdown e os painéis de extensões, como o chat, ficam em branco. Atualize o Android System WebView na Play Store.</string>
     <string name="webview_update">Atualizar</string>

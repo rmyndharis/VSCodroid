@@ -199,6 +199,9 @@
          that got there first, and the only thing the user needs is to stop tapping. -->
     <string name="toolchain_already_installing">該工具鏈已在安裝中。</string>
     <string name="toolchain_failed_internal">安裝失敗。應用程式記錄中有詳細資訊。</string>
+    <!-- Shown on the splash screen when Install or Retry was tapped on the Toolchains screen while this
+         build's setup had not finished. The tap goes to the splash screen, which runs setup, and the
+         install is not carried over, so the person is told to wait for setup and install again. -->
     <string name="toolchain_install_after_setup">請等初始設定完成後再重新安裝。</string>
     <string name="progress_cancel">取消</string>
     <string name="progress_retry">重試</string>
@@ -213,10 +216,11 @@
     <string name="toolchain_remove_confirm_message">這會刪除所有 %s 檔案。你隨時可以重新安裝。</string>
     <string name="toolchain_older_build">已安裝 %1$s。移除後重新安裝即可取得 %2$s。</string>
 
-    <!-- Launcher shortcut: in practice the only route to the toolchain screen.
-         The activity is not exported and has no launcher entry, and the one
-         command that could reach it through the WebView is sent by no bundled
-         extension. SplashActivity.publishToolchainShortcut records both.
+    <!-- Launcher shortcut: one of two routes to the toolchain screen, and the
+         only one that works while the editor is not up. The activity is not
+         exported and has no launcher entry; the other route is the bundled
+         saf-bridge extension's Manage Toolchains command, which needs a loaded
+         workbench. SplashActivity.publishToolchainShortcut records both.
 
          The long label is the one that has to survive truncation, not the short
          one. The launcher's touch-and-hold menu shows longLabel: read off a
@@ -238,8 +242,9 @@
     <plurals name="saf_documents_not_copied">
         <item quantity="other">有 %1$d 個檔案無法複製到編輯器中。它們在裝置資料夾中維持原狀。</item>
     </plurals>
-    <!-- The same shortfall when the sizes the provider reported did not fit in the space
-         left. Named separately because it is the one the user can act on. -->
+    <!-- The same shortfall when the space left did not fit what the provider reported,
+         or free space fell below the floor at which the open stops copying. Named
+         separately because it is the one the user can act on. -->
     <plurals name="saf_documents_not_copied_no_room">
         <item quantity="other">可用空間不足：有 %1$d 個檔案無法複製到編輯器中。它們在裝置資料夾中維持原狀。</item>
     </plurals>
@@ -265,6 +270,10 @@
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">%1$s 已保留在裝置資料夾中：自編輯器上次讀取或儲存其中的某個檔案以來，其他應用程式可能已變更該檔案。若不再需要，請在該處刪除。</string>
     <string name="saf_delete_refused">無法從裝置資料夾中刪除 %1$s，下次開啟該資料夾時它會再次出現。請在裝置的檔案管理員中刪除。</string>
+    <!-- A delete that waited out another write to the same storage and gave up. Worded
+         apart from saf_delete_refused, which says the device folder refused and sends the
+         user to delete the file in their file manager: nothing refused here, and deleting
+         it again once the folder has been opened again works. -->
     <string name="saf_delete_busy">%1$s 未從裝置資料夾中刪除，因為同一儲存空間上的另一個寫入仍在進行。下次開啟該資料夾時它會再次出現，屆時請再刪除一次。</string>
     <!-- Device and app edits kept beside their file instead of being overwritten -->
     <string name="saf_device_copy_preserved">裝置修改已保留在旁邊：%1$s。</string>
@@ -340,7 +349,8 @@
          rather than naming them, because the failure is usually folder-wide and forty
          separate notices is another way of telling the user nothing. Deliberately not
          worded like saf_write_back_failed: most of the folder did arrive, so "the only
-         copy is inside VSCodroid" would overstate. -->
+         copy is inside VSCodroid" would overstate. Also said once when a folder opens, for
+         the files only the app's copy holds that the open tried to send and could not. -->
     <plurals name="saf_upload_incomplete">
         <item quantity="other">%2$s：有 %1$d 個項目未送達裝置資料夾。</item>
     </plurals>
@@ -348,10 +358,22 @@
          separately because the cause is a limit this app chose, not the device saying
          no, and the user's next move is to copy the rest out by hand. -->
     <string name="saf_upload_capped">%1$s 太大，無法整個複製出去。其餘部分留在 VSCodroid 內。</string>
+    <!-- Files only the app's copy holds that an open keeps inside the app because it cannot
+         tell them from a document deleted in the device folder: an earlier version may have
+         lost its note of them, or the folder lists as empty, or its record cannot be read.
+         Named, because the person decides about each, and kept apart from
+         saf_upload_incomplete, which also counts folders and files whose folder never reached
+         the device, which saving again does not send. Saving a kept file again in the editor
+         does send it. The string is for one file (%1$s the folder, %2$s the file); the plural
+         is used for two or more and names the first of them (%3$s). -->
     <string name="saf_file_kept_in_app">%1$s：%2$s 可能已在裝置資料夾中刪除，因此只保留在 VSCodroid 內。再次儲存即可將其傳送到裝置資料夾。</string>
     <plurals name="saf_files_kept_in_app">
         <item quantity="other">%2$s：包括 %3$s 在內的 %1$d 個檔案可能已在裝置資料夾中刪除，因此只保留在 VSCodroid 內。再次儲存其中某個檔案即可將其傳送到裝置資料夾。</item>
     </plurals>
+    <!-- Shown once when sending what a program changed while a device folder opened stopped
+         partway. What was not sent is one of three things, and the sentence covers each: a
+         save that stays inside VSCodroid, a deletion the device did not make, and a rename it
+         did not make. -->
     <string name="saf_open_changes_unsent">%1$s：開啟期間所做的變更並未全部送達裝置資料夾。期間儲存的檔案，再次儲存即可傳送。期間刪除的檔案會在下次開啟時再次出現，期間重新命名的資料夾在裝置上仍保留原來的名稱。</string>
 
     <!-- The Toolchains toolbar's only icon-only control, and the app's only visible
@@ -366,7 +388,13 @@
          translator must leave alone, but the sentence around them is language,
          and a Kotlin constant is the same sentence in every locale. The registry
          carries the resource id instead. displayName and shortLabel stay plain
-         strings on purpose; "Ruby" and "Java 25" are the products' own names. -->
+         strings on purpose; "Ruby", "Java 25" and "C/C++" are the products' own
+         names.
+
+         The C/C++ sentence is also the one place a card says what the toolchain
+         needs: its programs start only through the exec interceptor the terminal
+         preloads, so LD_PRELOAD has to be left alone. The variable name and the
+         command names are literal and stay as they are. -->
     <string name="toolchain_ruby_description">Ruby，含 irb、gem、bundler</string>
     <string name="toolchain_java_description">OpenJDK 25（javac、jar、jshell）</string>
     <string name="toolchain_cpp_description">C 與 C++（clang、lld、clangd）。需要終端機的 exec 攔截器，LD_PRELOAD 設為 null 時無法使用。</string>
@@ -424,6 +452,8 @@
          not translatable and is carried through as it stands. It is there because the
          alternative is a folder that failed to open for no stated reason. -->
     <string name="saf_sync_denied">權限遭拒。</string>
+    <!-- The reason when a save or another sync still holds the folder. A whole sentence,
+         like the one above, because it is joined to the consequence sentences below. -->
     <string name="saf_sync_busy">資料夾仍在同步中。請稍後再試著開啟。</string>
     <string name="saf_sync_failed">無法開啟資料夾：%1$s。</string>
     <string name="saf_sync_failed_other_folder_watched">%1$s已開啟的資料夾不受影響。</string>
@@ -474,7 +504,7 @@
          The floor is substituted as %2$s rather than %2$d although it is an Int.
          It is a version number, not a quantity: nothing about the sentence
          changes when it does, and passing it as a number invites a translator to
-         treat "105 and newer" as something to inflect. -->
+         treat "%2$s or newer" as a count to inflect. -->
     <string name="webview_below_minimum_title">Android System WebView 版本過舊</string>
     <string name="webview_below_minimum">此裝置上的 Android System WebView 版本為 %1$s。VSCodroid 需要 %2$s 以上版本，低於此版本時，Markdown 預覽和聊天等擴充功能面板會保持空白。請從 Play Store 更新 Android System WebView。</string>
     <string name="webview_update">更新</string>

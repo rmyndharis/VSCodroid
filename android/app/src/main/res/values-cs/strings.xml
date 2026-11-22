@@ -199,6 +199,9 @@
          that got there first, and the only thing the user needs is to stop tapping. -->
     <string name="toolchain_already_installing">Tato sada nástrojů se už instaluje.</string>
     <string name="toolchain_failed_internal">Instalace se nezdařila. Podrobnosti jsou v protokolu aplikace.</string>
+    <!-- Shown on the splash screen when Install or Retry was tapped on the Toolchains screen while this
+         build's setup had not finished. The tap goes to the splash screen, which runs setup, and the
+         install is not carried over, so the person is told to wait for setup and install again. -->
     <string name="toolchain_install_after_setup">Počkejte na dokončení přípravy a pak instalujte znovu.</string>
     <string name="progress_cancel">Zrušit</string>
     <string name="progress_retry">Opakovat</string>
@@ -213,10 +216,11 @@
     <string name="toolchain_remove_confirm_message">Tím se odstraní všechny soubory %s. Instalaci můžete kdykoli zopakovat.</string>
     <string name="toolchain_older_build">Je nainstalováno %1$s. Odeberte jej a nainstalujte znovu, abyste získali %2$s.</string>
 
-    <!-- Launcher shortcut: in practice the only route to the toolchain screen.
-         The activity is not exported and has no launcher entry, and the one
-         command that could reach it through the WebView is sent by no bundled
-         extension. SplashActivity.publishToolchainShortcut records both.
+    <!-- Launcher shortcut: one of two routes to the toolchain screen, and the
+         only one that works while the editor is not up. The activity is not
+         exported and has no launcher entry; the other route is the bundled
+         saf-bridge extension's Manage Toolchains command, which needs a loaded
+         workbench. SplashActivity.publishToolchainShortcut records both.
 
          The long label is the one that has to survive truncation, not the short
          one. The launcher's touch-and-hold menu shows longLabel: read off a
@@ -241,8 +245,9 @@
         <item quantity="many">%1$d souboru se nepodařilo zkopírovat do editoru. Ve složce v zařízení zůstává beze změny.</item>
         <item quantity="other">%1$d souborů se nepodařilo zkopírovat do editoru. Ve složce v zařízení zůstávají beze změny.</item>
     </plurals>
-    <!-- The same shortfall when the sizes the provider reported did not fit in the space
-         left. Named separately because it is the one the user can act on. -->
+    <!-- The same shortfall when the space left did not fit what the provider reported,
+         or free space fell below the floor at which the open stops copying. Named
+         separately because it is the one the user can act on. -->
     <plurals name="saf_documents_not_copied_no_room">
         <item quantity="one">Nedostatek volného místa: jeden soubor se nepodařilo zkopírovat do editoru. Ve složce v zařízení zůstává beze změny.</item>
         <item quantity="few">Nedostatek volného místa: %1$d soubory se nepodařilo zkopírovat do editoru. Ve složce v zařízení zůstávají beze změny.</item>
@@ -271,6 +276,10 @@
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">Adresář %1$s zůstal ve složce v zařízení: jiná aplikace mohla změnit soubor v něm od chvíle, kdy ho editor naposledy načetl nebo uložil. Pokud ho už nepotřebujete, odstraňte ho tam.</string>
     <string name="saf_delete_refused">%1$s se nepodařilo smazat ze složky v zařízení, takže se při příštím otevření složky objeví znovu. Smažte tuto položku ve správci souborů v zařízení.</string>
+    <!-- A delete that waited out another write to the same storage and gave up. Worded
+         apart from saf_delete_refused, which says the device folder refused and sends the
+         user to delete the file in their file manager: nothing refused here, and deleting
+         it again once the folder has been opened again works. -->
     <string name="saf_delete_busy">Položka %1$s nebyla ze složky v zařízení smazána, protože do stejného úložiště ještě probíhal jiný zápis. Při příštím otevření složky se objeví znovu; potom ji smažte znovu.</string>
     <!-- Device and app edits kept beside their file instead of being overwritten -->
     <string name="saf_device_copy_preserved">Změna ze zařízení vedle souboru: %1$s.</string>
@@ -352,7 +361,8 @@
          rather than naming them, because the failure is usually folder-wide and forty
          separate notices is another way of telling the user nothing. Deliberately not
          worded like saf_write_back_failed: most of the folder did arrive, so "the only
-         copy is inside VSCodroid" would overstate. -->
+         copy is inside VSCodroid" would overstate. Also said once when a folder opens, for
+         the files only the app's copy holds that the open tried to send and could not. -->
     <plurals name="saf_upload_incomplete">
         <item quantity="one">%2$s: jedna položka se nedostala do složky v zařízení.</item>
         <item quantity="few">%2$s: %1$d položky se nedostaly do složky v zařízení.</item>
@@ -363,6 +373,14 @@
          separately because the cause is a limit this app chose, not the device saying
          no, and the user's next move is to copy the rest out by hand. -->
     <string name="saf_upload_capped">Složka %1$s je příliš velká, nezkopírovala se celá. Zbytek zůstal v aplikaci VSCodroid.</string>
+    <!-- Files only the app's copy holds that an open keeps inside the app because it cannot
+         tell them from a document deleted in the device folder: an earlier version may have
+         lost its note of them, or the folder lists as empty, or its record cannot be read.
+         Named, because the person decides about each, and kept apart from
+         saf_upload_incomplete, which also counts folders and files whose folder never reached
+         the device, which saving again does not send. Saving a kept file again in the editor
+         does send it. The string is for one file (%1$s the folder, %2$s the file); the plural
+         is used for two or more and names the first of them (%3$s). -->
     <string name="saf_file_kept_in_app">%1$s: soubor %2$s zůstává jen v aplikaci VSCodroid, protože mohl být smazán ve složce v zařízení. Uložte ho znovu a odešle se tam.</string>
     <plurals name="saf_files_kept_in_app">
         <item quantity="one">%2$s: %1$d soubor, %3$s, zůstává jen v aplikaci VSCodroid, protože mohl být smazán ve složce v zařízení. Uložte ho znovu a odešle se tam.</item>
@@ -370,6 +388,10 @@
         <item quantity="many">%2$s: %1$d souboru, mezi nimi %3$s, zůstává jen v aplikaci VSCodroid, protože mohly být smazány ve složce v zařízení. Uložte soubor znovu a odešle se tam.</item>
         <item quantity="other">%2$s: %1$d souborů, mezi nimi %3$s, zůstává jen v aplikaci VSCodroid, protože mohly být smazány ve složce v zařízení. Uložte soubor znovu a odešle se tam.</item>
     </plurals>
+    <!-- Shown once when sending what a program changed while a device folder opened stopped
+         partway. What was not sent is one of three things, and the sentence covers each: a
+         save that stays inside VSCodroid, a deletion the device did not make, and a rename it
+         did not make. -->
     <string name="saf_open_changes_unsent">%1$s: ne všechny změny provedené během otevírání se dostaly do složky v zařízení. Soubor uložený v té době se odešle, až ho znovu uložíte. Soubor smazaný v té době se při příštím otevření složky objeví znovu a složka přejmenovaná v té době si v zařízení ponechá původní název.</string>
 
     <!-- The Toolchains toolbar's only icon-only control, and the app's only visible
@@ -384,7 +406,13 @@
          translator must leave alone, but the sentence around them is language,
          and a Kotlin constant is the same sentence in every locale. The registry
          carries the resource id instead. displayName and shortLabel stay plain
-         strings on purpose; "Ruby" and "Java 25" are the products' own names. -->
+         strings on purpose; "Ruby", "Java 25" and "C/C++" are the products' own
+         names.
+
+         The C/C++ sentence is also the one place a card says what the toolchain
+         needs: its programs start only through the exec interceptor the terminal
+         preloads, so LD_PRELOAD has to be left alone. The variable name and the
+         command names are literal and stay as they are. -->
     <string name="toolchain_ruby_description">Ruby s nástroji irb, gem, bundler</string>
     <string name="toolchain_java_description">OpenJDK 25 (javac, jar, jshell)</string>
     <string name="toolchain_cpp_description">C a C++ (clang, lld, clangd). Vyžaduje zachytávač exec v terminálu: nefunguje, když je LD_PRELOAD nastaven na null.</string>
@@ -445,6 +473,8 @@
          not translatable and is carried through as it stands. It is there because the
          alternative is a folder that failed to open for no stated reason. -->
     <string name="saf_sync_denied">Přístup byl odepřen.</string>
+    <!-- The reason when a save or another sync still holds the folder. A whole sentence,
+         like the one above, because it is joined to the consequence sentences below. -->
     <string name="saf_sync_busy">Složka se stále synchronizuje. Zkuste ji za chvíli otevřít znovu.</string>
     <string name="saf_sync_failed">Složku se nepodařilo otevřít: %1$s.</string>
     <string name="saf_sync_failed_other_folder_watched">%1$s Již otevřená složka tím není dotčena.</string>
@@ -495,7 +525,7 @@
          The floor is substituted as %2$s rather than %2$d although it is an Int.
          It is a version number, not a quantity: nothing about the sentence
          changes when it does, and passing it as a number invites a translator to
-         treat "105 and newer" as something to inflect. -->
+         treat "%2$s or newer" as a count to inflect. -->
     <string name="webview_below_minimum_title">Android System WebView je zastaralý</string>
     <string name="webview_below_minimum">Android System WebView v tomto zařízení má verzi %1$s. VSCodroid potřebuje verzi %2$s nebo novější: se starší zůstanou náhledy Markdownu a panely rozšíření, například chat, prázdné. Aktualizujte Android System WebView v Obchodu Play.</string>
     <string name="webview_update">Aktualizovat</string>
@@ -636,5 +666,5 @@
          one English word survived inside an otherwise translated About dialog. -->
     <string name="about_version_unknown">neznámá</string>
     <string name="saf_folder_unavailable">Místní kopie této složky v zařízení už není dostupná. Otevřete složku ze zařízení znovu.</string>
-    <string name="saf_workspace_multiple_folders">Tento pracovní prostor zahrnuje více než jednu složku zařízení. Současně se synchronizuje jen jedna složka zařízení; úpravy v ostatních zůstávají uvnitř VSCodroidu, dokud tyto složky neotevřete přímo.</string>
+    <string name="saf_workspace_multiple_folders">Tento pracovní prostor zahrnuje více než jednu složku zařízení. Současně se synchronizuje jen jedna složka zařízení; úpravy v ostatních zůstávají uvnitř aplikace VSCodroid, dokud tyto složky neotevřete přímo.</string>
 </resources>

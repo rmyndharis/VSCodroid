@@ -443,7 +443,6 @@
          grant it could not use, which let a caller put the chooser in front of
          the user without asking for it, so the sentence has to carry the next
          step itself. -->
-    <string name="saf_folder_unavailable">The local copy of this device folder is no longer available. Open the folder from the device again.</string>
     <string name="saf_permission_expired">Permission expired. Please select the folder again.</string>
 
     <!-- A device folder that did not open. Said as one sentence per case, with the
@@ -512,7 +511,7 @@
          The floor is substituted as %2$s rather than %2$d although it is an Int.
          It is a version number, not a quantity: nothing about the sentence
          changes when it does, and passing it as a number invites a translator to
-         treat "105 and newer" as something to inflect. -->
+         treat "%2$s or newer" as a count to inflect. -->
     <string name="webview_below_minimum_title">Android System WebView is out of date</string>
     <string name="webview_below_minimum">This device\'s Android System WebView is version %1$s. VSCodroid needs %2$s or newer: below it, Markdown previews and extension panels such as chat stay blank. Update Android System WebView from the Play Store.</string>
     <string name="webview_update">Update</string>
@@ -652,5 +651,6 @@
          tls_unknown_host stands in for an address. Written in Kotlin before, so
          one English word survived inside an otherwise translated About dialog. -->
     <string name="about_version_unknown">unknown</string>
+    <string name="saf_folder_unavailable">The local copy of this device folder is no longer available. Open the folder from the device again.</string>
     <string name="saf_workspace_multiple_folders">This workspace spans more than one device folder. Only one device folder is synced at a time; edits in the others stay inside VSCodroid until those folders are opened directly.</string>
 </resources>

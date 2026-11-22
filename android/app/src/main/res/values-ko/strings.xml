@@ -199,6 +199,9 @@
          that got there first, and the only thing the user needs is to stop tapping. -->
     <string name="toolchain_already_installing">해당 툴체인은 이미 설치 중입니다.</string>
     <string name="toolchain_failed_internal">설치에 실패했습니다. 자세한 내용은 앱 로그에 있습니다.</string>
+    <!-- Shown on the splash screen when Install or Retry was tapped on the Toolchains screen while this
+         build's setup had not finished. The tap goes to the splash screen, which runs setup, and the
+         install is not carried over, so the person is told to wait for setup and install again. -->
     <string name="toolchain_install_after_setup">초기 설정이 끝날 때까지 기다린 후 다시 설치하세요.</string>
     <string name="progress_cancel">취소</string>
     <string name="progress_retry">다시 시도</string>
@@ -213,10 +216,11 @@
     <string name="toolchain_remove_confirm_message">%s 파일이 모두 삭제됩니다. 언제든지 다시 설치할 수 있습니다.</string>
     <string name="toolchain_older_build">%1$s이(가) 설치되어 있습니다. %2$s을(를) 사용하려면 제거한 뒤 다시 설치하세요.</string>
 
-    <!-- Launcher shortcut: in practice the only route to the toolchain screen.
-         The activity is not exported and has no launcher entry, and the one
-         command that could reach it through the WebView is sent by no bundled
-         extension. SplashActivity.publishToolchainShortcut records both.
+    <!-- Launcher shortcut: one of two routes to the toolchain screen, and the
+         only one that works while the editor is not up. The activity is not
+         exported and has no launcher entry; the other route is the bundled
+         saf-bridge extension's Manage Toolchains command, which needs a loaded
+         workbench. SplashActivity.publishToolchainShortcut records both.
 
          The long label is the one that has to survive truncation, not the short
          one. The launcher's touch-and-hold menu shows longLabel: read off a
@@ -238,8 +242,9 @@
     <plurals name="saf_documents_not_copied">
         <item quantity="other">파일 %1$d개를 편집기로 복사하지 못했습니다. 기기 폴더에는 그대로 남아 있습니다.</item>
     </plurals>
-    <!-- The same shortfall when the sizes the provider reported did not fit in the space
-         left. Named separately because it is the one the user can act on. -->
+    <!-- The same shortfall when the space left did not fit what the provider reported,
+         or free space fell below the floor at which the open stops copying. Named
+         separately because it is the one the user can act on. -->
     <plurals name="saf_documents_not_copied_no_room">
         <item quantity="other">여유 공간이 부족하여 파일 %1$d개를 편집기로 복사하지 못했습니다. 기기 폴더에는 그대로 남아 있습니다.</item>
     </plurals>
@@ -264,8 +269,12 @@
     <!-- A directory deleted in the editor that holds such a file, and no file the editor
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">%1$s은(는) 기기 폴더에 남겨 두었습니다. 편집기가 그 안의 파일을 마지막으로 읽거나 저장한 뒤에 다른 앱이 그 파일을 변경했을 수 있기 때문입니다. 더 이상 필요하지 않으면 기기 폴더에서 삭제하세요.</string>
-    <string name="saf_delete_refused">%1$s 을(를) 기기 폴더에서 삭제하지 못했습니다. 폴더를 다시 열면 해당 항목이 다시 나타납니다. 기기의 파일 관리자에서 삭제하세요.</string>
-    <string name="saf_delete_busy">같은 저장소에 대한 다른 쓰기 작업이 아직 진행 중이어서 %1$s 을(를) 기기 폴더에서 삭제하지 않았습니다. 폴더를 다시 열면 해당 항목이 다시 나타나니 그때 다시 삭제하세요.</string>
+    <string name="saf_delete_refused">%1$s을(를) 기기 폴더에서 삭제하지 못했습니다. 폴더를 다시 열면 해당 항목이 다시 나타납니다. 기기의 파일 관리자에서 삭제하세요.</string>
+    <!-- A delete that waited out another write to the same storage and gave up. Worded
+         apart from saf_delete_refused, which says the device folder refused and sends the
+         user to delete the file in their file manager: nothing refused here, and deleting
+         it again once the folder has been opened again works. -->
+    <string name="saf_delete_busy">같은 저장소에 대한 다른 쓰기 작업이 아직 진행 중이어서 %1$s을(를) 기기 폴더에서 삭제하지 않았습니다. 폴더를 다시 열면 해당 항목이 다시 나타나니 그때 다시 삭제하세요.</string>
     <!-- Device and app edits kept beside their file instead of being overwritten -->
     <string name="saf_device_copy_preserved">기기 변경 사항을 옆에 보관: %1$s.</string>
     <plurals name="saf_device_copies_preserved">
@@ -340,7 +349,8 @@
          rather than naming them, because the failure is usually folder-wide and forty
          separate notices is another way of telling the user nothing. Deliberately not
          worded like saf_write_back_failed: most of the folder did arrive, so "the only
-         copy is inside VSCodroid" would overstate. -->
+         copy is inside VSCodroid" would overstate. Also said once when a folder opens, for
+         the files only the app's copy holds that the open tried to send and could not. -->
     <plurals name="saf_upload_incomplete">
         <item quantity="other">%2$s: 항목 %1$d개가 기기 폴더에 저장되지 않았습니다.</item>
     </plurals>
@@ -348,10 +358,22 @@
          separately because the cause is a limit this app chose, not the device saying
          no, and the user's next move is to copy the rest out by hand. -->
     <string name="saf_upload_capped">%1$s은(는) 너무 커서 전체를 복사할 수 없습니다. 나머지는 VSCodroid 안에 남아 있습니다.</string>
+    <!-- Files only the app's copy holds that an open keeps inside the app because it cannot
+         tell them from a document deleted in the device folder: an earlier version may have
+         lost its note of them, or the folder lists as empty, or its record cannot be read.
+         Named, because the person decides about each, and kept apart from
+         saf_upload_incomplete, which also counts folders and files whose folder never reached
+         the device, which saving again does not send. Saving a kept file again in the editor
+         does send it. The string is for one file (%1$s the folder, %2$s the file); the plural
+         is used for two or more and names the first of them (%3$s). -->
     <string name="saf_file_kept_in_app">%1$s: %2$s은(는) 기기 폴더에서 삭제되었을 수 있어 VSCodroid 안에만 남아 있습니다. 기기 폴더로 보내려면 다시 저장하세요.</string>
     <plurals name="saf_files_kept_in_app">
         <item quantity="other">%2$s: %3$s 등 파일 %1$d개는 기기 폴더에서 삭제되었을 수 있어 VSCodroid 안에만 남아 있습니다. 기기 폴더로 보내려면 파일을 다시 저장하세요.</item>
     </plurals>
+    <!-- Shown once when sending what a program changed while a device folder opened stopped
+         partway. What was not sent is one of three things, and the sentence covers each: a
+         save that stays inside VSCodroid, a deletion the device did not make, and a rename it
+         did not make. -->
     <string name="saf_open_changes_unsent">%1$s: 폴더를 여는 동안 이루어진 변경 사항 중 일부가 기기 폴더에 반영되지 않았습니다. 그동안 저장한 파일은 다시 저장하면 전송됩니다. 그동안 삭제한 파일은 폴더를 다시 열면 다시 나타나고, 그동안 이름을 바꾼 폴더는 기기에서 이전 이름을 유지합니다.</string>
 
     <!-- The Toolchains toolbar's only icon-only control, and the app's only visible
@@ -366,7 +388,13 @@
          translator must leave alone, but the sentence around them is language,
          and a Kotlin constant is the same sentence in every locale. The registry
          carries the resource id instead. displayName and shortLabel stay plain
-         strings on purpose; "Ruby" and "Java 25" are the products' own names. -->
+         strings on purpose; "Ruby", "Java 25" and "C/C++" are the products' own
+         names.
+
+         The C/C++ sentence is also the one place a card says what the toolchain
+         needs: its programs start only through the exec interceptor the terminal
+         preloads, so LD_PRELOAD has to be left alone. The variable name and the
+         command names are literal and stay as they are. -->
     <string name="toolchain_ruby_description">Ruby와 irb, gem, bundler</string>
     <string name="toolchain_java_description">OpenJDK 25 (javac, jar, jshell)</string>
     <string name="toolchain_cpp_description">C 및 C++ (clang, lld, clangd). 터미널의 exec 인터셉터가 필요하며 LD_PRELOAD를 null로 설정하면 동작하지 않습니다.</string>
@@ -424,6 +452,8 @@
          not translatable and is carried through as it stands. It is there because the
          alternative is a folder that failed to open for no stated reason. -->
     <string name="saf_sync_denied">권한이 거부되었습니다.</string>
+    <!-- The reason when a save or another sync still holds the folder. A whole sentence,
+         like the one above, because it is joined to the consequence sentences below. -->
     <string name="saf_sync_busy">폴더를 아직 동기화하는 중입니다. 잠시 후에 다시 열어 보세요.</string>
     <string name="saf_sync_failed">폴더를 열지 못했습니다: %1$s.</string>
     <string name="saf_sync_failed_other_folder_watched">%1$s 이미 열려 있는 폴더에는 영향이 없습니다.</string>
@@ -474,7 +504,7 @@
          The floor is substituted as %2$s rather than %2$d although it is an Int.
          It is a version number, not a quantity: nothing about the sentence
          changes when it does, and passing it as a number invites a translator to
-         treat "105 and newer" as something to inflect. -->
+         treat "%2$s or newer" as a count to inflect. -->
     <string name="webview_below_minimum_title">Android System WebView가 오래되었습니다</string>
     <string name="webview_below_minimum">이 기기의 Android System WebView 버전은 %1$s입니다. VSCodroid에는 %2$s 이상이 필요합니다. 그보다 낮으면 Markdown 미리 보기와 채팅 같은 확장 패널이 빈 화면으로 남습니다. Play Store에서 Android System WebView를 업데이트하세요.</string>
     <string name="webview_update">업데이트</string>
