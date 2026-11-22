@@ -364,107 +364,11 @@ async function main() {
             );
         }
 
-        // Scope check matching VS Code's ConfigurationModel consolidation order
-        // (DEFAULT -> USER_LOCAL -> USER_REMOTE -> WORKSPACE, merging root keys
-        // and [language] override blocks across layers before applying the active
-        // language's overrideIdentifier): configurationDefaults populates the
-        // DEFAULT scope (inspect().defaultValue), so any language setting chosen
-        // by the user in User, Remote or Workspace settings wins.
-        const inspectFormatter = (languageId, { userLocal = {}, userRemote = {}, workspace = {} } = {}) => {
-            const layerValue = (layer) => {
-                const block = layer[`[${languageId}]`];
-                if (block && Object.prototype.hasOwnProperty.call(block, 'editor.defaultFormatter')) {
-                    return { hasOverride: true, value: block['editor.defaultFormatter'] };
-                }
-                if (Object.prototype.hasOwnProperty.call(layer, 'editor.defaultFormatter')) {
-                    return { hasRoot: true, value: layer['editor.defaultFormatter'] };
-                }
-                return {};
-            };
-            const layers = [contributedDefaults, userLocal, userRemote, workspace];
-            let rootValue;
-            let overrideValue;
-            let hasOverride = false;
-            for (const layer of layers) {
-                if (Object.prototype.hasOwnProperty.call(layer, 'editor.defaultFormatter')) {
-                    rootValue = layer['editor.defaultFormatter'];
-                }
-                const block = layer[`[${languageId}]`];
-                if (block && Object.prototype.hasOwnProperty.call(block, 'editor.defaultFormatter')) {
-                    overrideValue = block['editor.defaultFormatter'];
-                    hasOverride = true;
-                }
-            }
-            return {
-                scope: 'DEFAULT',
-                defaultValue: layerValue(contributedDefaults).value,
-                userLocalValue: layerValue(userLocal).value,
-                userRemoteValue: layerValue(userRemote).value,
-                workspaceValue: layerValue(workspace).value,
-                effectiveValue: hasOverride ? overrideValue : rootValue,
-            };
-        };
-
-        const freshJs = inspectFormatter('javascript');
-        assert.strictEqual(freshJs.defaultValue, PRETTIER_ID);
-        assert.strictEqual(freshJs.userLocalValue, undefined);
-        assert.strictEqual(freshJs.effectiveValue, PRETTIER_ID);
-
-        const userChoseBuiltInTs = inspectFormatter('javascript', {
-            userLocal: {
-                '[javascript]': { 'editor.defaultFormatter': 'vscode.typescript-language-features' },
-            },
-        });
-        assert.strictEqual(
-            userChoseBuiltInTs.defaultValue,
-            PRETTIER_ID,
-            'configurationDefaults remains in the DEFAULT layer underneath the user setting',
-        );
-        assert.strictEqual(
-            userChoseBuiltInTs.effectiveValue,
-            'vscode.typescript-language-features',
-            'a formatter chosen by the user in User settings must outrank configurationDefaults',
-        );
-        assert.strictEqual(
-            inspectFormatter('json', {
-                userLocal: {
-                    '[javascript]': { 'editor.defaultFormatter': 'vscode.typescript-language-features' },
-                },
-            }).effectiveValue,
-            PRETTIER_ID,
-            'overriding [javascript] in User settings leaves other Prettier languages on their default',
-        );
-
-        const workspaceChoseEslint = inspectFormatter('javascript', {
-            userLocal: {
-                '[javascript]': { 'editor.defaultFormatter': 'vscode.typescript-language-features' },
-            },
-            workspace: {
-                '[javascript]': { 'editor.defaultFormatter': 'dbaeumer.vscode-eslint' },
-            },
-        });
-        assert.strictEqual(
-            workspaceChoseEslint.effectiveValue,
-            'dbaeumer.vscode-eslint',
-            'a workspace formatter setting must outrank both User settings and configurationDefaults',
-        );
-
-        const userClearedToNull = inspectFormatter('markdown', {
-            userLocal: {
-                '[markdown]': { 'editor.defaultFormatter': null },
-            },
-        });
-        assert.strictEqual(
-            userClearedToNull.effectiveValue,
-            null,
-            'an explicit null in User settings must still override configurationDefaults',
-        );
-
-        const pythonWithGlobalUser = inspectFormatter('python', {
-            userLocal: { 'editor.defaultFormatter': 'ms-python.black-formatter' },
-        });
-        assert.strictEqual(pythonWithGlobalUser.defaultValue, undefined);
-        assert.strictEqual(pythonWithGlobalUser.effectiveValue, 'ms-python.black-formatter');
+        // Which layer wins is VS Code's merge and not this manifest's, and nothing
+        // here can run VS Code's configuration model: a copy of it written into
+        // this file could only agree with itself. What the manifest controls is
+        // checked above, the sixteen language blocks and no root key, and the
+        // comment at the top of this block says what VS Code does with them.
 
         // The side bar closing itself when something it leaves no room for comes
         // on screen, which is the whole of the portrait layout fix on this side.

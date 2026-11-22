@@ -102,7 +102,15 @@ function sendBridgeCommand(cmd, extra = {}, timeoutMs = BRIDGE_TIMEOUT_MS) {
 
 /** The terminal the Run button reuses, so that a second run replaces the first. */
 const RUN_TERMINAL = 'VSCodroid Run';
+/** Moved by every activation and deactivation: work begun for an older page stops. */
 let actionGeneration = 0;
+/**
+ * Moved by every run, so a newer run stops an older one still on its way, and a run stops a move
+ * to a named path already chosen. Its own counter: a run moved the one above, so a run made while
+ * the reopen-by-name offer was up left Reopen and Don't Ask Again doing nothing, and the second
+ * not even kept.
+ */
+let runGeneration = 0;
 
 /** The record of installed on-demand toolchains, from this extension's own directory. */
 const TOOLCHAIN_STATE = ['..', '..', 'toolchains.json'];
@@ -698,10 +706,12 @@ function activate(context) {
     // Once per folder each time the editor server starts. Every reload and every
     // folder switch loads a new page, and with it a new extension host, so a set
     // kept here alone raised the same warning on each of them. The server
-    // outlives its pages, and server.js notes the pid and port of every editor
-    // server it starts, so the folders already warned about are kept in global
-    // state with that note and forgotten once it changes. A server adopted after
-    // its bootstrap died keeps its note, and it is the same server.
+    // outlives its pages, and server.js writes a note for every editor server it
+    // starts, so the folders already warned about are kept in global state with a
+    // digest of that note and forgotten once it changes. A digest and not the
+    // note: the note also holds the key the app proves the run with, which has
+    // no business in the workbench's storage. A server adopted after its
+    // bootstrap died keeps its note, and it is the same server.
     //
     // A dialog, not a notification. The warning matters at the moment the folder
     // opens, and a warning toast hides itself after 12 seconds and is then only
@@ -716,12 +726,18 @@ function activate(context) {
     const readWarnedThisServer = async () => {
         let server = '';
         try {
-            server = new TextDecoder().decode(await vscode.workspace.fs.readFile(
+            const note = await vscode.workspace.fs.readFile(
                 vscode.Uri.joinPath(context.extensionUri, ...EDITOR_SERVER_NOTE)
-            ));
+            );
+            if (note.length) {
+                server = Array.from(
+                    new Uint8Array(await crypto.subtle.digest('SHA-256', note)),
+                    (byte) => byte.toString(16).padStart(2, '0')
+                ).join('');
+            }
         } catch (_) {
-            // No note to tie the warnings to, so they last as long as this page,
-            // which is no worse than before there was one.
+            // No note, or no digest of it, to tie the warnings to, so they last as
+            // long as this page, which is no worse than before there was one.
         }
         const shown = /** @type {{ server?: string, folders?: string[] } | undefined} */ (
             context.globalState.get(SHOWN_SHARED_STORAGE)
@@ -814,8 +830,11 @@ function activate(context) {
             return;
         }
         if (action !== REOPEN) return;
+        // From here a run is newer than the choice, and the move gives way to it.
+        const runs = runGeneration;
+        const stillWanted = () => sameWorkspace() && runs === runGeneration;
         const hasBackups = await holdsBackups(context);
-        if (!sameWorkspace()) return;
+        if (!stillWanted()) return;
         if (moveWouldLose() || hasBackups) {
             vscode.window.showWarningMessage(
                 `Save or close the files with unsaved changes and close the terminals first, ` +
@@ -832,9 +851,9 @@ function activate(context) {
         let opened = false;
         try {
             await context.globalState.update(CARRIED_EDITORS, carried);
-            if (!sameWorkspace() || !ownsCarriedEditors(carried)) return;
+            if (!stillWanted() || !ownsCarriedEditors(carried)) return;
             const backupsNow = await holdsBackups(context);
-            if (!sameWorkspace() || !ownsCarriedEditors(carried) || moveWouldLose() || backupsNow) return;
+            if (!stillWanted() || !ownsCarriedEditors(carried) || moveWouldLose() || backupsNow) return;
             await vscode.commands.executeCommand('vscode.openFolder', target, { forceReuseWindow: true });
             opened = true;
         } finally {
@@ -896,18 +915,19 @@ function activate(context) {
             return;
         }
 
-        const generation = ++actionGeneration;
+        const generation = ++runGeneration;
+        const superseded = () => generation !== runGeneration || activation !== actionGeneration;
 
         // Unknown (undefined) counts as installed: a record that cannot be read is no
         // reason to refuse, and the shell says plainly when a program is missing.
         const installed = runner.toolchain && await installedToolchains(context);
-        if (generation !== actionGeneration) return;
+        if (superseded()) return;
         if (installed && !installed.includes(runner.toolchain)) {
             const manage = 'Manage Toolchains';
             const choice = await vscode.window.showInformationMessage(
                 `${runner.label} is not installed. Add it from the toolchains screen.`, manage
             );
-            if (generation !== actionGeneration) return;
+            if (superseded()) return;
             if (choice === manage) {
                 await vscode.commands.executeCommand('vscodroid.manageToolchains');
             }
@@ -917,7 +937,7 @@ function activate(context) {
         // save() answers false for a document that was not dirty, so the outcome is read
         // from the document: a failed save must not run the older file on disk.
         await document.save();
-        if (generation !== actionGeneration) return;
+        if (superseded()) return;
         if (document.isDirty) {
             vscode.window.showErrorMessage('Could not save the file, so it was not run.');
             return;
@@ -976,7 +996,7 @@ const SILENCED_SHARED_STORAGE = 'sharedStorageWarning.silenced';
 
 /**
  * The globalState key holding the folders warned about while one editor server
- * runs, with that server's note: `{ server, folders }`.
+ * runs, with the SHA-256 of that server's note, in hex: `{ server, folders }`.
  */
 const SHOWN_SHARED_STORAGE = 'sharedStorageWarning.shown';
 
@@ -984,9 +1004,11 @@ const SHOWN_SHARED_STORAGE = 'sharedStorageWarning.shown';
  * The editor server's note, from this extension's own directory.
  *
  * Bundled extensions live in the server's `--extensions-dir`,
- * `<files>/home/.vscodroid/extensions/<this one>`, and server.js writes the pid
- * and port of each editor server it starts to `<files>/server/editor-server.pid`
- * (`Environment.getExtensionsDir`, `Environment.getServerDir`, `EDITOR_PID_FILE`).
+ * `<files>/home/.vscodroid/extensions/<this one>`, and server.js writes a note for
+ * each editor server it starts, `{ pid, port, runId, socketPath }`, to
+ * `<files>/server/editor-server.pid` (`Environment.getExtensionsDir`,
+ * `Environment.getServerDir`, `EDITOR_PID_FILE`). `runId` is the key the app
+ * proves the run with, so only a digest of the note is kept.
  * Read through the editor's own file access, which reaches the server's files.
  */
 const EDITOR_SERVER_NOTE = ['..', '..', '..', '..', 'server', 'editor-server.pid'];

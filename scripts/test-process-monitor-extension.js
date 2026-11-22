@@ -599,15 +599,99 @@ function snapshot(total, terminals, langservers, budget = { idle: 5, soft: 8, er
     }
 }
 
+// No snapshot at all is no live count either, once the writer has had time to write one.
+//
+// An adopted editor server runs no monitor, since the monitor lives in the bootstrap that
+// died, and TMPDIR can be emptied under it: Clear Caches empties it, and Android may
+// reclaim the cache directory it sits in. A page loaded then never reads a snapshot, and
+// the status item said 'loading...' for as long as the page stayed open. After the same
+// three missed writes that mark a stopped writer, it says what the stale guard says.
+//
+// NEGATIVE CONTROL: put the condition in poll() back to `lastSnapshot && isStale(lastSnapshot)`
+// and the second observation goes red.
+{
+    const tmp = fs.mkdtempSync(path.join(BASE_TMP, 'vscodroid-empty-'));
+    const originalNow = Date.now;
+    const originalInterval = global.setInterval;
+    const originalItem = vscodeStub.window.createStatusBarItem;
+    const originalTmp = process.env.TMPDIR;
+    const startedAt = originalNow();
+    let now = startedAt;
+    let poll;
+    let item;
+    let extension;
+    try {
+        Date.now = () => now;
+        global.setInterval = (callback) => { poll = callback; return 1; };
+        vscodeStub.window.createStatusBarItem = (...args) => (item = originalItem(...args));
+        process.env.TMPDIR = tmp;
+        shown.length = 0;
+        delete require.cache[require.resolve(EXTENSION)];
+        extension = require(EXTENSION);
+        extension.activate({ subscriptions: [] });
+        const limit = extension.STALE_AFTER_MS;
+        const observed = [];
+        for (const age of [limit, limit + 1]) {
+            now = startedAt + age;
+            poll();
+            observed.push({ age, text: item.text, noData: /^VSCodroid Process Monitor: no process data/.test(item.tooltip) });
+        }
+        assert.deepStrictEqual(observed, [
+            { age: limit, text: '$(pulse) --', noData: false },
+            { age: limit + 1, text: '$(pulse) --', noData: true },
+        ], 'with no snapshot ever written the status item went on saying it was loading: ' + JSON.stringify(observed));
+        assert.deepStrictEqual(shown, [], 'a page with no snapshot raised a notification');
+    } finally {
+        if (extension) extension.deactivate();
+        Date.now = originalNow;
+        global.setInterval = originalInterval;
+        vscodeStub.window.createStatusBarItem = originalItem;
+        if (originalTmp === undefined) delete process.env.TMPDIR;
+        else process.env.TMPDIR = originalTmp;
+        fs.rmSync(tmp, { recursive: true, force: true });
+    }
+}
+
+// The heap ceiling is read each time the editor server starts, not when the app opens:
+// reopening the app while its notification keeps the server running applies nothing, and
+// a restart after a crash applies it with no app restart at all. So the setting says how
+// to apply it now, by the notification's own Stop Server button, in every language, and
+// the button's name is read from the strings the notification draws it with.
+//
+// NEGATIVE CONTROL: put back "Takes effect the next time the app is started" in any
+// package.nls file and this goes red for that file.
+{
+    const RES = path.join(__dirname, '../android/app/src/main/res');
+    const stopLabel = (locale) => {
+        const qualifier = locale ? '-' + locale.replace(/-([a-z]+)$/, (all, region) => '-r' + region.toUpperCase()) : '';
+        const strings = fs.readFileSync(path.join(RES, `values${qualifier}`, 'strings.xml'), 'utf8');
+        const found = /<string name="action_stop">([^<]+)<\/string>/.exec(strings);
+        assert.ok(found, `values${qualifier}/strings.xml has no action_stop, so this cannot say what the button is called`);
+        return found[1];
+    };
+    const files = fs.readdirSync(path.dirname(EXTENSION)).filter((f) => /^package\.nls(\.[a-z-]+)?\.json$/.test(f)).sort();
+    assert.strictEqual(files.length, 14, `expected the English base and 13 translations, found ${files.join(', ')}`);
+    const wrong = files.filter((file) => {
+        const text = JSON.parse(fs.readFileSync(path.join(path.dirname(EXTENSION), file), 'utf8'))['config.server.heapCeilingMb'] || '';
+        return !text.includes(stopLabel(file.slice(12, -5))) || /next time the app is started/.test(text);
+    });
+    assert.deepStrictEqual(
+        wrong, [],
+        'the heap ceiling setting does not say it takes effect when the editor server next starts, by the ' +
+            'notification\'s Stop Server, in: ' + wrong.join(', '),
+    );
+}
+
 // The details view promises no reclaim, even off a snapshot that still names one.
 //
 // `budget.reclaim` was the count at which process-monitor.js signalled idle
 // language servers, and the view rendered it on the budget line and in the
 // advice as the one number that made something happen on its own. The signal is
 // gone because it freed nothing, but a snapshot written by the previous build
-// can still be on disk in TMPDIR, which is never cleared, and the first poll
-// after an upgrade reads it: naming the threshold then promises an action
-// nothing takes. The advice names what does free a slot instead.
+// can still be on disk in TMPDIR, which an upgrade leaves in place (only Clear
+// Caches, or Android reclaiming the cache directory it sits in, empties it), and
+// the first poll after an upgrade reads it: naming the threshold then promises an
+// action nothing takes. The advice names what does free a slot instead.
 //
 // NEGATIVE CONTROL: render `s.budget.reclaim` on the budget line again and the
 // first assertion goes red.
@@ -740,7 +824,7 @@ process.on('unhandledRejection', recordUnhandled);
 // reads it from. Absent where the shim is not loaded, as in every activation before these cases.
 const ENGINE_GATE = Symbol.for('vscodroid.engineGate');
 const SETTINGS_FILE = '/data/user/0/com.vscodroid/files/home/.vscodroid/data/Machine/settings.json';
-async function antigravityOffer({ installed, runEngine, answer, installLater = false, state = new Map(), refuseWrite = null, locale = 'en', gateReads = undefined }) {
+async function antigravityOffer({ installed, runEngine, answer, installLater = false, state = new Map(), refuseWrite = null, locale = 'en', gateReads = undefined, turnedOffLater = false }) {
     if (gateReads === undefined) delete globalThis[ENGINE_GATE];
     else globalThis[ENGINE_GATE] = { engineTurnedOn: () => gateReads, settingsFile: SETTINGS_FILE };
     world.installed = new Set(installed && !installLater ? ['google.google-antigravity'] : []);
@@ -767,6 +851,8 @@ async function antigravityOffer({ installed, runEngine, answer, installLater = f
         world.installed.add('google.google-antigravity');
         world.onExtensionsChange();
     }
+    // The person unticks the setting in this window; the engine runs on until a reload.
+    if (turnedOffLater) world.runEngine = false;
     // A second change of the extensions must not ask again in the same window.
     if (world.onExtensionsChange) world.onExtensionsChange();
     await new Promise((resolve) => setImmediate(resolve));
@@ -797,6 +883,10 @@ async function antigravityOffer({ installed, runEngine, answer, installLater = f
     // correct. Nothing is said when they agree, nor where the gate is not there to ask.
     const agree = await antigravityOffer({ installed: true, runEngine: true, gateReads: true });
     assert.deepStrictEqual(agree.offers, [], 'a notice was shown with VS Code and the gate both reading the setting as on');
+    // An engine started in this window runs until the window reloads, so unticking the setting and then
+    // installing or enabling any extension must not bring the offer that says the engine is kept off.
+    const turnedOff = await antigravityOffer({ installed: true, runEngine: true, gateReads: true, turnedOffLater: true });
+    assert.deepStrictEqual(turnedOff.offers, [], 'the engine started in this window and the offer then said VSCodroid keeps it off');
     const disagree = await antigravityOffer({ installed: true, runEngine: true, gateReads: false });
     assert.strictEqual(disagree.offers.length, 1, 'VS Code reads the setting as on and the gate as off, and the person was told nothing (or more than once): ' + disagree.offers.length);
     assert.ok(disagree.offers[0].message.includes(SETTINGS_FILE), 'the notice does not name the file to correct: ' + disagree.offers[0].message);

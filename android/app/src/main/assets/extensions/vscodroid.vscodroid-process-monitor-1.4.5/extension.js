@@ -66,10 +66,13 @@ function offerAntigravityEngine() {
     if (engineOffered || !vscode.extensions.getExtension(ANTIGRAVITY)) return;
     const config = vscode.workspace.getConfiguration('vscodroid.antigravity');
     if (config.get('runEngine') === true) {
+        // Nothing more in this window: an engine started with the setting on runs until the window reloads,
+        // so the offer below would say the engine is kept off while it runs, if the person unticked the
+        // setting and then installed or enabled any extension.
+        engineOffered = true;
         if (globalState.get(ENGINE_DECLINED)) globalState.update(ENGINE_DECLINED, undefined);
         const gate = globalThis[ENGINE_GATE];
         if (gate && !gate.engineTurnedOn()) {
-            engineOffered = true;
             vscode.window.showWarningMessage(vscode.l10n.t('The setting Antigravity: Run Engine shows as on, but VSCodroid reads it ' +
                 'as off in {0}, so the Google Antigravity engine stays off. VSCodroid reads nothing from that file when it has an ' +
                 'error VS Code works around, such as a missing comma, when it is larger than 1 MiB, or when its nesting is more ' +
@@ -110,6 +113,7 @@ let criticalShownAtThreshold = false;
 function activate(context) {
     const tmpDir = process.env.TMPDIR || '/tmp';
     const snapshotPath = path.join(tmpDir, 'vscodroid-processes.json');
+    const activatedAt = Date.now();
 
     // Status bar item: right side, low priority (far right). With an id: the
     // workbench keeps every extension host's items in one table, and an item
@@ -166,9 +170,13 @@ function activate(context) {
         // status bar' and then the status bar was blanked to '--' underneath it,
         // latched, until the count next fell below the soft budget. The session
         // this guard exists for is exactly the one that reaches it: an adopted
-        // server runs no monitor, and TMPDIR is never cleared, so the first poll
-        // can read a previous boot's file at any count at all.
-        if (lastSnapshot && isStale(lastSnapshot)) {
+        // server runs no monitor, and TMPDIR outlives the server that wrote into
+        // it (only Clear Caches, or Android reclaiming the cache directory it sits
+        // in, empties it), so the first poll can read a previous run's file at any
+        // count at all. Or no file: then the loading text held for as long as the
+        // page stayed open, so after the same three missed writes that mark a
+        // stopped writer, a page that has read nothing says so too.
+        if (lastSnapshot ? isStale(lastSnapshot) : Date.now() - activatedAt > STALE_AFTER_MS) {
             statusBarItem.text = '$(pulse) --';
             statusBarItem.backgroundColor = undefined;
             statusBarItem.tooltip =
