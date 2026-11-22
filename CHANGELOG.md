@@ -59,10 +59,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A keyboard taking back its own correction, such as `you` back to `u` after its space is deleted, is applied instead of typing the letter after the word.
 - A program built for Android that an extension starts by its full path gets the terminal's exec interceptor and its own path, unless the start names, runs in or searches `~/.gemini`.
 - `spawnSync` and `execFileSync` from an extension start such a program through the system loader, as `spawn` and `execFile` do.
+- The editor server's start and an extension's start of a program no longer hang when the Antigravity engine's note or the machine settings file is a FIFO.
 - With **Vscodroid > Antigravity: Run Engine** off, a start of the engine with the system loader named in front of it, also in a shell command, fails with `EACCES` instead of running the engine.
 - A second launch during setup can no longer turn **Vscodroid > Antigravity: Run Engine** back on after setup turned it off for a phone restored from a backup.
 - The process monitor no longer offers to turn the Antigravity engine on in a window where the engine is already running.
 - The process monitor lists programs started through the system loader, such as clangd, under their own names, and counts clangd as a language server.
+- A program an extension starts through the system loader appears under its own name in the process monitor when the extension sets `argv0`.
 - The process monitor's status item says it has no process data after 30 seconds without any, instead of showing its loading text for good.
 - The editor server's heap ceiling setting says it takes effect when the editor server next starts, not when the app does.
 - Loading a glibc native module, such as Copilot's, no longer resets the editor server's environment to the one it started with, which dropped the DNS proxy's variables.
@@ -91,10 +93,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI refuses a user guide or `LEGAL_NOTICES.md` naming a mirrored Python wheel without its pinned version, and a `NOTICE.md` without a row for it.
 - CI refuses a user guide naming another npm major than the one that ships, and free-space figures that differ between the README, the guide and the requirements document.
 - CI refuses a Markdown table that does not render as written.
+- CI refuses a release plan, technical specification or bug report form that states another app version than `build.gradle.kts`.
 - The release build refuses a user guide whose tool versions differ from what the build resolved, and a documented free space that differs from what setup asks of the APK.
 - The release build fails on a lint report carrying the label Play Console blocks on.
 - The Ruby toolchain no longer lacks gem code kept in folders named `test`, `spec`, `doc` or `ri`, so `require "test/unit"` works.
 - The build takes the musl loader that the Claude Code CLI runs on only from the package data it verified, and refuses a package with bytes after that data.
+- The native build scripts read their output and work directories only from names of their own, not from an `OUT_DIR` or `WORK_DIR` a shell exported, which they cleared and wrote into.
 - `scripts/fetch-vscode-oss.sh` puts the server tree in place only after its checks pass, so a refused tree is no longer left for the next build.
 - The privacy policy says the Antigravity setting governs only what an extension starts by naming the engine, not a program told what to run, and that the editor makes some of the listed connections on its own.
 - `NOTICE.md` names `libselfexe.so` as built here, gives ICU's licence as Unicode-3.0 and attributes `libc++_shared.so` to Termux under NCSA.

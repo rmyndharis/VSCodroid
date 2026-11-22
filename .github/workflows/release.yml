@@ -435,6 +435,9 @@ jobs:
       - name: Check the documents quote the sizes the registry records
         run: python3 scripts/check-size-claims.py
 
+      - name: Check the documents state the app's current version
+        run: python3 scripts/check-version-copies.py
+
       # Also in lint.yml, and here for the reason the block's header gives: a tag
       # may name a commit that reached neither pull_request nor push to main, and
       # this was a committed-source check such a tree could skip. The set

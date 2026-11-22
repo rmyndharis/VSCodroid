@@ -252,10 +252,25 @@ if (process.platform === 'android') {
   }
 
   /**
+   * The text of `file` when the open file is a regular one of at most `limit` bytes, else null; throws when it
+   * cannot be opened. O_NONBLOCK, and the open descriptor judged, as bionicInAppData opens a program: a FIFO put
+   * at the path, or a link to one, held a plain open until a writer came, and the thread that read it waited for good.
+   */
+  function regularFileText(file, limit) {
+    var fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+    try {
+      var stat = fs.fstatSync(fd);
+      return stat.isFile() && stat.size <= limit ? fs.readFileSync(fd, 'utf8') : null;
+    } finally {
+      fs.closeSync(fd);
+    }
+  }
+
+  /**
    * What follows `file` in a child_process call (an argument list, options and a
    * callback, whichever are given) as a call to `linker64 <file> <args>` with the
-   * interceptor and the program's own path in its options, or null when the call
-   * is left alone. `change` may replace the argument list; `cwd` is where the call runs (cwdOf).
+   * interceptor and the program's own path in its options and no argv0, or null
+   * when the call is left alone. `change` may replace the argument list; `cwd` is where the call runs (cwdOf).
    */
   function throughLinker(file, rest, change, cwd) {
     if (typeof file !== 'string') return null;
@@ -267,7 +282,14 @@ if (process.platform === 'android') {
     var args = Array.isArray(rest[0]) ? rest[0] : [];
     // Not to a start that could reach ~/.gemini, the engine's own included (see ENGINE_SETTING).
     var env = geminiNamed([file].concat(args), options, false, cwd) ? null : interceptorEnv(options && options.env, file);
-    return [LINKER, [file].concat(change ? change(args) : args)].concat(env ? withOptions(tail, { env: env }) : tail);
+    // Node would hand argv0 to the linker as its own argv[0], which the linker does not read: the program it starts
+    // is given its path there either way. All argv0 changed was the first word of the process in /proc, where the
+    // process monitor and endEarlierHub look for the linker, so a copy of the options goes without it.
+    if (env || (options !== null && typeof options === 'object')) {
+      tail = withOptions(tail, env ? { env: env } : {});
+      delete tail[0].argv0;
+    }
+    return [LINKER, [file].concat(change ? change(args) : args)].concat(tail);
   }
 
   // The Antigravity engine's page refuses to be framed by anything but a short
@@ -327,9 +349,9 @@ if (process.platform === 'android') {
   // nested form all name this setting, a later key replaces what an earlier one made, and a key whose
   // parent is a scalar is dropped. The same key inside another object, a language block included, is not
   // this setting. A file that does not parse turns nothing on, nor does one past SETTINGS_BYTES or nested past
-  // SETTINGS_DEPTH. VS Code recovers from some syntax errors (a missing comma) and need not share those two
-  // limits, so the Settings editor can show the box ticked over a file this reads as off, which keeps the engine
-  // down, the safe side of the two.
+  // SETTINGS_DEPTH, nor anything there that is not a regular file (regularFileText). VS Code recovers from some
+  // syntax errors (a missing comma) and need not share those two limits, so the Settings editor can show the box
+  // ticked over a file this reads as off, which keeps the engine down, the safe side of the two.
   var ENGINE_SETTING = 'vscodroid.antigravity.runEngine';
   var SETTINGS_BYTES = 1 << 20;
   var SETTINGS_DEPTH = 64;
@@ -426,9 +448,8 @@ if (process.platform === 'android') {
   function engineTurnedOn() {
     if (!SETTINGS_FILE) return false;
     try {
-      var file = SETTINGS_FILE;
-      if (fs.statSync(file).size > SETTINGS_BYTES) return false;
-      var json = settingsAsJson(fs.readFileSync(file, 'utf8'));
+      var text = regularFileText(SETTINGS_FILE, SETTINGS_BYTES);
+      var json = text === null ? null : settingsAsJson(text);
       return json !== null && engineValue(JSON.parse(json));
     } catch (e) {
       return false;
@@ -744,7 +765,9 @@ if (process.platform === 'android') {
   function endEarlierHub() {
     if (!HUB_NOTE) return;
     try {
-      var note = JSON.parse(fs.readFileSync(HUB_NOTE, 'utf8'));
+      var text = regularFileText(HUB_NOTE, Infinity);
+      if (text === null) return;
+      var note = JSON.parse(text);
       var pid = Number(note.pid);
       if (!(pid > 1)) return;
       var words = fs.readFileSync('/proc/' + pid + '/cmdline', 'latin1').split('\0');
@@ -759,11 +782,19 @@ if (process.platform === 'android') {
   function keepHubNote(child, port) {
     if (!HUB_NOTE) return;
     try {
-      fs.writeFileSync(HUB_NOTE, JSON.stringify({ pid: child.pid, port: port }));
+      // Into a regular file only, opened without waiting: an open for writing of a FIFO waits for a reader.
+      var fd = fs.openSync(HUB_NOTE, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NONBLOCK, 0o666);
+      try {
+        if (!fs.fstatSync(fd).isFile()) return;
+        fs.writeSync(fd, JSON.stringify({ pid: child.pid, port: port }));
+      } finally {
+        fs.closeSync(fd);
+      }
     } catch (e) { return; }
     child.once('exit', function () {
       try {
-        if (JSON.parse(fs.readFileSync(HUB_NOTE, 'utf8')).pid === child.pid) fs.unlinkSync(HUB_NOTE);
+        var text = regularFileText(HUB_NOTE, Infinity);
+        if (text !== null && JSON.parse(text).pid === child.pid) fs.unlinkSync(HUB_NOTE);
       } catch (e) { /* already replaced or removed */ }
     });
   }

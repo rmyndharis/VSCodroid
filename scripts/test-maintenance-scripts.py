@@ -9,6 +9,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import struct
 import subprocess
@@ -1605,6 +1606,50 @@ esac
         suffixed = package("1_000_000", "1_000_000L")
         self.assertEqual(suffixed["status"], 0, suffixed)
 
+    def test_version_copies_follow_build_gradle(self):
+        """The three hand copies of the current version are held to build.gradle.kts, each on its own."""
+        checker = SOURCE / "scripts/check-version-copies.py"
+        result = run([sys.executable, "-I", str(checker)], self.root)
+        self.assertEqual(0, result["status"], result)
+        gradle = "android/app/build.gradle.kts"
+        copies = ("docs/10-RELEASE_PLAN.md", "docs/04-TECHNICAL_SPEC.md", ".github/ISSUE_TEMPLATE/bug_report.yml")
+
+        def bumped(text):
+            text = re.sub(r'^([ \t]*versionName = ")[^"]*"', r'\g<1>1.10.2"', text, flags=re.M)
+            text = re.sub(r"^([ \t]*versionCode = )[0-9]+", r"\g<1>23", text, flags=re.M)
+            return re.sub(r"^([ \t]*placeholder: )[0-9][0-9.]*[ \t]*$", r"\g<1>1.10.2", text, flags=re.M)
+
+        for stale in (None, *copies):
+            with self.subTest(stale=stale):
+                case = self.root / (stale or "none").replace("/", "_")
+                write(case / "scripts/check-version-copies.py", checker.read_text())
+                for path in (gradle, *copies):
+                    text = (SOURCE / path).read_text(encoding="utf-8")
+                    if path != stale:
+                        text = bumped(text)
+                    else:
+                        text = re.sub(r'versionName = "[^"]*"', 'versionName = "1.10.1"', text)
+                        text = re.sub(r"(placeholder: )[0-9][0-9.]*", r"\g<1>1.10.1", text)
+                    write(case / path, text)
+                result = run([sys.executable, "-I", str(case / "scripts/check-version-copies.py")], case)
+                if stale is None:
+                    self.assertEqual(0, result["status"], result)
+                    self.assertIn("versionName 1.10.2", result["stdout"], result)
+                else:
+                    self.assertEqual(1, result["status"], result)
+                    self.assertIn(f"{stale}: states versionName 1.10.1", result["stdout"], result)
+        # A copy reworded past its pattern is refused, not skipped.
+        case = self.root / "reworded"
+        write(case / "scripts/check-version-copies.py", checker.read_text())
+        for path in (gradle, *copies):
+            text = (SOURCE / path).read_text(encoding="utf-8")
+            if path == copies[1]:
+                text = text.replace("versionName = ", "versionName := ")
+            write(case / path, text)
+        result = run([sys.executable, "-I", str(case / "scripts/check-version-copies.py")], case)
+        self.assertEqual(1, result["status"], result)
+        self.assertIn(f"{copies[1]}: 0 lines state the versionName", result["stdout"], result)
+
     def test_size_claims_follow_the_registry_and_the_apk(self):
         """A figure a document quotes by hand has to be the one the code gives."""
         def registry(codex_download="153_000_000", ruby_download="11_300_000", extra=""):
@@ -1785,6 +1830,62 @@ termux_download_packages fixture
                              {"TERMUX_OFFLINE": offline, "EXPECTED": hashlib.sha256(payload).hexdigest()})
                 self.assertEqual(expected_status, result["status"], result)
                 self.assertEqual(expected_network, (case / "network-attempt").exists(), result)
+
+    def test_a_server_tree_a_gate_refuses_never_reaches_the_packaging(self):
+        """fetch-vscode-oss.sh checks the tree it unpacks before it moves it to server/vscode-reh, and removes the
+        tree an earlier fetch left there first, so a refused fetch leaves package-assets.sh nothing to copy."""
+        rg = "node_modules/@vscode/ripgrep-universal/bin/linux-arm64/rg"
+        for label, commit, elf_status, refused_by in (
+                ("the pin", "an-older-commit", 0, "FAIL    commit"),
+                ("the ripgrep binary, the last gate", "pinned-commit", 1, "rg refused"),
+                ("nothing", "pinned-commit", 0, None)):
+            with self.subTest(refused_by=label):
+                case = self.root / label.replace(" ", "-").replace(",", "")
+                for name in ("fetch-vscode-oss.sh", "package-assets.sh"):
+                    write(case / "scripts" / name, (SOURCE / "scripts" / name).read_text(), executable=True)
+                for name in ("verify-server-tree.py", "check-patch-fingerprints.py"):
+                    write(case / "scripts" / name, "import sys\nsys.exit(0)\n")
+                write(case / "scripts/verify-android-elf.py",
+                      f"import sys\nprint('rg refused' if {elf_status} else 'rg ok')\nsys.exit({elf_status})\n")
+                write(case / "VSCODE_VERSION", "1.139.1\n")
+                write(case / "VSCODE_COMMIT", "pinned-commit\n")
+                write(case / "branding/product.json", json.dumps({"set": {"nameShort": "VSCodroid"}, "remove": []}))
+                write(case / "server/vscode-reh/left-by-an-earlier-fetch", "an older tree\n")
+                tree = self.root / (case.name + "-tree")
+                write(tree / "product.json", json.dumps({"commit": commit, "version": "1.139.1", "nameShort": "VSCodroid"}))
+                write(tree / rg, "rg\n", executable=True)
+                tarball = self.root / (case.name + ".tar.gz")
+                subprocess.run(["tar", "-czf", str(tarball), "-C", str(tree), "."], check=True,
+                               env={**os.environ, "COPYFILE_DISABLE": "1"})
+                (case / "android/app/src/main/assets").mkdir(parents=True)
+                # Serves file:// URLs only, so the run cannot reach a network.
+                write(case / "bin/curl", '#!/bin/sh\nout=; url=\nwhile [ $# -gt 0 ]; do case "$1" in -o) out=$2; shift 2 ;; '
+                      '-*) shift ;; *) url=$1; shift ;; esac; done\ncase "$url" in file://*) cp "${url#file://}" "$out" ;; '
+                      '*) exit 22 ;; esac\n', executable=True)
+                (case / "bin/python3").symlink_to(sys.executable)
+                env = {"PATH": f"{case / 'bin'}:/usr/bin:/bin", "VSCODE_OSS_URL": f"file://{tarball}"}
+                fetched = run(["bash", str(case / "scripts/fetch-vscode-oss.sh")], case, env)
+                packaged = run(["bash", str(case / "scripts/package-assets.sh")], case, env)
+                left = sorted(p.name for p in (case / "server").iterdir() if p.name.startswith(".vscode-reh"))
+                shipped = case / "android/app/src/main/assets/vscode-reh"
+                ripgrep = case / "android/app/src/main/jniLibs/arm64-v8a/libripgrep.so"
+                self.assertEqual([], left, fetched)
+                if refused_by is None:
+                    self.assertEqual(0, fetched["status"], fetched)
+                    self.assertTrue((case / "server/vscode-reh" / rg).is_file(), fetched)
+                    self.assertFalse((case / "server/vscode-reh/left-by-an-earlier-fetch").exists(), fetched)
+                    self.assertTrue(ripgrep.is_file(), fetched)
+                    self.assertEqual(0, packaged["status"], packaged)
+                    self.assertTrue((shipped / "product.json").is_file(), packaged)
+                    continue
+                self.assertNotEqual(0, fetched["status"], fetched)
+                # Refused by the gate named, after the tree was unpacked, not by anything before it.
+                self.assertIn(refused_by, fetched["stdout"], fetched)
+                self.assertFalse((case / "server/vscode-reh").exists(), fetched)
+                self.assertFalse(ripgrep.exists(), fetched)
+                self.assertNotEqual(0, packaged["status"], packaged)
+                self.assertIn("Run fetch-vscode-oss.sh first", packaged["stderr"], packaged)
+                self.assertFalse(shipped.exists(), packaged)
 
     def test_download_cpp_rejects_case_insensitive_volume(self):
         text = (SOURCE / "scripts/download-cpp.sh").read_text()

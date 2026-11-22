@@ -268,19 +268,29 @@ class DownloadAndBuildScriptsTest(unittest.TestCase):
         under WORK_DIR/src must not take that directory from whatever the shell exported."""
         ndk = self.root / "ndk"
         for host in ("darwin-x86_64", "linux-x86_64"):
-            write(ndk / "toolchains/llvm/prebuilt" / host / "bin/aarch64-linux-android29-clang",
-                  '#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = -o ] && { mkdir -p "$(dirname "$2")"; '
-                  'echo built > "$2"; }; shift; done\nexit 1\n', executable=True)
+            for compiler in ("aarch64-linux-android29-clang", "aarch64-linux-android30-clang",
+                             "aarch64-linux-android30-clang++"):
+                write(ndk / "toolchains/llvm/prebuilt" / host / "bin" / compiler,
+                      '#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = -o ] && { mkdir -p "$(dirname "$2")"; '
+                      'echo built > "$2"; }; shift; done\nexit 1\n', executable=True)
         write(self.root / "bin/curl", "#!/bin/sh\nexit 22\n", executable=True)
+        # build-native-addons.sh asks for CMake before it makes its work directory.
+        write(self.root / "bin/cmake", "#!/bin/sh\nexit 1\n", executable=True)
+        # The names of the script's own, the directory it makes by default, and its default work directory when
+        # that is another one. build-native-addons.sh has no output directory to move: the one it makes before
+        # the fixture's curl fails is its work directory.
         cases = {
-            "build-termux-exec.sh": ("TERMUX_EXEC_OUT_DIR", "android/app/src/main/assets/usr/lib",
+            "build-termux-exec.sh": (("TERMUX_EXEC_OUT_DIR",), "android/app/src/main/assets/usr/lib",
                                      "toolchains/build/termux-exec"),
-            "build-exec-trampoline.sh": ("TRAMPOLINE_OUT_DIR", "android/app/src/main/jniLibs/arm64-v8a", None),
-            "build-claude-shim.sh": ("CLAUDE_SHIM_OUT_DIR", "android/app/src/main/jniLibs/arm64-v8a", None),
-            "build-selfexe-shim.sh": ("SELFEXE_OUT_DIR", "android/app/src/main/assets/usr/lib", None),
-            "build-move-noreplace.sh": ("MOVE_NOREPLACE_OUT_DIR", "android/app/src/main/jniLibs/arm64-v8a", None),
+            "build-exec-trampoline.sh": (("TRAMPOLINE_OUT_DIR",), "android/app/src/main/jniLibs/arm64-v8a", None),
+            "build-claude-shim.sh": (("CLAUDE_SHIM_OUT_DIR",), "android/app/src/main/jniLibs/arm64-v8a", None),
+            "build-selfexe-shim.sh": (("SELFEXE_OUT_DIR",), "android/app/src/main/assets/usr/lib", None),
+            "build-move-noreplace.sh": (("MOVE_NOREPLACE_OUT_DIR",), "android/app/src/main/jniLibs/arm64-v8a", None),
+            "build-glibc-shim.sh": (("GLIBC_SHIM_OUT_DIR", "GLIBC_SHIM_WORK_DIR"), "android/app/src/main/assets/usr/lib",
+                                    ".build/glibc-shim"),
+            "build-native-addons.sh": (("NATIVE_ADDONS_WORK_DIR",), ".build/native-addons", None),
         }
-        for name, (own_name, default_out, default_work) in cases.items():
+        for name, (own_names, default_out, default_work) in cases.items():
             with self.subTest(script=name):
                 repo = self.root / name
                 (repo / "scripts").mkdir(parents=True)
@@ -295,12 +305,13 @@ class DownloadAndBuildScriptsTest(unittest.TestCase):
                 self.assertTrue((repo / default_out).is_dir(), result)
                 if default_work:
                     self.assertTrue((repo / default_work).is_dir(), result)
-                # The script's own name still moves the output, for a build into another tree.
-                own = self.root / (name + "-own")
-                result = run(["/bin/bash", str(repo / "scripts" / name)], repo,
-                             {**env, own_name: str(own / "lib")})
-                self.assertTrue((own / "lib").is_dir(), result)
-                self.assertFalse(victim.exists(), result)
+                # The script's own names still move the output, for a build into another tree.
+                for own_name in own_names:
+                    own = self.root / (name + "-" + own_name)
+                    result = run(["/bin/bash", str(repo / "scripts" / name)], repo,
+                                 {**env, own_name: str(own / "lib")})
+                    self.assertTrue((own / "lib").is_dir(), result)
+                    self.assertFalse(victim.exists(), result)
 
     def test_a_skipped_toolchain_leaves_no_zip_and_the_summary_says_so(self):
         """A ZIP no gate of this run looked at is not left to be attached to a release."""
