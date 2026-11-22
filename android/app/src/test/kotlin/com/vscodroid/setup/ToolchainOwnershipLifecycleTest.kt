@@ -284,8 +284,13 @@ class ToolchainOwnershipLifecycleTest {
         assertEquals(ToolchainFailure.INTERNAL, linkFailure(java.io.IOException("not an errno")))
     }
 
+    /**
+     * A removal that did not happen is said as one, and not as a failed install: FAILED drew the card as Failed with a
+     * Retry that installs, which downloads the whole pack again over a record that still names every file. UNKNOWN
+     * leaves the card on Remove, which is still true.
+     */
     @Test
-    fun `uninstall keeps an unreadable record and reports it as an internal failure`() {
+    fun `uninstall keeps an unreadable record and says the removal failed`() {
         stateFile.writeText(damaged)
         val payload = file("usr/lib/ruby/kept.rb", "kept")
 
@@ -293,7 +298,33 @@ class ToolchainOwnershipLifecycleTest {
 
         assertEquals(damaged, stateFile.readText())
         assertEquals("kept", payload.readText())
-        assertEquals(listOf(AssetPackStatus.FAILED to ToolchainFailure.INTERNAL), reports)
+        assertEquals(listOf(AssetPackStatus.UNKNOWN to ToolchainFailure.REMOVAL), reports)
+    }
+
+    /** A removal that stops on an error is said as a removal failure too, by the catch every removal runs inside. */
+    @Test
+    fun `a removal that stops on an error says the removal failed`() {
+        every { Files.isSymbolicLink(match { it.fileName?.toString() == "toolchains.json" }) } throws
+            IllegalStateException("the record cannot be looked at")
+        val m = manager()
+
+        m.uninstall("ruby")
+        awaitLaunchPass(m)
+
+        assertEquals(listOf(AssetPackStatus.UNKNOWN to ToolchainFailure.REMOVAL), reports)
+    }
+
+    @Test
+    fun `a removal that cannot take the files keeps the toolchain on Remove and says the removal failed`() {
+        val payload = file("home/project/java-21-openjdk/source.java", "unique project source")
+        link("usr/lib/jvm", "home/project")
+        stateFile.writeText("""[{"name":"java","installRoot":"$newRoot"}]""")
+
+        uninstall("java")
+
+        assertEquals("unique project source", payload.readText())
+        assertEquals(listOf("java"), manager().getInstalledToolchains(), "the record lost a toolchain with its files")
+        assertEquals(listOf(AssetPackStatus.UNKNOWN to ToolchainFailure.REMOVAL), reports)
     }
 
     @Test
@@ -375,7 +406,7 @@ class ToolchainOwnershipLifecycleTest {
     fun `copy failure at a moved root keeps its reclaim witness`() {
         oldJava()
         val pack = javaPack()
-        file("$newRoot/bin/java/occupied", "prevent replacing this directory with a file")
+        blockAtomicWritesTo(File(filesDir, "$newRoot/bin/java"))
 
         assertFalse(install(manager(), pack))
         repeat(2) { reclaim() }
@@ -385,6 +416,166 @@ class ToolchainOwnershipLifecycleTest {
         assertEquals(listOf(AssetPackStatus.FAILED), reports.map { it.first })
         assertEquals(ToolchainFailure.STORAGE, reports.single().second)
         assertSettledOrNamed(newRoot, File(filesDir, "home/.vscodroid/toolchain-installing/toolchain_java.json"))
+    }
+
+    /**
+     * A path in `usr/` that holds the wrong kind of entry for what the pack writes there: a folder at a file's name,
+     * a file at a folder's name, or a link where the pack writes into a folder. Freeing space changes none of them, so
+     * none is a lack of storage. Each is found before the first byte is written, so the person's entry, the tree the
+     * record names and its execute-bit mark are all left as they were, and no marker asks a later launch to settle a
+     * copy that never started.
+     */
+    @Test
+    fun `a path the pack cannot write to is not a lack of storage, and nothing is written`() {
+        file("home/project/elsewhere.txt", "the person's other file")
+        // Each case occupies the path and answers whether the occupant is still as it was. The link comes last, so
+        // the tree it sits in is never deleted recursively.
+        val occupations = mapOf<String, () -> () -> Boolean>(
+            "a folder at a file's name" to {
+                val notes = file("$newRoot/bin/java/notes.txt", "the person's file")
+                ({ notes.readText() == "the person's file" })
+            },
+            "a file at a folder's name" to {
+                val bin = file("$newRoot/bin", "the person's file")
+                ({ bin.readText() == "the person's file" })
+            },
+            "a link where the pack writes into a folder" to {
+                val bin = link("$newRoot/bin", "home/project")
+                ({ Files.isSymbolicLink(bin.toPath()) })
+            },
+        )
+        for ((why, occupy) in occupations) {
+            File(filesDir, "usr").deleteRecursively()
+            oldJava()
+            val before = stateFile.readText()
+            val occupantKept = occupy()
+            reports.clear()
+
+            assertFalse(install(manager(), javaPack()), why)
+
+            assertEquals(listOf(AssetPackStatus.FAILED to ToolchainFailure.INTERNAL), reports, why)
+            assertEquals(before, stateFile.readText(), "$why: the record changed for a copy that never started")
+            assertEquals("old java payload", File(filesDir, "$oldRoot/bin/java").readText(), why)
+            assertFalse(
+                File(filesDir, "home/.vscodroid/toolchain-installing/toolchain_java.json").exists(),
+                "$why: a marker was left for a copy that never started",
+            )
+            assertFalse(File(filesDir, "home/project/java").exists(), "$why: the copy wrote through the link")
+            assertEquals("the person's other file", File(filesDir, "home/project/elsewhere.txt").readText(), why)
+            assertTrue(occupantKept(), "$why: the entry in the pack's way was changed")
+        }
+    }
+
+    /**
+     * An earlier install's marker that this one cannot settle stops it before it writes, and none of the three ways
+     * that happens is answered by freeing space.
+     */
+    @Test
+    fun `a pending marker that cannot be settled is not reported as a lack of storage`() {
+        file("home/project/kept.txt", "unique project file")
+        link("usr/opt/linked", "home/project")
+        val markers = mapOf(
+            "a marker that is not JSON" to """{"name":""",
+            "a marker of another toolchain" to ruby,
+            "a marker whose files cannot be removed" to """{"name":"java","installRoot":"usr/opt/linked/java"}""",
+        )
+        for ((why, text) in markers) {
+            reports.clear()
+            val mark = marker("toolchain_java", text)
+
+            assertFalse(install(manager(), javaPack()), why)
+
+            assertEquals(listOf(AssetPackStatus.FAILED to ToolchainFailure.INTERNAL), reports, why)
+            assertEquals(text, mark.readText(), "$why: the earlier marker was replaced")
+        }
+        assertEquals("unique project file", File(filesDir, "home/project/kept.txt").readText())
+    }
+
+    private fun linkedPack(manifestTail: String): File = javaPack().also {
+        File(it, "toolchain_java.json").writeText(
+            """{"name":"java","displayName":"Java 21","installRoot":"$newRoot","binaries":["$newRoot/bin/java"],""" +
+                manifestTail + "}",
+        )
+    }
+
+    /** A refusal that is not for room decides the reason, whatever is refused after it. */
+    @Test
+    fun `a link refused for anything but room keeps the failure internal when a later link is refused for room`() {
+        val pack = linkedPack(""""symlinks":{"java":"$newRoot/bin/java","jshell":"$newRoot/bin/java"}""")
+        var calls = 0
+        every { Os.symlink(any(), any()) } answers { throw errno(if (calls++ == 0) EEXIST else ENOSPC) }
+
+        assertFalse(install(manager(), pack))
+
+        assertEquals(2, calls, "the fixture never reached the second link")
+        assertEquals(listOf(AssetPackStatus.FAILED to ToolchainFailure.INTERNAL), reports)
+    }
+
+    @Test
+    fun `a library link refused for anything but room is not reported as a lack of storage`() {
+        val pack = linkedPack(""""libSymlinks":{"libjvm.so.25":"libjvm.so"}""")
+        File(pack, "usr/lib").mkdirs()
+        File(pack, "usr/lib/libjvm.so").writeText("library payload")
+        every { Os.symlink(any(), any()) } throws errno(EEXIST)
+        val m = manager()
+
+        assertFalse(install(m, pack))
+
+        assertEquals(listOf(AssetPackStatus.FAILED to ToolchainFailure.INTERNAL), reports)
+        assertEquals(emptySet<String>(), m.getInstalledToolchains().toSet(), "a tree with no library link was recorded")
+    }
+
+    private val pendingMarker get() = File(filesDir, "home/.vscodroid/toolchain-installing/toolchain_java.json")
+
+    private fun repairedMark(): Boolean = JSONArray(stateFile.readText()).getJSONObject(0).getBoolean("execBitsChecked")
+
+    private fun repair(m: ToolchainManager = manager()) {
+        ToolchainManager::class.java.getDeclaredMethod("repairInstalledToolchainsSync")
+            .apply { isAccessible = true }.invoke(m)
+    }
+
+    /**
+     * A reinstall stopped partway over a recorded tree has replaced files without their execute bits, so the first
+     * launch after it asks the repair pass to walk the tree. The marker stays until a retry finishes, and the tree
+     * does not change while it stands, so asking again on every later launch only re-read the whole tree, under the
+     * state lock, on each of them.
+     */
+    @Test
+    fun `a reinstall marker that stays asks for the execute-bit walk once, not on every launch`() {
+        val markers = mapOf(
+            "a marker with an install identity" to """{"name":"java","installRoot":"$newRoot","installId":"attempt-1"}""",
+            "a marker written before install identities" to """{"name":"java","installRoot":"$newRoot"}""",
+        )
+        for ((why, text) in markers) {
+            oldJava(newRoot)
+            marker("toolchain_java", text)
+
+            reclaim()
+            assertFalse(repairedMark(), "$why: the first launch after the interrupted copy did not ask for the walk")
+            repair()
+            assertTrue(repairedMark(), "$why: control, the walk marks the entry")
+            repeat(2) { reclaim() }
+
+            assertTrue(repairedMark(), "$why: a later launch asked for the walk again over a tree nothing touched")
+            assertTrue(pendingMarker.isFile, "$why: the unfinished reinstall lost its marker")
+        }
+    }
+
+    @Test
+    fun `a reinstall that failed in this process is not walked again on every launch`() {
+        oldJava(newRoot)
+        val blocker = blockAtomicWritesTo(File(filesDir, "$newRoot/bin/java"))
+
+        assertFalse(install(manager(), javaPack()))
+        assertEquals(listOf(AssetPackStatus.FAILED to ToolchainFailure.STORAGE), reports)
+        assertFalse(repairedMark(), "the failed copy did not ask for the walk")
+        assertTrue(pendingMarker.isFile, "control: the unfinished reinstall keeps its marker")
+        repair()
+        assertTrue(repairedMark(), "control: the walk marks the entry")
+        repeat(2) { reclaim() }
+
+        assertTrue(repairedMark(), "a launch asked again for the walk the failure had already asked for")
+        blocker.close()
     }
 
     @Test

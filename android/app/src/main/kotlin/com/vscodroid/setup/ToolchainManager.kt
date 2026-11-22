@@ -28,6 +28,7 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executor
@@ -131,14 +132,16 @@ class ToolchainManager(private val context: Context) {
      * The first three arguments are the pack name, an `AssetPackStatus` value,
      * and how far along it is as a percentage.
      * The fourth argument is why it failed, and it is null for every status that
-     * is not a failure. It exists because "Failed" on its own is the same word
-     * for a full disk, a dropped connection and a release that never published
-     * the file, and the user is the one person who can act on the difference:
-     * free space, move to wifi, or wait for a release. The reason was in logcat
-     * and nowhere else.
+     * is not a failure, with one exception: a removal that did not happen is
+     * UNKNOWN with [ToolchainFailure.REMOVAL] ([failRemoval]). It exists because
+     * "Failed" on its own is the same word for a full disk, a dropped connection
+     * and a release that never published the file, and the user is the one
+     * person who can act on the difference: free space, move to wifi, or wait for
+     * a release. The reason was in logcat and nowhere else.
      *
-     * Reached through [fail] and [report] rather than invoked directly, so a new
-     * failure site cannot forget to say why: [fail] has no overload without one.
+     * Reached through [fail], [failRemoval] and [report] rather than invoked
+     * directly, so a new failure site cannot forget to say why: [fail] has no
+     * overload without one.
      * The final argument identifies the HTTP transfer, or is null for other work.
      */
     var onStateChange: ((String, Int, Int, ToolchainFailure?, Long?) -> Unit)? = null
@@ -177,6 +180,16 @@ class ToolchainManager(private val context: Context) {
         Logger.e(tag, "Toolchain ${redactToken(packName)} failed: $why")
         synchronized(this) { playRequests.remove(packName) }
         onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0, why, transferId)
+    }
+
+    /**
+     * A Remove that did not happen, and why. UNKNOWN and not FAILED, which a card draws as Failed with a Retry that
+     * installs: that downloaded the whole pack again over a record that still names every file the removal left.
+     * With UNKNOWN the card goes back to what the record says, which is still Remove, and the screen says the reason.
+     */
+    private fun failRemoval(packName: String) {
+        Logger.e(tag, "Removing ${redactToken(packName)} failed")
+        onStateChange?.invoke(packName, AssetPackStatus.UNKNOWN, 0, ToolchainFailure.REMOVAL, null)
     }
 
     /**
@@ -351,6 +364,9 @@ class ToolchainManager(private val context: Context) {
         private const val KEY_EXEC_REPAIRED = "execBitsChecked"
         private const val KEY_INSTALL_ID = "installId"
 
+        /** The install attempt whose unfinished copy last asked the repair pass for its walk ([reclaimPartialCopy]). */
+        private const val KEY_EXEC_RESET_FOR = "execBitsResetFor"
+
         /**
          * Environment a toolchain's manifest carries today and an install made by an
          * earlier build does not, by toolchain name. The record keeps the manifest it
@@ -407,7 +423,8 @@ class ToolchainManager(private val context: Context) {
          * The most arguments an exec-table row can carry after its target. The
          * trampoline has its own `MAX_ROW_ARGS` (`scripts/exec-trampoline.c`) and
          * refuses a longer row whole when the command runs, so a row is never
-         * written past it. `ExecTrampolineRowLimitTest` holds the two equal.
+         * written past it ([fitsTableRow]): a launcher or JDK row that would be is
+         * left out and logged. `ExecTrampolineRowLimitTest` holds the two equal.
          */
         internal const val MAX_ROW_ARGS = 8
 
@@ -618,9 +635,12 @@ class ToolchainManager(private val context: Context) {
      * branch or the HTTP one -- which never registers -- and our correctness
      * does not rest on a `Set` we had to decompile to find.
      *
-     * Guarded rather than volatile because check-and-act is the whole point, and
-     * the callers are not on one thread: the activities are on the main thread,
-     * while the bridge reaches [install] from the WebView's own thread.
+     * [listenerRegistered] changes only under [listenerLock], because check-and-act
+     * is the whole point and the callers are not on one thread: the activities are
+     * on the main thread, while the bridge reaches [install] from the WebView's own
+     * thread. Both flags are volatile as well, because a caller that finds the lock
+     * taken only leaves its wish in [listenerWanted], and the holder reads it after
+     * letting go ([applyListener]).
      */
     @Volatile private var listenerRegistered = false
     @Volatile private var listenerWanted = false
@@ -804,6 +824,11 @@ class ToolchainManager(private val context: Context) {
             downloadViaHttp(info.packName, url, info.estimatedSize, info.downloadSize)
         } else {
             val request = synchronized(this) {
+                // Silent, unlike the declines that report UNKNOWN: this is this manager's own request for the pack,
+                // still live, and its reports follow. UNKNOWN reads as settled to every screen, so it would take the
+                // pack out of the toolchain screen's outstanding set, letting `onStop` hand back the Play listener
+                // the download still needs, and would move the first-run queue past a pack still downloading. A
+                // cancel ends the request ([cancel]), so this no longer swallows an Install made after one.
                 if (info.packName in playRequests) return
                 listenerWanted = true
                 Any().also { playRequests[info.packName] = it }
@@ -858,6 +883,10 @@ class ToolchainManager(private val context: Context) {
         // download carries on, and a token only the destroyed manager could see
         // made the transfer uncancellable from anywhere.
         httpDownloads[info.packName]?.cancelled = true
+        // This manager's Play request ends here, and not only when Play reports CANCELED: Play cancels only a
+        // download that is running, so a pack waiting on its cellular-data question, or already delivered, sends
+        // nothing back, and the request left standing made every later Install of the pack return without a fetch.
+        synchronized(this) { playRequests.remove(info.packName) }
         assetPackManager.cancel(listOf(info.packName))
         // Play's cancel is a request to the download service and does nothing to a
         // pack it has already finished delivering, so without this a cancel could
@@ -916,11 +945,10 @@ class ToolchainManager(private val context: Context) {
                 // button away when the user confirms and puts it back on the
                 // first report about the pack; without this line an exception
                 // here left it with no button at all until the screen was
-                // reopened. UNKNOWN because nothing about the toolchain changed:
-                // the card falls back to what the install record says, which is
-                // still Remove. FAILED would be wrong twice, offering a Retry
-                // that installs rather than removes.
-                report("toolchain_${toolchainShortName(name)}", AssetPackStatus.UNKNOWN, 0)
+                // reopened. A removal failure, so the card falls back to what
+                // the install record says, still Remove, and the screen says the
+                // removal did not happen ([failRemoval]).
+                failRemoval("toolchain_${toolchainShortName(name)}")
             }
         }
     }
@@ -981,7 +1009,8 @@ class ToolchainManager(private val context: Context) {
      */
     private fun uninstallLocked(name: String) {
         val state = readableState() ?: run {
-            failUnreadableRecord("toolchain_$name")
+            Logger.e(tag, "${stateFile.path} exists but cannot be read; leaving it as it is")
+            failRemoval("toolchain_$name")
             return
         }
         var manifestObj: JSONObject? = null
@@ -1012,7 +1041,7 @@ class ToolchainManager(private val context: Context) {
         }
 
         if (!removeToolchainFiles(name, manifestObj, state)) {
-            fail("toolchain_$name", ToolchainFailure.INTERNAL)
+            failRemoval("toolchain_$name")
             return
         }
 
@@ -1028,9 +1057,10 @@ class ToolchainManager(private val context: Context) {
         // longer exists. Nothing reconciles that later: the repair pass only
         // checks execute bits.
         //
-        // FAILED rather than silence, because it is the only channel that reaches
-        // the user with a reason, and the Retry it puts on the card reinstalls the
-        // toolchain, which is the repair for a record that outlived its files.
+        // FAILED, and not the [failRemoval] the two refusals above make, because
+        // here the files are already gone: the Retry FAILED puts on the card
+        // reinstalls the toolchain, which is the repair for a record that outlived
+        // its files, where above it would download a pack over files still there.
         // STORAGE for the reason the install sibling picks it: [writeAtomically]
         // writes a temporary file and renames it, and what stops that is space or
         // an I/O fault, both of which "free some space and try again" survives.
@@ -1323,7 +1353,7 @@ class ToolchainManager(private val context: Context) {
         } else {
             val space = toolchainCopySpace(File(assetsDir, "usr"), File(context.filesDir, "usr"))
             val required = toolchainCopyBytes(unpacked, space)
-            val available = StatFs(context.filesDir.absolutePath).availableBytes
+            val available = freeBytesFor(required)
             if (available < required) {
                 Logger.e(
                     tag,
@@ -1687,10 +1717,14 @@ class ToolchainManager(private val context: Context) {
      *
      * @return whether the delivery has nothing left to give. True for a finished
      *   install and true for a `CORRUPT` refusal, which a retry has to
-     *   re-download anyway. False for the copy failing and for the record write
-     *   failing, which are the same event a step apart: a full disk during or at
-     *   the end of a copy. The user frees space, and the next launch's
-     *   [reconcileDeliveredPacks] finishes the install from the delivery still in
+     *   re-download anyway. False for an entry in the pack's way, which the person
+     *   clears before a retry from the same delivery (for a reinstall, only until
+     *   the next launch hands that delivery back: the record names the toolchain
+     *   and no marker is written), and false for the copy
+     *   failing and for the record write failing, which are the same event a step
+     *   apart: a full disk during or at the end of a copy. The user frees space,
+     *   and the next launch's [reconcileDeliveredPacks] finishes the install from
+     *   the delivery still in
      *   place, with no download at all. That is the same reasoning the space
      *   refusal in [installDeliveredPack] already states, applied to the two
      *   outcomes that reach the user as "free some space and try again".
@@ -1739,6 +1773,17 @@ class ToolchainManager(private val context: Context) {
                     return true
                 }
             }
+        }
+        // Before the marker and before an earlier install's files are settled, so an install refused for this changes
+        // nothing on disk ([firstPathInTheWay]). INTERNAL rather than STORAGE: freeing space does not move a folder out
+        // of the way, and the log names the path. On the Play path its copy is kept, as for the refusals below: a
+        // Retry in this process once the path is cleared installs from it, and so does the next launch for a first
+        // install. For a reinstall the next launch hands it back instead, since the record names the toolchain and no
+        // marker says an install is pending, so a later Retry fetches the pack again.
+        firstPathInTheWay(usrSrc, File(context.filesDir, "usr"))?.let { blocked ->
+            Logger.e(tag, "Not installing $packName: ${blocked.message}")
+            fail(packName, ToolchainFailure.INTERNAL, transferId)
+            return false
         }
         // Written before a single byte is copied, because that ordering is the
         // whole of it: this is the only durable record of where the copy is about
@@ -1791,10 +1836,12 @@ class ToolchainManager(private val context: Context) {
             // which asks the user to read a log. STORAGE is the remedy that
             // fits both causes this can have: ENOSPC partway through the
             // write, and a directory that cannot be listed, which
-            // `copyDirectoryTree` refuses rather than treating as empty.
+            // `copyDirectoryTree` refuses rather than treating as empty. An
+            // entry that came into the pack's way after [firstPathInTheWay]
+            // looked is the one exception, and gets that check's answer.
             Logger.e(tag, "Could not copy $packName into usr/", e)
             if (reclaimPartialCopy(name, manifest)) installMarker(packName).delete()
-            fail(packName, ToolchainFailure.STORAGE, transferId)
+            fail(packName, if (e is PathOccupied) ToolchainFailure.INTERNAL else ToolchainFailure.STORAGE, transferId)
             // Play's copy is KEPT, exactly as for the record write below:
             // freeing space and relaunching finishes this install from the
             // delivery, with no download.
@@ -2088,8 +2135,10 @@ class ToolchainManager(private val context: Context) {
      *
      * A recorded tree is preserved. Its marker stays pending until the same install
      * identity reaches the record; older markers without an identity require a retry.
-     * The permission pass can repair execute bits, while content is completed from a
-     * retained Play delivery or a new verified HTTP download.
+     * The permission pass can repair execute bits, and is asked to once per attempt
+     * (an in-process failure or the first launch after a killed copy, whichever comes
+     * first), while content is completed from a retained Play delivery or a new
+     * verified HTTP download.
      */
     private fun reclaimPartialCopy(name: String, manifest: JSONObject): Boolean = synchronized(stateLock) {
         val state = readableState() ?: return@synchronized false
@@ -2101,8 +2150,13 @@ class ToolchainManager(private val context: Context) {
             if (installId.isNotEmpty() && installed.optString(KEY_INSTALL_ID) == installId &&
                 toolchainPathsAreOwned(manifest, installed)
             ) return@synchronized true
-            if (installed.optBoolean(KEY_EXEC_REPAIRED, false)) {
+            // Once per attempt: the marker stands until a retry finishes and the launch pass comes back to it every
+            // launch, while the tree changes only when an attempt writes. Asked each time, the repair re-read the whole
+            // tree under the state lock on every launch. A marker with no identity counts as one attempt.
+            val asked = installed.has(KEY_EXEC_RESET_FOR) && installed.optString(KEY_EXEC_RESET_FOR) == installId
+            if (!asked) {
                 installed.put(KEY_EXEC_REPAIRED, false)
+                installed.put(KEY_EXEC_RESET_FOR, installId)
                 if (!writeState(state)) return@synchronized false
             }
             return@synchronized false
@@ -2174,6 +2228,20 @@ class ToolchainManager(private val context: Context) {
     }
 
     /**
+     * The bytes free for a toolchain copy that needs [required], measured again after the strays of a killed copy
+     * under `usr/` are removed when they are what stands between the two. A copy killed partway leaves its temporary
+     * file beside the file it was replacing, as large as the largest library a pack ships, and only the next write into
+     * that folder removes it, after this check. First-run setup's checks of free room do the same
+     * ([sweepStrayTempsUnder]).
+     */
+    private fun freeBytesFor(required: Long): Long {
+        val free = StatFs(context.filesDir.absolutePath).availableBytes
+        if (free >= required || confinedToolchainPath("usr") == null) return free
+        if (sweepStrayTempsUnder(File(context.filesDir, "usr")) == 0L) return free
+        return StatFs(context.filesDir.absolutePath).availableBytes
+    }
+
+    /**
      * The existing payload the record names for this build, without shared directories or links.
      *
      * [downloadViaHttp] gates on free space before the ZIP carrying the incoming
@@ -2211,7 +2279,12 @@ class ToolchainManager(private val context: Context) {
             for (path in paths) {
                 // A binary or owned subtree may already be covered by another recorded root.
                 if (paths.any { it != path && path.toPath().startsWith(it.toPath()) }) continue
-                val found = installedTreeSpace(path, context.filesDir, recordedBytes)
+                // A killed copy's temporary file in the tree is not a file a reinstall writes over, and the write that
+                // would remove it comes after this check: it is removed here, before the tree is measured.
+                val found = installedTreeSpace(path, context.filesDir, recordedBytes) { tree ->
+                    sweepStrayTempsUnder(tree)
+                    measureInstalledTree(tree)
+                }
                 bytes = minOf(recordedBytes, bytes + found.bytes)
                 largest = maxOf(largest, found.largestFile)
             }
@@ -2285,15 +2358,16 @@ class ToolchainManager(private val context: Context) {
                 // ([recordedInstallSpace] compares `displayName`; Java 17 and 21 share
                 // a pack name and not a root). The credit is an assumption about a
                 // payload nobody has read, so a credited install is measured again
-                // from the real files once they are extracted, below.
-                val stat = StatFs(context.filesDir.absolutePath)
-                val availableBytes = stat.availableBytes
+                // from the real files once they are extracted, below. Free space is
+                // read after the credit, which first gives back what a killed copy
+                // left in the recorded tree ([recordedInstallSpace]).
                 val installed = recordedInstallSpace(
                     toolchainShortName(packName),
                     ToolchainRegistry.find(packName)?.displayName,
                     unpackedBytes,
                 )
                 val requiredBytes = toolchainInstallBytes(unpackedBytes, downloadBytes, installed)
+                val availableBytes = freeBytesFor(requiredBytes)
                 if (availableBytes < requiredBytes) {
                     Logger.e(tag, "Not enough disk space: ${availableBytes / 1_000_000} MB available, " +
                             "${requiredBytes / 1_000_000} MB required")
@@ -2445,7 +2519,7 @@ class ToolchainManager(private val context: Context) {
                 if (installed.bytes > 0) {
                     val space = toolchainCopySpace(File(extractDir, "usr"), File(context.filesDir, "usr"))
                     val needed = toolchainCopyBytes(unpackedBytes, space)
-                    val free = StatFs(context.filesDir.absolutePath).availableBytes
+                    val free = freeBytesFor(needed)
                     if (free < needed) {
                         Logger.e(
                             tag,
@@ -3557,8 +3631,13 @@ class ToolchainManager(private val context: Context) {
                     if (!isElfFile(File(context.filesDir, relPath))) continue
                     val absolute = "$filesDir/$relPath"
                     elfPaths[command] = absolute
-                    rows[command] = (listOf(command, absolute) + jdkLauncherArgs(tc, relPath, command))
-                        .joinToString("\t")
+                    val args = jdkLauncherArgs(tc, relPath, command)
+                    if (!fitsTableRow(args)) {
+                        Logger.w(tag, "No row for $name's $command: its options are not a list of at most " +
+                            "$MAX_ROW_ARGS the table can carry")
+                        continue
+                    }
+                    rows[command] = (listOf(command, absolute) + args).joinToString("\t")
                 }
             }
 
@@ -3666,9 +3745,9 @@ class ToolchainManager(private val context: Context) {
      * A launcher is held to what the table can carry. Its path has to be one of
      * the manifest's own `binaries` and an ELF on disk, and its arguments have to
      * fit the trampoline's row ([MAX_ROW_ARGS]) and contain neither a tab nor a
-     * line break, which would read as a field or a record of their own. A launcher
-     * that is not is skipped and logged, and nothing else about the toolchain
-     * changes.
+     * line break, which would read as a field or a record of their own ([fitsTableRow]).
+     * A launcher that is not is skipped and logged, and nothing else about the
+     * toolchain changes.
      */
     private fun addLauncherRows(tc: JSONObject, name: String, rows: MutableMap<String, String>) {
         val launchers = tc.optJSONObject("launchers") ?: return
@@ -3683,7 +3762,7 @@ class ToolchainManager(private val context: Context) {
             when {
                 command.isEmpty() || relPath !in shipped ->
                     Logger.w(tag, "No launcher row for $name's $relPath: not one of its binaries")
-                args == null || args.size > MAX_ROW_ARGS || args.any { '\t' in it || '\n' in it } ->
+                args == null || !fitsTableRow(args) ->
                     Logger.w(tag, "No launcher row for $name's $command: its arguments " +
                         "are not a list of at most $MAX_ROW_ARGS the table can carry")
                 !isElfFile(File(context.filesDir, relPath)) ->
@@ -3692,6 +3771,14 @@ class ToolchainManager(private val context: Context) {
             }
         }
     }
+
+    /**
+     * Whether [args] fit a row after its target: at most [MAX_ROW_ARGS], and none holding a tab or a line break, which
+     * would read as a field or a record of their own. Asked of every row that carries arguments, launcher and JDK
+     * rows alike.
+     */
+    private fun fitsTableRow(args: List<String>): Boolean =
+        args.size <= MAX_ROW_ARGS && args.none { '\t' in it || '\n' in it }
 
     /**
      * Gives `npm` and `npx` rows, so a program that starts either by name finds it.
@@ -4446,9 +4533,10 @@ class ToolchainManager(private val context: Context) {
                 val name = manifest?.optString("name", "").orEmpty()
                 if (manifest != null && name.isNotEmpty()) {
                     Logger.i(tag, "Reclaiming an install of $name that did not finish")
+                    // Unknown ownership keeps valid markers available for another launch.
                     if (!reclaimPartialCopy(name, manifest)) continue
                 }
-                // Unknown ownership keeps valid markers available for another launch.
+                // Settled, or a marker that names nothing a later launch could reclaim.
                 marker.delete()
             } finally {
                 // A claim never given back declines every later install of that
@@ -4925,18 +5013,21 @@ internal fun packInstallBytes(unpackedBytes: Long): Long =
  * from a JVM test, which is the only way to reach it: producing a real
  * unreadable directory needs a filesystem fault or a concurrent deletion.
  *
+ * Each entry is checked with [pathInTheWay] where it is written, as well as by
+ * [firstPathInTheWay] before the copy starts, so an entry that comes into the way
+ * in between is still refused as what it is rather than as a failed write.
+ *
  * @param list how children are enumerated, defaulting to the real filesystem
- * @throws IOException if a directory exists but cannot be listed
+ * @throws PathOccupied if an entry of the wrong kind stands where the tree writes
+ * @throws IOException if a directory exists but cannot be listed, or a write fails
  */
 internal fun copyDirectoryTree(
     src: File,
     dest: File,
     list: (File) -> Array<File>? = File::listFiles,
 ) {
+    pathInTheWay(src, dest)?.let { throw it }
     if (src.isDirectory) {
-        if (Files.isSymbolicLink(dest.toPath())) {
-            throw IOException("Cannot copy a toolchain through a redirected directory")
-        }
         dest.mkdirs()
         val children = list(src)
             ?: throw IOException(
@@ -4955,6 +5046,39 @@ internal fun copyDirectoryTree(
             throw IOException(cause ?: "Could not replace ${dest.name}")
         }
     }
+}
+
+/**
+ * An entry in `usr/` of the wrong kind for what a pack writes there: a link where the pack writes into a folder (it
+ * would write wherever the link points), a file where it needs a folder, or a folder where it writes a file. Freeing
+ * space changes none of these, so it is not a lack of storage, and the install reports it as INTERNAL with the path in
+ * the log. A link where the pack writes a FILE is not one: the write replaces the link, as it replaces a file.
+ */
+internal class PathOccupied(path: File, why: String) : IOException("$why: ${path.absolutePath}")
+
+/** Why [dest] cannot take [src] as the copy writes it, or null when it can, decided before anything is made there. */
+internal fun pathInTheWay(src: File, dest: File): PathOccupied? {
+    val path = dest.toPath()
+    return when {
+        !src.isDirectory -> if (!Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)) null
+            else PathOccupied(dest, "A folder holds the name of a file the pack writes")
+        Files.isSymbolicLink(path) -> PathOccupied(dest, "A link stands where the pack writes into a folder")
+        Files.exists(path, LinkOption.NOFOLLOW_LINKS) && !Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS) ->
+            PathOccupied(dest, "A file holds the name of a folder the pack writes into")
+        else -> null
+    }
+}
+
+/**
+ * The first entry under [dest] that [copyDirectoryTree] would refuse with [PathOccupied], or null. Asked before the
+ * install writes its marker or a byte of the copy, so a pack that cannot finish for this reason changes nothing: a copy
+ * stopped halfway left a reinstall half replaced, and on the Play path every launch tried it again from the delivery.
+ * Only folders that already exist are entered, since nothing below a missing one can be in the way.
+ */
+internal fun firstPathInTheWay(src: File, dest: File): PathOccupied? {
+    pathInTheWay(src, dest)?.let { return it }
+    if (!src.isDirectory || !Files.isDirectory(dest.toPath(), LinkOption.NOFOLLOW_LINKS)) return null
+    return src.listFiles()?.firstNotNullOfOrNull { firstPathInTheWay(it, File(dest, it.name)) }
 }
 
 internal data class ToolchainCopySpace(val creditedBytes: Long, val replacementBytes: Long)
@@ -5036,7 +5160,7 @@ internal fun markExecutablesIn(root: File, isLink: (File) -> Boolean = ::isSymli
  *
  * Everything else measured -- `- . + : @ % ^ ! , { } ] * ? # ~ /`, a leading
  * digit, non-ASCII -- defines correctly and is allowed. Every command name in
- * the two shipped manifests passes, but those manifests are regenerated from
+ * the shipped manifests passes, but those manifests are regenerated from
  * upstream packages at build time, so what they contain is not this repository's
  * choice to make.
  */
@@ -5165,6 +5289,9 @@ enum class ToolchainFailure(@param:StringRes val message: Int) {
     // has already classified as a Play install.
     PLAY_REQUIRED(R.string.toolchain_failed_play),
     INTERNAL(R.string.toolchain_failed_internal),
+    // A Remove that did not happen. Reported with UNKNOWN rather than FAILED, which a card draws as a failed install
+    // with a Retry that installs ([ToolchainManager.failRemoval]).
+    REMOVAL(R.string.toolchain_remove_failed),
 }
 
 /**
@@ -5259,8 +5386,11 @@ internal fun toolchainFailureFor(errorCode: Int): ToolchainFailure = when (error
  * before copying a tree of any size, which is the direction that admits a
  * device it should have refused and then fills it up partway through the copy.
  *
- * Keyed by short name, the form [toolchainShortName] produces, so a record
- * written as either `go` or `toolchain_go` resolves.
+ * Keyed by short name, the form a manifest records itself under. [packUnpackedBytes]
+ * strips the `toolchain_` prefix itself; [toolchainShortName] resolves through the
+ * registry and hands a retired name back unchanged, so [ToolchainManager.removeRetiredToolchainsSync]
+ * finds a record named `go` and would not find one named `toolchain_go`, which no
+ * manifest writes.
  *
  * An entry belongs here when it has left [ToolchainRegistry.available]: see
  * [ToolchainManager.removeRetiredToolchainsSync] for why leaving it alone is the

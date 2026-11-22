@@ -199,6 +199,7 @@
          that got there first, and the only thing the user needs is to stop tapping. -->
     <string name="toolchain_already_installing">Esa cadena de herramientas ya se está instalando.</string>
     <string name="toolchain_failed_internal">La instalación falló. Consulta el registro de la aplicación.</string>
+    <string name="toolchain_remove_failed">No se pudo quitar esa cadena de herramientas. Consulta el registro de la aplicación.</string>
     <string name="toolchain_install_after_setup">Espera a que termine la configuración y vuelve a instalar.</string>
     <string name="progress_cancel">Cancelar</string>
     <string name="progress_retry">Reintentar</string>

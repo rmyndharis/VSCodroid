@@ -130,8 +130,8 @@ class ToolchainReinstallRecoveryTest {
             parentFile?.mkdirs()
             writeText("previous first")
         }
-        val blocked = File(filesDir, "$root/${children.last().name}").apply { mkdirs() }
-        File(blocked, "hold").writeText("blocks file replacement")
+        // The second file's write runs out of room the way a full disk refuses it, after the first was replaced.
+        val blocker = blockAtomicWritesTo(File(filesDir, "$root/${children.last().name}"))
         var playHasDelivery = true
         every { packManager.getPackLocation("toolchain_java") } answers {
             if (!playHasDelivery) null else mockk {
@@ -162,7 +162,7 @@ class ToolchainReinstallRecoveryTest {
         assertTrue(marker.isFile, "the incomplete reinstall lost the witness that it needs completion")
         assertTrue(playHasDelivery && delivery.isDirectory, "the failed install discarded its repair source")
 
-        blocked.deleteRecursively()
+        blocker.close()
         val nextLaunch = manager()
         nextLaunch.repairInstalledToolchains()
         awaitLaunchPass(nextLaunch)
@@ -174,6 +174,166 @@ class ToolchainReinstallRecoveryTest {
         assertEquals(listOf("java"), nextLaunch.getInstalledToolchains())
         assertFalse(marker.exists(), "the completed reinstall kept its pending marker")
         assertFalse(playHasDelivery, "the completed reinstall kept duplicate Play storage")
+    }
+
+    /**
+     * A folder where the pack writes a file is found before the copy starts. Nothing of the installed tree is
+     * replaced, no marker asks a later launch to settle a copy that never began, and the person is not told to free
+     * space, which would not help. Play's copy stays for a Retry in the same process; the next launch finds the
+     * toolchain recorded with nothing pending and hands the copy back, so a Retry after it fetches the pack again.
+     */
+    @Test
+    fun `a Play reinstall blocked by a folder in its way writes nothing and finishes once the folder is cleared`() {
+        val root = "usr/lib/jvm/test"
+        val state = File(filesDir, "home/.vscodroid/toolchains.json").apply {
+            writeText("""[{"name":"java","displayName":"Java 21","installRoot":"$root","execBitsChecked":true}]""")
+        }
+        val recorded = state.readText()
+        val delivery = File(filesDir, "delivery")
+        fun deliver() {
+            File(delivery, "toolchain_java.json").apply { parentFile?.mkdirs() }.writeText(
+                """{"name":"java","displayName":"Java 21","installRoot":"$root"}""",
+            )
+            File(delivery, "$root/one").apply { parentFile?.mkdirs() }.writeText("new one")
+            File(delivery, "$root/two").writeText("new two")
+        }
+        deliver()
+        val first = File(filesDir, "$root/one").apply { parentFile?.mkdirs() }.apply { writeText("previous one") }
+        val blocked = File(filesDir, "$root/two").apply { mkdirs() }
+        val held = File(blocked, "hold").apply { writeText("the person's file") }
+        var playHasDelivery = true
+        every { packManager.getPackLocation("toolchain_java") } answers {
+            if (!playHasDelivery) null else mockk {
+                every { assetsPath() } returns delivery.path
+            }
+        }
+        every { packManager.removePack("toolchain_java") } answers {
+            playHasDelivery = false
+            delivery.deleteRecursively()
+            completedPackRemoval()
+        }
+        val listener = slot<AssetPackStateUpdateListener>()
+        every { packManager.registerListener(capture(listener)) } just Runs
+        val failed = CountDownLatch(1)
+        val completed = CountDownLatch(1)
+        var why: ToolchainFailure? = null
+        val install = manager()
+        install.onStateChange = { _, status, _, reason, _ ->
+            if (status == AssetPackStatus.FAILED) {
+                why = reason
+                failed.countDown()
+            }
+            if (status == AssetPackStatus.COMPLETED) completed.countDown()
+        }
+        install.install("toolchain_java")
+        complete(listener.captured)
+        assertTrue(failed.await(5, TimeUnit.SECONDS), "the install never reported its failure")
+
+        assertEquals(ToolchainFailure.INTERNAL, why, "a folder in the pack's way was reported as a lack of room")
+        assertEquals("previous one", first.readText(), "the copy started over a path it could not finish")
+        assertEquals("the person's file", held.readText())
+        assertEquals(recorded, state.readText(), "the record changed for a copy that never started")
+        val marker = File(filesDir, "home/.vscodroid/toolchain-installing/toolchain_java.json")
+        assertFalse(marker.exists(), "a marker was left for a copy that never started")
+        assertTrue(playHasDelivery && delivery.isDirectory, "the refused install discarded its source")
+
+        val nextLaunch = manager()
+        nextLaunch.reconcileDeliveredPacks()
+        awaitLaunchPass(nextLaunch)
+
+        assertFalse(playHasDelivery, "a delivery for a recorded toolchain with nothing pending was kept")
+        assertEquals("previous one", first.readText(), "the next launch touched the installed tree")
+        assertEquals(recorded, state.readText(), "the next launch changed the record")
+
+        // Cleared, a Retry fetches the pack again and installs it.
+        blocked.deleteRecursively()
+        deliver()
+        playHasDelivery = true
+        install.install("toolchain_java")
+        complete(listener.captured)
+        assertTrue(completed.await(5, TimeUnit.SECONDS), "the retry never finished")
+
+        assertEquals("new one", first.readText())
+        assertEquals("new two", File(filesDir, "$root/two").readText())
+        assertEquals(listOf("java"), install.getInstalledToolchains())
+        awaitLaunchPass(install)
+        assertFalse(playHasDelivery, "the finished install kept Play's copy")
+    }
+
+    /**
+     * A copy killed partway leaves its temporary file beside the file it was replacing, up to the size of a library,
+     * and only the next write into that directory removes it, which comes after the check of free room. So the check,
+     * about to refuse, removes those first and measures again.
+     */
+    @Test
+    fun `a Play install about to be refused for room first takes back what a killed copy left`() {
+        val root = "usr/lib/jvm/test"
+        val stray = File(filesDir, "usr/lib/.vscodroid-${Integer.toUnsignedString("libbig.so".hashCode(), 16)}-" +
+            "${java.util.UUID.randomUUID()}.tmp~").apply { parentFile?.mkdirs() }
+        val strayBytes = 40_000_000L
+        RandomAccessFile(stray, "rw").use { it.setLength(strayBytes) }
+        val delivery = File(filesDir, "delivery").apply { mkdirs() }
+        File(delivery, "toolchain_java.json").writeText(
+            """{"name":"java","displayName":"Java 21","installRoot":"$root"}""",
+        )
+        File(delivery, "$root/one").apply { parentFile?.mkdirs() }.writeText("new one")
+        val required = toolchainCopyBytes(packUnpackedBytes("toolchain_java")!!, ToolchainCopySpace(0, 0))
+        every { anyConstructed<StatFs>().availableBytes } answers {
+            required - 1 + if (stray.exists()) 0 else strayBytes
+        }
+        every { packManager.getPackLocation("toolchain_java") } returns mockk {
+            every { assetsPath() } returns delivery.path
+        }
+        val listener = slot<AssetPackStateUpdateListener>()
+        every { packManager.registerListener(capture(listener)) } just Runs
+        val settled = CountDownLatch(1)
+        var result: Pair<Int, ToolchainFailure?>? = null
+        val install = manager()
+        install.onStateChange = { _, status, _, why, _ ->
+            if (status == AssetPackStatus.FAILED || status == AssetPackStatus.COMPLETED) {
+                result = status to why
+                settled.countDown()
+            }
+        }
+        install.install("toolchain_java")
+        complete(listener.captured)
+        assertTrue(settled.await(5, TimeUnit.SECONDS), "the install never reported an outcome")
+
+        assertEquals(AssetPackStatus.COMPLETED to null, result, "refused for room a killed copy was still holding")
+        assertFalse(stray.exists(), "the killed copy's temporary file is still there")
+    }
+
+    /**
+     * The check is made where each entry is written too, not only before the copy starts: an entry that comes into
+     * the pack's way after that check is refused as a path in the way, and nothing is written through it.
+     */
+    @Test
+    fun `an entry in the pack's way is refused as such where the copy reaches it`() {
+        val src = File(filesDir, "src").apply { mkdirs() }
+        File(src, "dir").mkdirs()
+        File(src, "dir/file").writeText("new")
+        val elsewhere = File(filesDir, "elsewhere").apply { mkdirs() }
+        val occupations = mapOf<String, (File) -> Unit>(
+            "a folder at a file's name" to { dest ->
+                File(dest, "dir/file").mkdirs()
+                File(dest, "dir/file/kept").writeText("kept")
+            },
+            "a file at a folder's name" to { dest ->
+                dest.mkdirs()
+                File(dest, "dir").writeText("kept")
+            },
+            "a link at a folder's name" to { dest ->
+                dest.mkdirs()
+                Files.createSymbolicLink(File(dest, "dir").toPath(), elsewhere.toPath())
+            },
+        )
+        for ((why, occupy) in occupations) {
+            val dest = File(filesDir, "dest-${occupations.keys.indexOf(why)}")
+            occupy(dest)
+
+            assertThrows(PathOccupied::class.java, { copyDirectoryTree(src, dest) }, why)
+        }
+        assertFalse(File(elsewhere, "file").exists(), "the copy wrote through the link")
     }
 
     @Test

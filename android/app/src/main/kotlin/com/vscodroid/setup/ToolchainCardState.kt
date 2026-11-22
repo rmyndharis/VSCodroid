@@ -106,7 +106,9 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
      *
      * Cleared by any report about the pack, which every route out of the
      * uninstall now makes: the removal itself, a record that could not be
-     * written, a record that never named the toolchain, and a decline.
+     * written, a record that never named the toolchain, a decline, and a removal
+     * that could not read the record or take the files, which is UNKNOWN with a
+     * reason so the card goes back to Remove rather than to a Retry that installs.
      */
     private val removing = mutableSetOf<String>()
 
