@@ -2,7 +2,9 @@ package com.vscodroid.keyboard
 
 import android.content.Context
 import android.content.res.Configuration
+import android.graphics.Point
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.text.TextUtils
 import android.util.AttributeSet
 import android.util.TypedValue
@@ -484,11 +486,10 @@ class ExtraKeyRow @JvmOverloads constructor(
             // The window's own height, not the root view's: this runs during the
             // inset dispatch, before the traversal that would give the view a
             // height for this configuration, so reading the view here would answer
-            // for the previous one. `displayMetrics` is window-scoped and is
-            // already updated, which is the same source `dpToPx` resolves against
-            // and the same one `pages` is packed from a few lines up.
-            val pageHeightPx =
-                resources.displayMetrics.heightPixels - bars.top - bottomInset - rowHeightPx
+            // for the previous one. [windowHeightPx] takes it from the configuration,
+            // which is already updated, and says why below Android 15 that is not
+            // the display metrics alone.
+            val pageHeightPx = windowHeightPx(insets) - bars.top - bottomInset - rowHeightPx
             if (!imeVisible) {
                 suppressedForHeight = false
             } else if (pageHeightPx < dpToPx(MIN_PAGE_HEIGHT_DP)) {
@@ -859,9 +860,103 @@ class ExtraKeyRow @JvmOverloads constructor(
         dotContainer.contentDescription = pageIndicatorText(viewPager.currentItem)
     }
 
+    /**
+     * The height of the window the page is laid out in, as the inset dispatch
+     * handing over [insets] sees it. See [windowHeightForInsets] for the arithmetic.
+     *
+     * The navigation bar is read ignoring its visibility here, the opposite of the
+     * padding in [setupWithRootView], and both are right. The padding has to follow
+     * the bar: hidden in full screen, it frees its room for the page. This has to
+     * follow what the configuration reserved for the bar, and that reservation stays
+     * when the bar is hidden: measured on Android 10 in full screen with the keyboard
+     * up, the display metrics still said 2274 of the 2400px window.
+     */
+    private fun windowHeightPx(insets: WindowInsetsCompat): Int {
+        val navigationBars = insets.getInsetsIgnoringVisibility(WindowInsetsCompat.Type.navigationBars())
+        val cutout = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
+        return windowHeightForInsets(
+            sdkInt = Build.VERSION.SDK_INT,
+            displayMetricsHeightPx = resources.displayMetrics.heightPixels,
+            navigationBarBottomPx = navigationBars.bottom,
+            cutoutTopPx = cutout.top,
+            cutoutBottomPx = cutout.bottom,
+            displayHeightPx = ::displayHeightPx,
+        )
+    }
+
+    /**
+     * The full height of the display the row is on, in its current rotation, or
+     * no bound at all before the row is attached to one.
+     *
+     * `getRealSize` is deprecated from Android 12 in favour of window metrics, which
+     * Android 10 does not have; [windowHeightForInsets] only asks for this below
+     * Android 15.
+     */
+    @Suppress("DEPRECATION")
+    private fun displayHeightPx(): Int =
+        display?.let { shown -> Point().also { shown.getRealSize(it) }.y } ?: Int.MAX_VALUE
+
     private fun dpToPx(dp: Int): Int =
         (dp * resources.displayMetrics.density + 0.5f).toInt()
 }
+
+/**
+ * The height of the window the key row's page is laid out in, from what the
+ * platform hands the row's inset listener: the activity's display metrics, the
+ * navigation bar's bottom inset whether or not the bar is showing, and the
+ * display cutout's top and bottom insets.
+ *
+ * The display metrics follow the window's configuration, which is already current
+ * when the insets arrive, a turn of the screen included. From Android 15, for an
+ * app that targets it as this one does, they are the whole window, and they are
+ * returned as they are. Below it they are the window less the bands the platform
+ * reserves for the navigation bar and the cutout. Measured with the keyboard up on
+ * 1080x2400 emulators: 2274 on Android 10 and 12 (a 126px three-button bar), 2358
+ * on Android 10 with gesture navigation (a 42px bar), 2201 on Android 13 and 14 (a
+ * 63px gesture bar and a 136px cutout), and the full 2400 on Android 15 with the
+ * same bar and cutout. The row subtracts the bars from this height
+ * itself, so taken as it was it decided from a page 42 to 199px short, up to 76dp
+ * against a 120dp threshold, and stood down over pages that had room for it.
+ *
+ * So below Android 15 those bands are counted back: the cutout at the top, and at
+ * the bottom the navigation bar's inset, which is measured from the window's
+ * bottom edge and so already holds a cutout under the bar. That is why the bottom
+ * is the larger of the two and not their sum: with an 84px cutout at each end and
+ * three buttons, Android 10 held back 294px of 2400, and the bar's inset was 210.
+ * A bar beside the page, as three buttons are in landscape, adds nothing, and the
+ * metrics hold the full height there.
+ *
+ * The sum is held to [displayHeightPx], because Android 10 does not always
+ * recompute the metrics when the navigation mode changes in Settings: they keep
+ * describing the old bar until the display is next reconfigured, a turn of the
+ * screen for one, which on a phone locked to portrait can be a long time, while
+ * the insets already describe the new one.
+ * Measured going from gesture navigation to three buttons, the metrics stayed at
+ * 2358 with a 126px bar, and the sum of 2484 ran past the 2400px display, which no
+ * window on it can. Going the other way the sum comes out short instead, 84px on
+ * that screen against the 126px the metrics alone were short by. [displayHeightPx]
+ * is only asked below Android 15, so a later release does exactly what it did.
+ *
+ * Split out of [ExtraKeyRow] for the reason [latchedModifierLabel] is: this is the
+ * half a JVM test can run, with the release passed in, as
+ * [com.vscodroid.util.Environment.projectsDirFor] takes it.
+ */
+internal fun windowHeightForInsets(
+    sdkInt: Int,
+    displayMetricsHeightPx: Int,
+    navigationBarBottomPx: Int,
+    cutoutTopPx: Int,
+    cutoutBottomPx: Int,
+    displayHeightPx: () -> Int,
+): Int =
+    if (sdkInt >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+        displayMetricsHeightPx
+    } else {
+        minOf(
+            displayMetricsHeightPx + cutoutTopPx + maxOf(navigationBarBottomPx, cutoutBottomPx),
+            displayHeightPx(),
+        )
+    }
 
 /**
  * The modifiers latched right now, drawn as one label, or null for none.
