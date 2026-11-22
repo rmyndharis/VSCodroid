@@ -825,9 +825,13 @@ class SafStorageManager(context: Context) {
             } ?: return@grant RECLAIM_FAILED
             try {
                 syncEngine.renameUploadsUnder(dir, discarded)
-                setAside(root, hash + SafSyncEngine.SYNCED_RECORD_SUFFIX)
-                // The mark holds nothing; deleted rather than set aside, since nothing sweeps it under that name.
-                File(root, hash + SafSyncEngine.SORTED_RECORD_SUFFIX).delete()
+                // The mark holds nothing; deleted rather than set aside, since nothing sweeps it under that name. Not
+                // while its record stays, as the launch pass keeps it: deleted beside a record that could not be set
+                // aside, it left that record reading as an earlier build's, and the next open sorted its files again.
+                val record = File(root, hash + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+                if (setAside(root, record.name) != null || !record.exists()) {
+                    File(root, hash + SafSyncEngine.SORTED_RECORD_SUFFIX).delete()
+                }
                 releaseGrantFor(hash)
                 Logger.i(tag, "Set a device folder's local copy aside at the user's request")
                 bytes

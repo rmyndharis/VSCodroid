@@ -202,6 +202,38 @@ class MirrorReclaimTest {
     }
 
     /**
+     * The mark stays when the record beside it could not be set aside. Deleted alone, it left the record reading as one
+     * an earlier build wrote, and the next open of the same folder sorted its files again as that build's.
+     */
+    @Test
+    fun `a record that cannot be set aside keeps the mark beside it`() {
+        val (dir, record) = vouchedMirror()
+        val mark = File(dir.path + SafSyncEngine.SORTED_RECORD_SUFFIX).apply { createNewFile() }
+        // Something already stands where the record would be set aside, so the rename that moves it fails.
+        File(mirrorsDir, SafStorageManager.DISCARD_PREFIX + record.name + "/held").apply {
+            checkNotNull(parentFile).mkdirs()
+            writeText("in the way")
+        }
+
+        assertTrue(manager.reclaimMirror(dir.name, force = true) > 0)
+
+        assertTrue(record.exists(), "precondition: the record could not be set aside")
+        assertTrue(mark.exists(), "the mark went without the record it was beside")
+    }
+
+    /** A copy whose open never wrote a record, as one cut short leaves it: the mark goes, there being no record to keep it. */
+    @Test
+    fun `a mark with no record beside it goes with the copy`() {
+        val (dir, record) = vouchedMirror()
+        assertTrue(record.delete())
+        val mark = File(dir.path + SafSyncEngine.SORTED_RECORD_SUFFIX).apply { createNewFile() }
+
+        assertTrue(manager.reclaimMirror(dir.name, force = true) > 0)
+
+        assertFalse(mark.exists(), "the mark outlived the copy it was beside")
+    }
+
+    /**
      * The rename is the commit point of the removal, and the reason is in
      * [SafStorageManager.reclaimRevokedMirrorsSync]: a delete in place rests on nothing
      * else touching the directory while the walk is inside it, and a re-grant during the
