@@ -201,18 +201,24 @@ if __name__ == "__main__":
                 f"{MIN_COVERAGE:.0%} floor. The key layout has moved; check that "
                 "VSCODE_LOC_COMMIT matches VSCODE_VERSION before raising the floor."
             )
-        leaked = [
+        # Asked of the result, never of TRADEMARK again: build() has already
+        # replaced every match, so searching for one afterwards can only find
+        # nothing, and a translation spelling the name some other way passed.
+        # A branded string that does not say VSCodroid after substitution
+        # either kept the mark in a form the pattern misses or dropped the name.
+        unbranded = [
             index for index, english in enumerate(messages)
-            if BRANDED in english and TRADEMARK.search(bundle[index])
+            if BRANDED in english and BRANDED not in bundle[index]
         ]
-        if leaked:
-            sample = leaked[0]
+        if unbranded:
+            sample = unbranded[0]
             sys.exit(
-                f"{locale}: {len(leaked)} of the branded strings still carry Microsoft's "
-                f"product name after substitution, for example index {sample}: "
-                f"{bundle[sample]!r}. These are the strings patch 0011 rebrands, so shipping "
-                "them puts the trademark back into the interface. Widen TRADEMARK to cover "
-                "the form this language uses."
+                f"{locale}: {len(unbranded)} of the branded strings do not say {BRANDED} "
+                f"after substitution, for example index {sample}: {bundle[sample]!r}. "
+                "These are the strings patch 0011 rebrands, so the translation either "
+                "spells Microsoft's product name in a form TRADEMARK does not match, "
+                "which would put the trademark back into the interface, or leaves the "
+                "name out. Widen TRADEMARK to cover the form this language uses."
             )
 
         payload = json.dumps(bundle, ensure_ascii=False).encode("utf-8")

@@ -90,21 +90,38 @@ class ExclusiveMoveOnDeviceTest {
 
     /**
      * The helper ends within milliseconds, and the platform's timed wait for a process looks once
-     * and then sleeps a tenth of a second, so waited for that way ten moves take a second.
+     * and then sleeps a tenth of a second, so waited for that way every move takes at least that.
+     *
+     * Measured against the same helper started ten times and waited for with the untimed
+     * `waitFor()`, which returns when the process ends, rather than against a fixed figure. A
+     * start of the helper costs about 65 ms on an API 36 emulator, so ten of them were 650 of the
+     * 800 ms a fixed bound allowed and a slower device would have gone red with nothing wrong;
+     * what this asks is the time the wait adds to each move, which is what the timed wait wasted.
      */
     @Test
     fun aMoveIsNotWaitedForLongerThanItTakes() {
         File(directory, "a").writeText("the copy")
         assertEquals(ExclusiveMove.Outcome.MOVED, ExclusiveMove.move(helper, directory, key(directory), "a", "b"))
-        val started = System.nanoTime()
 
+        // Started with no arguments it refuses at once, so this is the start and the exit alone.
+        val controlStarted = System.nanoTime()
+        repeat(10) {
+            val process = ProcessBuilder(helper.path).redirectErrorStream(true).start()
+            process.inputStream.use { it.readBytes() }
+            process.waitFor()
+        }
+        val control = (System.nanoTime() - controlStarted) / 1_000_000
+
+        val started = System.nanoTime()
         repeat(5) {
             assertEquals(ExclusiveMove.Outcome.MOVED, ExclusiveMove.move(helper, directory, key(directory), "b", "a"))
             assertEquals(ExclusiveMove.Outcome.MOVED, ExclusiveMove.move(helper, directory, key(directory), "a", "b"))
         }
-
         val elapsed = (System.nanoTime() - started) / 1_000_000
-        assertTrue("ten moves took $elapsed ms", elapsed < 800)
+
+        // 25 ms a move over the control: the poll's 2 ms with room for scheduling, and below
+        // the 35 ms or more the timed wait added to a helper that ends in 65 ms.
+        assertTrue("ten moves took $elapsed ms against $control ms for ten bare starts", elapsed < control + 250)
     }
 
     @Test

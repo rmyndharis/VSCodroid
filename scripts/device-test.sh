@@ -11,9 +11,10 @@
 #   --skip-install   Test already-running app (skip install + clear)
 #   --device SERIAL  Target specific device (passed as adb -s SERIAL)
 #   --verbose        Show full adb output
-#   --timeout N      First-run setup timeout in seconds (default: 120). The
-#                    server-ready wait is not this: it is read from the app's own
-#                    restart budget, see derive_ready_budget_seconds.
+#   --timeout N      First-run setup timeout in seconds (default: 300, above the
+#                    200 s a full first-run unpack has taken on an emulator).
+#                    The server-ready wait is not this: it is read from the
+#                    app's own restart budget, see derive_ready_budget_seconds.
 #   --self-check     Resolve every expectation this suite derives, then exit.
 #                    Needs no device, so CI can run it.
 #   --instrumented   Check the preconditions, then run the instrumented suite
@@ -37,10 +38,11 @@
 #   * after changing scripts/download-*.sh or scripts/build-*.sh, which decide
 #     what gets bundled;
 #   * after a Node, Python or VS Code version bump;
-#   * after touching MainActivity, SplashActivity, NodeService, ProcessManager or
-#     FirstRunSetup -- --instrumented, which is the only thing that runs them on
-#     a device. The JVM suite reaches parts of all five; what it never does is
-#     start the app.
+#   * after touching MainActivity, SplashActivity, NodeService, ProcessManager,
+#     FirstRunSetup, SafSyncEngine or SafStorageManager -- --instrumented, which
+#     is the only thing that runs them on a device. The JVM suite reaches parts
+#     of all seven; what it never does is start the app or a real
+#     DocumentsProvider.
 #
 # This suite once demanded Node v20.x for two releases after the runtime moved
 # to 24.18.0. Nothing caught it, because nothing ran it. The versions it checks
@@ -142,6 +144,18 @@ SETUP_DONE_FIRST_RUN="First-run setup completed"
 SETUP_DONE_FIRST_RUN_SRC="android/app/src/main/kotlin/com/vscodroid/setup/FirstRunSetup.kt"
 SETUP_DONE_LATER_RUN="Not first run, setup is already behind this launch"
 SETUP_DONE_LATER_RUN_SRC="android/app/src/main/kotlin/com/vscodroid/SplashActivity.kt"
+
+# The log lines server_ready reads, for the same reason and with the same check.
+# The first two end the wait with a port, the third is where the port comes from
+# when only the second was seen, and the last ends it with the app's own verdict.
+SERVER_READY_ON_PORT="Server is ready on port"
+SERVER_READY_ON_PORT_SRC="android/app/src/main/kotlin/com/vscodroid/service/NodeService.kt"
+SERVER_READY_AFTER="Server ready after"
+SERVER_READY_AFTER_SRC="android/app/src/main/kotlin/com/vscodroid/service/ProcessManager.kt"
+SERVER_STARTING_ON_PORT="Starting server on port"
+SERVER_STARTING_ON_PORT_SRC="android/app/src/main/kotlin/com/vscodroid/service/ProcessManager.kt"
+SERVER_GAVE_UP="Max restarts exceeded"
+SERVER_GAVE_UP_SRC="android/app/src/main/kotlin/com/vscodroid/service/NodeService.kt"
 
 derive_shortcut_target() {
     # The activity the launcher shortcut opens, read from the call that publishes
@@ -307,7 +321,7 @@ SKIP_BUILD=false
 SKIP_INSTALL=false
 DEVICE=""
 VERBOSE=false
-TIMEOUT=120
+TIMEOUT=300
 SELF_CHECK=false
 INSTRUMENTED=false
 
@@ -391,22 +405,6 @@ vlog() {
     if $VERBOSE; then
         echo "       $*"
     fi
-}
-
-# ── Timeout helper (macOS has no `timeout`) ────────────────────────
-# Usage: run_with_timeout SECONDS COMMAND [ARGS...]
-# Returns the command's exit code, or 124 on timeout.
-run_with_timeout() {
-    local secs="$1"; shift
-    "$@" &
-    local cmd_pid=$!
-    (sleep "$secs" && kill "$cmd_pid" 2>/dev/null) &
-    local watcher_pid=$!
-    wait "$cmd_pid" 2>/dev/null
-    local rc=$?
-    kill "$watcher_pid" 2>/dev/null
-    wait "$watcher_pid" 2>/dev/null
-    return $rc
 }
 
 # ── Captured state ─────────────────────────────────────────────────
@@ -502,15 +500,18 @@ if $SELF_CHECK; then
             "no ZEROMQ_PREBUILD readable in Environment.kt; the zeromq addon check would look nowhere"
     fi
 
-    for marker in "$SETUP_DONE_FIRST_RUN|$SETUP_DONE_FIRST_RUN_SRC" \
-                  "$SETUP_DONE_LATER_RUN|$SETUP_DONE_LATER_RUN_SRC"; do
-        marker_text=${marker%%|*}
-        marker_src=${marker#*|}
+    for marker in "setup|first_run_setup|$SETUP_DONE_FIRST_RUN|$SETUP_DONE_FIRST_RUN_SRC" \
+                  "setup|first_run_setup|$SETUP_DONE_LATER_RUN|$SETUP_DONE_LATER_RUN_SRC" \
+                  "server|server_ready|$SERVER_READY_ON_PORT|$SERVER_READY_ON_PORT_SRC" \
+                  "server|server_ready|$SERVER_READY_AFTER|$SERVER_READY_AFTER_SRC" \
+                  "server|server_ready|$SERVER_STARTING_ON_PORT|$SERVER_STARTING_ON_PORT_SRC" \
+                  "server|server_ready|$SERVER_GAVE_UP|$SERVER_GAVE_UP_SRC"; do
+        IFS='|' read -r marker_kind marker_phase marker_text marker_src <<< "$marker"
         if grep -qF "\"$marker_text" "$ROOT_DIR/$marker_src"; then
-            pass "setup log line (\"$marker_text\", from ${marker_src##*/})"
+            pass "$marker_kind log line (\"$marker_text\", from ${marker_src##*/})"
         else
-            fail "setup log line" \
-                "\"$marker_text\" is not logged by $marker_src; first_run_setup would wait out its timeout"
+            fail "$marker_kind log line" \
+                "\"$marker_text\" is not logged by $marker_src; $marker_phase would wait out its timeout"
         fi
     done
 
@@ -678,11 +679,11 @@ if $INSTRUMENTED; then
             "$FAIL" "$FAILURES"
         exit 1
     fi
-    # How --device reaches Gradle. Verified against AGP 8.9.1 rather than
-    # assumed: DeviceProviderInstrumentTestTask calls System.getenv on this
+    # How --device reaches Gradle. Read out of AGP 9.3.1's own classes rather
+    # than assumed: DeviceProviderInstrumentTestTask calls System.getenv on this
     # name, and ConnectedDeviceProvider keeps it as androidSerialsEnv and
-    # filters the attached devices by it -- its "Connected device with serial
-    # '%s' not found!" is what an unattached serial produces.
+    # filters the attached devices by it -- its "Connected device with
+    # serial%s '%s' not found!" is what an unattached serial produces.
     [ -n "$DEVICE" ] && export ANDROID_SERIAL="$DEVICE"
 
     printf "\n  ${GREEN}%d passed${RESET}, handing off to Gradle%s\n\n" \
@@ -699,6 +700,13 @@ if $INSTRUMENTED; then
     # the only thing between a release and an unrun suite is a person
     # remembering. A record does not make anyone run it. It makes the answer to
     # "was it run, on what, and when" a file rather than a recollection.
+    #
+    # The results directory is emptied first, so the record below reads only
+    # what this run wrote. A run that stops before the tests (a compile error, a
+    # refused install) writes no XML, and the previous run's files then reported
+    # their counts beside this run's exit status.
+    RESULT_DIR="$ROOT_DIR/android/app/build/outputs/androidTest-results/connected"
+    rm -rf "$RESULT_DIR"
     printf '  Storage pressure is disabled; its isolated filesystem prerequisites require a separate opt-in run.\n'
     ./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.isolatedStoragePressureRoot=
     GRADLE_STATUS=$?
@@ -708,8 +716,9 @@ if $INSTRUMENTED; then
     # Counts come from the XML the run just wrote, not from Gradle's log. A
     # stale report from an earlier run says "0 failures" and is
     # indistinguishable from success, which is the trap the mutation harness
-    # documents for the same reason.
-    RESULT_DIR="$ROOT_DIR/android/app/build/outputs/androidTest-results/connected"
+    # documents for the same reason. RESULT_DIR is emptied before Gradle starts
+    # (above), so a run that never reached the tests finds nothing here rather
+    # than the last run's counts.
     COUNTS=$(python3 - "$RESULT_DIR" <<'PY' 2>/dev/null || echo "counts unavailable"
 import glob, os, re, sys
 t = f = e = s = n = 0
@@ -875,8 +884,8 @@ fi
 # ═══════════════════════════════════════════════════════════════════
 # TEST 7: server_ready
 # ═══════════════════════════════════════════════════════════════════
-# Wait for "Server is ready on port" or "Server ready after" in logcat, for as
-# long as the app is still trying.
+# Wait for SERVER_READY_ON_PORT or SERVER_READY_AFTER in logcat, for as long as
+# the app is still trying.
 #
 # The deadline was 60 seconds, which fits a warm device and nothing else: a first
 # run unpacks the whole asset tree before the server is started at all, and on a
@@ -894,6 +903,11 @@ fi
 # And it does not sit out that budget when the answer is already in: the service
 # says so when its restarts are spent, and reading that line ends the wait with
 # the reason rather than with a stopwatch.
+#
+# The toolchain picker is answered here as well as during setup. It comes after
+# the line first_run_setup stops at, `pm clear` above guarantees it has not been
+# answered, and until it is the app never starts the server: a fresh install
+# waited out the whole budget here and failed a healthy device.
 READY_TIMEOUT=$(derive_ready_budget_seconds)
 ELAPSED=0
 READY_OK=false
@@ -902,16 +916,16 @@ GAVE_UP=false
 while [ -n "$READY_TIMEOUT" ] && [ $ELAPSED -lt "$READY_TIMEOUT" ]; do
     LOGCAT=$($ADB logcat -d -s VSCodroid.NodeService:I VSCodroid.ProcessManager:I 2>/dev/null)
     # Extract port from "Server is ready on port NNNN"
-    PORT_LINE=$(echo "$LOGCAT" | grep -o "Server is ready on port [0-9]*" | tail -1)
+    PORT_LINE=$(echo "$LOGCAT" | grep -o "$SERVER_READY_ON_PORT [0-9]*" | tail -1)
     if [ -n "$PORT_LINE" ]; then
         SERVER_PORT=$(echo "$PORT_LINE" | grep -o '[0-9]*$')
         READY_OK=true
         break
     fi
     # Also check ProcessManager's "Server ready after Nms"
-    if echo "$LOGCAT" | grep -q "Server ready after"; then
+    if echo "$LOGCAT" | grep -qF "$SERVER_READY_AFTER"; then
         # Try to get port from earlier log
-        PORT_LINE2=$(echo "$LOGCAT" | grep -o "Starting server on port [0-9]*" | tail -1)
+        PORT_LINE2=$(echo "$LOGCAT" | grep -o "$SERVER_STARTING_ON_PORT [0-9]*" | tail -1)
         if [ -n "$PORT_LINE2" ]; then
             SERVER_PORT=$(echo "$PORT_LINE2" | grep -o '[0-9]*$')
         else
@@ -922,10 +936,11 @@ while [ -n "$READY_TIMEOUT" ] && [ $ELAPSED -lt "$READY_TIMEOUT" ]; do
     fi
     # NodeService logs this once its restart budget is gone, and nothing after it
     # is coming.
-    if echo "$LOGCAT" | grep -q "Max restarts exceeded"; then
+    if echo "$LOGCAT" | grep -qF "$SERVER_GAVE_UP"; then
         GAVE_UP=true
         break
     fi
+    dismiss_blocking_dialogs
     sleep 2
     ELAPSED=$((ELAPSED + 2))
     # Printed whether or not --verbose was asked for. This wait is minutes long
@@ -1238,9 +1253,20 @@ fi
 printf "\n${BOLD}Phase 5: Runtime${RESET}\n"
 
 # Test 20: process_count
-PROC_LIST=$($ADB shell ps -A 2>/dev/null | grep "$PKG" || true)
-PROC_COUNT=$(echo "$PROC_LIST" | grep -c "$PKG" || true)
-if [ "$PROC_COUNT" -lt 10 ]; then
+#
+# Bounded below as well as above. Zero is under ten too, so a device where the
+# app was not running at all, or a `ps` that printed nothing, passed as a lean
+# process tree. The server was reported ready above, so the app's own process
+# has to be among them; and an empty listing is the instrument's silence, not
+# the device's answer.
+PS_ALL=$($ADB shell ps -A 2>/dev/null | tr -d '\r')
+PROC_LIST=$(printf '%s\n' "$PS_ALL" | grep "$PKG" || true)
+PROC_COUNT=$(printf '%s\n' "$PROC_LIST" | grep -c "$PKG" || true)
+if [ -z "$PS_ALL" ]; then
+    skip "process_count" "ps -A printed nothing here, so a count of zero would prove nothing"
+elif [ "$PROC_COUNT" -eq 0 ]; then
+    fail "process_count" "no process names $PKG, so the app is not running"
+elif [ "$PROC_COUNT" -lt 10 ]; then
     pass "process_count ($PROC_COUNT processes)"
 else
     fail "process_count" "Expected <10, got $PROC_COUNT"
@@ -1718,7 +1744,9 @@ printf "${YELLOW}$SKIP skipped${RESET} / $TOTAL total\n"
 
 if [ $FAIL -gt 0 ]; then
     printf "\n${RED}Failures:${RESET}"
-    printf "$FAILURES\n"
+    # %b, never the text as the format: a failure message carrying a % (a URL,
+    # a percentage) was read as a conversion and printed wrong.
+    printf '%b\n' "$FAILURES"
     printf "\n"
     exit 1
 else

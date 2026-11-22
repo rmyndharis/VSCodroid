@@ -46,7 +46,9 @@ import java.io.IOException
  * `scripts/termux-exec.patch` were measured on the same emulators,
  * 2026-09-22/23, with 755-mode copies of the library. P6 and the three cases
  * added on 2026-10-01 (the relative path, the linker started by hand and the
- * exec with no argv[0]) have not run on a device yet.
+ * exec with no argv[0]) are recorded passing, with every other case of this
+ * class, on an API 29 emulator on 2026-11-21; no run of them on a newer
+ * release is recorded.
  */
 @RunWith(AndroidJUnit4::class)
 class ExecPreloadOnDeviceTest {

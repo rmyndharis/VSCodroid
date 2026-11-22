@@ -109,10 +109,9 @@ def check(directory: pathlib.Path) -> int:
     path = bundle_of(directory)
     text = path.read_text(encoding="utf-8")
 
-    if PATCHED.search(text):
-        print("  ok      the bundled Python extension answers Linux for android")
-        return 0
-
+    # The original test is asked first, and on its own. A bundle holding both is
+    # not rewritten: whichever copy runs first decides, and the rewritten one
+    # being somewhere in the file says nothing about that.
     if PLATFORM_TEST.search(text):
         print(
             "FAIL the bundled Python extension still answers OSType.Unknown on this\n"
@@ -123,6 +122,10 @@ def check(directory: pathlib.Path) -> int:
             file=sys.stderr,
         )
         return 1
+
+    if PATCHED.search(text):
+        print("  ok      the bundled Python extension answers Linux for android")
+        return 0
 
     print(
         "FAIL neither the original platform test nor the rewritten one is in\n"
