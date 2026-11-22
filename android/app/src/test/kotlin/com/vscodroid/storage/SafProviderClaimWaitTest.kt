@@ -109,12 +109,16 @@ class SafProviderClaimWaitTest {
     fun tearDownClaims() {
         // A claim a failing case left behind would refuse every later one in this JVM.
         held.forEach { runCatching { release(it) } }
+        // The record and its mark sit beside the copy, outside the temporary folder that is removed with it.
+        File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).delete()
+        File(mirror.path + SafSyncEngine.SORTED_RECORD_SUFFIX).delete()
         unmockkAll()
     }
 
     @Test
     fun `a free claim is taken at once`() {
-        val (claim, ms) = timed { claimWithin(uri("test"), 5_000) }
+        val test = uri("test")
+        val (claim, ms) = timed { claimWithin(test, 5_000) }
 
         assertNotNull(claim)
         held.add(claim!!)
@@ -125,8 +129,9 @@ class SafProviderClaimWaitTest {
     fun `a claim that comes free during the wait is taken, and promptly`() {
         val mutation = hold("test")
         releaseAfter(mutation, 300)
+        val test = uri("test")
 
-        val (claim, ms) = timed { claimWithin(uri("test"), 5_000) }
+        val (claim, ms) = timed { claimWithin(test, 5_000) }
 
         assertNotNull(claim, "the waiter was refused although the holder let go within the wait")
         held.add(claim!!)
@@ -137,8 +142,9 @@ class SafProviderClaimWaitTest {
     @Test
     fun `a claim that stays held is refused once the wait is over`() {
         hold("test")
+        val test = uri("test")
 
-        val (claim, ms) = timed { claimWithin(uri("test"), 300) }
+        val (claim, ms) = timed { claimWithin(test, 300) }
 
         assertNull(claim)
         assertTrue(ms >= 250, "the waiter gave up after $ms ms of a 300 ms wait")
@@ -150,8 +156,9 @@ class SafProviderClaimWaitTest {
     fun `after one waiter has given up the next is refused at once`() {
         hold("test")
         assertNull(claimWithin(uri("test"), 300))
+        val test = uri("test")
 
-        val (second, ms) = timed { claimWithin(uri("test"), 10_000) }
+        val (second, ms) = timed { claimWithin(test, 10_000) }
 
         assertNull(second)
         assertTrue(ms < 200, "the second waiter waited $ms ms for a holder the first had already given up on")
@@ -165,8 +172,9 @@ class SafProviderClaimWaitTest {
         release(first)
         held.remove(first)
         hold("test")
+        val test = uri("test")
 
-        val (claim, ms) = timed { claimWithin(uri("test"), 300) }
+        val (claim, ms) = timed { claimWithin(test, 300) }
 
         assertNull(claim)
         assertTrue(ms >= 250, "a new holder was refused without being waited for ($ms ms)")
@@ -177,34 +185,41 @@ class SafProviderClaimWaitTest {
     fun `a zero wait refuses at once without marking the holder`() {
         hold("test")
         assertNull(claimWithin(uri("test"), 0))
+        val test = uri("test")
 
-        val (claim, ms) = timed { claimWithin(uri("test"), 300) }
+        val (claim, ms) = timed { claimWithin(test, 300) }
 
         assertNull(claim)
         assertTrue(ms >= 250, "a zero wait marked the holder as given up on, so the next waiter did not wait ($ms ms)")
     }
 
-    /** A waiter whose time expires after a handover must not mark the new holder. */
+    /**
+     * A waiter whose time expires after a handover must not mark the new holder. The handover waits until the waiter
+     * is inside its wait on the first holder: on a timer, a waiter slow to get there saw the second holder first and
+     * marked it, as it should, and the case failed for a reason it does not test.
+     */
     @Test
     fun `a waiter whose time runs out after a handover does not mark the new holder`() {
         val first = hold("test")
         val mutations = SafSyncEngine::class.java.getDeclaredField("providerMutations")
             .apply { isAccessible = true }.get(null)!!
+        val test = uri("test")
+        val waiter = Thread.currentThread()
         val second = AtomicReference<Any?>()
         val handover = Thread {
-            Thread.sleep(150)
+            waitUntilInClaimWait(waiter)
             synchronized(mutations) {
                 release(first)
-                second.set(tryClaim(uri("test")))
+                second.set(tryClaim(test))
             }
         }.apply { isDaemon = true; start() }
 
         try {
-            assertNull(claimWithin(uri("test"), 300))
+            assertNull(claimWithin(test, 300))
             handover.join(2_000)
             assertNotNull(second.get(), "handover failed to claim the provider")
 
-            val (third, ms) = timed { claimWithin(uri("test"), 300) }
+            val (third, ms) = timed { claimWithin(test, 300) }
 
             assertNull(third)
             assertTrue(
@@ -220,8 +235,9 @@ class SafProviderClaimWaitTest {
     @Test
     fun `another authority is not held up`() {
         hold("test")
+        val other = uri("other")
 
-        val (claim, ms) = timed { claimWithin(uri("other"), 5_000) }
+        val (claim, ms) = timed { claimWithin(other, 5_000) }
 
         assertNotNull(claim)
         held.add(claim!!)
@@ -1041,6 +1057,8 @@ class SafProviderClaimWaitTest {
             nodes[currentId]
         }
 
+        fun reparent(docId: String, parentId: String) = synchronized(lock) { nodes[docId]?.parentId = parentId }
+
         private fun deleteRecursive(docId: String) {
             val children = nodes.values.filter { it.parentId == docId }.map { it.id }
             children.forEach { deleteRecursive(it) }
@@ -1278,8 +1296,9 @@ class SafProviderClaimWaitTest {
     }
 
     @Test
-    fun `current release leaves cross-directory move unmoved when target parent arrives during claim wait and announces the drop`() {
-        // Target parent is resolved before the claim wait and not re-resolved when the wait ends.
+    fun `a cross-directory move whose target parent reaches the device during the claim wait moves the folder whole`() {
+        // The target parent is looked up once the claim is held. Looked up before the wait, a parent that reached the
+        // device while it ran was missed: the move was dropped with a notice and the device kept the folder unmoved.
         val harness = VirtualSafHarness()
         val oldId = harness.addDir("treeA", "old")
         val oldNode = harness.findByPath("treeA", "old")!!
@@ -1321,9 +1340,11 @@ class SafProviderClaimWaitTest {
         worker.join(5_000)
         assertFalse(worker.isAlive)
 
-        assertNotNull(harness.findByPath("treeA", "old"))
-        assertNull(harness.findByPath("treeA", "dst/old"))
-        assertEquals(listOf("old"), harness.failedNames)
+        assertNull(harness.findByPath("treeA", "old"), "the device kept the folder unmoved")
+        assertEquals("original", harness.findByPath("treeA", "dst/old/child.txt")?.bytes?.toString(Charsets.UTF_8))
+        assertNotNull(harness.findByPath("treeA", "dst/old/.git/HEAD"), "the folder was not moved whole")
+        assertTrue(harness.createdCalls.isEmpty(), "the folder was made again from the copy: ${harness.createdCalls}")
+        assertEquals(emptyList<String>(), harness.failedNames)
     }
 
     @Test
@@ -1691,8 +1712,10 @@ class SafProviderClaimWaitTest {
     }
 
     @Test
-    fun `current release leaves original device folder stranded when intermediate folder name is reused before drain`() {
-        // Superseding on localPath drops old -> tmp without carrying old's identity through tmp -> final.
+    fun `a folder renamed through a name another folder takes next ends up whole under its last name`() {
+        // mv old tmp; mv tmp final; mv other tmp, inside one poll. The first rename is not given way to the third,
+        // which is onto the same name, because the second takes the first's result away from that name in between:
+        // given way, the device kept old, and final was made again from the copy without what the copy never held.
         val harness = VirtualSafHarness()
         harness.addDir("treeA", "old")
         harness.addFile("treeA", "old/from_old.txt", "from old")
@@ -1725,20 +1748,27 @@ class SafProviderClaimWaitTest {
 
         engine.runWriteBackLoop { false }
 
-        assertNotNull(harness.findByPath("treeA", "old"))
-        assertNull(harness.findByPath("treeA", "final/.git/head"))
+        assertNull(harness.findByPath("treeA", "old"), "the device kept the folder under its first name")
+        assertNull(harness.findByPath("treeA", "other"), "the device kept the other folder under its first name")
+        assertEquals("from old", harness.findByPath("treeA", "final/from_old.txt")?.bytes?.toString(Charsets.UTF_8))
+        assertNotNull(harness.findByPath("treeA", "final/.git/head"), "the folder was not renamed whole")
         assertEquals("from other", harness.findByPath("treeA", "tmp/from_other.txt")?.bytes?.toString(Charsets.UTF_8))
+        assertNull(harness.findByPath("treeA", "tmp/from_old.txt"), "the two folders were merged under one name")
+        assertTrue(harness.createdCalls.isEmpty(), "a folder was made again from the copy: ${harness.createdCalls}")
+        assertEquals(emptyList<String>(), harness.failedNames)
     }
 
     @Test
-    fun `current release leaves original device folder behind when moved into a newly created parent that is renamed`() {
-        // Rename old -> sub/mid lacks sub on device and has absent localPath after sub -> sub2.
+    fun `a folder moved into a folder made just before it that is then renamed ends up whole under the last name`() {
+        // mkdir sub; mv old sub/mid; mv sub sub2, inside one poll. The device holds no sub, and the move into it lost
+        // its place when sub was renamed: the device kept old, and sub2/mid was made from the copy without its .git.
         val harness = VirtualSafHarness()
         harness.addDir("treeA", "old")
         harness.addFile("treeA", "old/child.txt", "original")
         harness.addFile("treeA", "old/.git/head", "ref: old")
         val treeA = harness.treeUris.getValue("treeA")
         val engine = harness.buildEngine()
+        movesDocuments(harness)
 
         runBlocking { engine.initialSync(treeA, mirror) { _, _ -> } }
         val subDir = File(mirror, "sub").apply { mkdirs() }
@@ -1759,9 +1789,90 @@ class SafProviderClaimWaitTest {
 
         engine.runWriteBackLoop { false }
 
-        assertNotNull(harness.findByPath("treeA", "old"))
-        assertNull(harness.findByPath("treeA", "sub2/mid/.git/head"))
+        assertNull(harness.findByPath("treeA", "old"), "the device kept the folder under its first name")
+        assertNull(harness.findByPath("treeA", "sub"), "the device holds the folder under its first name too")
+        assertNotNull(harness.findByPath("treeA", "sub2/mid/.git/head"), "the folder was not moved whole")
         assertEquals("original", harness.findByPath("treeA", "sub2/mid/child.txt")?.bytes?.toString(Charsets.UTF_8))
+        assertTrue(
+            harness.createdCalls.none { it.second == "mid" || it.second == "child.txt" },
+            "the moved folder was made again from the copy: ${harness.createdCalls}",
+        )
+        assertEquals(emptyList<String>(), harness.failedNames)
+    }
+
+    /**
+     * The move into a folder the device does not hold follows that folder's rename; a rename made inside the folder,
+     * whose document is not moving into it, is left where it was queued.
+     */
+    @Test
+    fun `a folder made just before a move into it and renamed takes the move along and leaves a rename inside it`() {
+        val harness = VirtualSafHarness()
+        harness.addDir("treeA", "old")
+        harness.addFile("treeA", "old/child.txt", "original")
+        val treeA = harness.treeUris.getValue("treeA")
+        val engine = harness.buildEngine()
+
+        runBlocking { engine.initialSync(treeA, mirror) { _, _ -> } }
+        val subDir = File(mirror, "sub").apply { mkdirs() }
+        engine.handleMirrorEvent(FileObserver.CREATE or 0x40000000, subDir, mirror, treeA)
+        val midDir = File(subDir, "mid")
+        assertTrue(File(mirror, "old").renameTo(midDir))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, File(mirror, "old"), mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, midDir, mirror, treeA)
+        val inner = File(subDir, "inner")
+        assertTrue(midDir.renameTo(inner))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, midDir, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, inner, mirror, treeA)
+        assertTrue(subDir.renameTo(File(mirror, "sub2")))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, subDir, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, File(mirror, "sub2"), mirror, treeA)
+
+        val renames = engine.session.queue.filter { it.type == SyncType.RENAME }
+            .map { File(it.previousPath!!).toRelativeString(mirror) to it.relativePath }
+        assertEquals(listOf("sub/mid" to "sub/inner", "old" to "sub2/mid"), renames)
+    }
+
+    /** `moveDocument` as a provider that supports it answers: the document goes under the target parent, name kept. */
+    private fun movesDocuments(harness: VirtualSafHarness) {
+        every { DocumentsContract.moveDocument(any(), any(), any(), any()) } answers {
+            val docUri = secondArg<Uri>()
+            harness.reparent(docUri.toString().removePrefix("doc-uri:"), arg<Uri>(3).toString().removePrefix("doc-uri:"))
+            docUri
+        }
+    }
+
+    @Test
+    fun `a folder moved into a folder made just before it is moved whole and not also made from the copy`() {
+        // mkdir sub; mv old sub/mid, inside one poll. The create of sub runs first and used to send what the copy
+        // holds under it, the moved folder included, so the move that followed met a folder of its name there.
+        val harness = VirtualSafHarness()
+        harness.addDir("treeA", "old")
+        harness.addFile("treeA", "old/child.txt", "original")
+        harness.addFile("treeA", "old/.git/head", "ref: old")
+        val treeA = harness.treeUris.getValue("treeA")
+        val engine = harness.buildEngine()
+        movesDocuments(harness)
+
+        runBlocking { engine.initialSync(treeA, mirror) { _, _ -> } }
+        val subDir = File(mirror, "sub").apply { mkdirs() }
+        engine.handleMirrorEvent(FileObserver.CREATE or 0x40000000, subDir, mirror, treeA)
+        val oldDir = File(mirror, "old")
+        val midDir = File(subDir, "mid")
+        assertTrue(oldDir.renameTo(midDir))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, oldDir, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, midDir, mirror, treeA)
+
+        engine.runWriteBackLoop { false }
+
+        assertNull(harness.findByPath("treeA", "old"), "the device kept the folder under its first name")
+        assertNotNull(harness.findByPath("treeA", "sub/mid/.git/head"), "the folder was not moved whole")
+        assertEquals("original", harness.findByPath("treeA", "sub/mid/child.txt")?.bytes?.toString(Charsets.UTF_8))
+        assertEquals(listOf("sub"), harness.createdCalls.map { it.second }, "the moved folder was made from the copy too")
+        assertEquals(emptyList<String>(), harness.failedNames)
     }
 
     @Test

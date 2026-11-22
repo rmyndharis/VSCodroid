@@ -132,9 +132,10 @@ class SafLiveUploadClaimTest {
     }
 
     /**
-     * 1.10.1 reads a mark line as a path, `unwritten` and a tab before the file's own, and writes it back escaped
-     * when it rewrites the journal for another line: the tab became a backslash and a `t`. Read back as a path, the
-     * line was never retired, because each retirement matches whole paths or the mirror's prefix, and the mark it
+     * No release up to 1.10.1 knows the mark, so one meets a mark line only when it is installed over this build. It
+     * reads the line as a path, `unwritten` and a tab before the file's own, and writes it back escaped when it
+     * rewrites the journal for another line: the tab became a backslash and a `t`. Read back by this build as a path,
+     * the line was never retired, because each retirement matches whole paths or the mirror's prefix, and the mark it
      * stood for was lost, so the line of a write that reached no provider read as this app's own cut-short write.
      */
     @Test
@@ -144,8 +145,8 @@ class SafLiveUploadClaimTest {
         call("releaseUploadClaim", checkNotNull(call("markUploadInFlight", path)), true)
         call("releaseUploadClaim", checkNotNull(call("markUploadInFlight", other)))
         val journal = File(filesDir, SafSyncEngine.UPLOADS_IN_FLIGHT_FILE)
-        // What 1.10.1 makes of the journal when it rewrites it: readUploadJournal unescapes each line after the
-        // header, and rewriteJournal escapes each line again, the mark's tab included.
+        // What 1.10.1, installed over this build, makes of the journal when it rewrites it: readUploadJournal
+        // unescapes each line after the header, and rewriteJournal escapes each line again, the mark's tab included.
         val (header, lines) = journal.readLines().let { it.first() to it.drop(1) }
         val readByOldBuild = lines.map { SafSyncEngine.unescapeRecordPath(it) }
         journal.writeText((listOf(header) + readByOldBuild.map { SafSyncEngine.escapeRecordPath(it) }).joinToString("\n"))
@@ -160,7 +161,10 @@ class SafLiveUploadClaimTest {
         assertTrue(journal.readLines().none { it.startsWith("unwritten") }) { "the escaped mark outlived its line: ${journal.readText()}" }
     }
 
-    /** The same mark where 1.10.1 also retired the line it marked: the mark marks nothing, and the next rewrite drops it. */
+    /**
+     * The same mark where 1.10.1, installed over this build, also retired the line it marked: the mark marks nothing,
+     * and the next rewrite drops it.
+     */
     @Test
     fun `an escaped mark whose line an older release retired goes at the next rewrite`() {
         mirrorFileExists()

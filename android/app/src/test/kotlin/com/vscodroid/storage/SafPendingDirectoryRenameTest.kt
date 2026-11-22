@@ -500,7 +500,13 @@ class SafPendingDirectoryRenameTest {
         assertFalse("unread-id" in deleted)
     }
 
-    @Test fun `a superseded rename retains guards for its untouched provider directory`() {
+    /**
+     * `mv old destination; mv destination archive; mv other destination` inside one poll. The first rename is not
+     * given way to the third, which is onto the same name, because the second takes its result away from that name
+     * in between: given way, the device kept `old` with the file the open could not read, and `archive` was made from
+     * the copy without it. The guard on that file goes where the device's folder went.
+     */
+    @Test fun `a rename through a name another folder takes next retains guards at the provider path actually moved`() {
         add("unread-id", "directory-id", "unread.txt", "unread provider bytes")
         add("other-directory", "root", "other")
         add("other-file", "other-directory", "other.txt", "other bytes")
@@ -513,12 +519,13 @@ class SafPendingDirectoryRenameTest {
         engine.session.queue.clear()
         jobs.forEachIndexed { index, job -> engine.session.queue.offer(job.copy(timestamp = index.toLong())) }
         drain()
-        assertEquals("unread provider bytes", contents("old/unread.txt"))
+        assertEquals(null, entry("old"), "the device kept the folder under its first name")
+        assertEquals("unread provider bytes", contents("archive/unread.txt"))
         assertEquals("other bytes", contents("destination/other.txt"))
         assertEquals("baseline", contents("archive/f.txt"))
-        createThenDelete("old/unread.txt")
+        createThenDelete("archive/unread.txt")
         drain()
-        assertEquals("unread provider bytes", contents("old/unread.txt"), "a skipped rename must not strip the untouched provider guard")
+        assertEquals("unread provider bytes", contents("archive/unread.txt"), "the rename moved an unread marker off its real provider path")
         assertFalse("unread-id" in deleted)
     }
 

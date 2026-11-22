@@ -7,64 +7,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The process monitor warns, naming the file, when Settings shows **Vscodroid > Antigravity: Run Engine** on but the settings file keeps it off: an error VS Code works around, over 1 MiB, or nesting past 64 levels.
+- A notice says when not every change made while a device folder opened reached the device.
+
+### Changed
+
+- A dotfile or `~/.vscodroid/data/Machine/settings.json` that links into a missing folder is left alone, without the app's text, until a later launch or setup can write it.
+- A one-letter suggestion picked over a word that a keyboard reopened, such as `I` over `is`, is typed after the word instead of replacing it, and picking it again does not change that, because a stale letter from the keyboard looks the same.
+
 ### Fixed
 
-- A program built for Android that an extension starts by its full path is given the terminal's exec interceptor and its own path, as a terminal gives them, unless the start names, runs in or searches `~/.gemini`.
-- `spawnSync` and `execFileSync` from an extension start such a program through the system loader, as `spawn` and `execFile` do.
-- With **Vscodroid > Antigravity: Run Engine** off, a start of the engine that names the system loader in front of it, or a shell command that spells out both, fails with `EACCES` instead of running the engine.
-- The process monitor warns, naming the file, when Settings shows **Run Engine** on but the settings file has an error VS Code works around, is over 1 MiB or nests past 64 levels, which keeps the engine off.
-- `NOTICE.md` gives numpy's licence as BSD 3-Clause with parts under 0BSD, MIT, Zlib and CC0 1.0, where it said BSD 2-Clause, and `LEGAL_NOTICES.md` quotes the licence expression the wheel declares.
-- The user guide explains the 800 MB setup asks for as the files plus their allocation on disk and a small margin, where it called the excess working room, and the README says its core size is the files' own.
-- The README and the user guide no longer quote memory and download figures nothing measured: 400-700 MB for the app, and the Antigravity engine's download, unpacked and memory sizes.
-- CI refuses a user guide or `LEGAL_NOTICES.md` that names a mirrored Python wheel without its pinned version, a `NOTICE.md` with no table row for one, a guide naming another npm major than the one that ships, and a free-space figure that differs between the README, the guide and the requirements document.
-- The release build refuses a user guide whose tool versions differ from what the build resolved, and a documented free space that differs from what setup asks of the APK.
-- A change of navigation device, night mode or keyboard no longer ends the word a keyboard is composing in the editor, or brings back a keyboard put away just after it; only a turn, a resize or a fold does.
-- Stop Server from the notification no longer freezes the screen for up to a few seconds while the server shuts down.
-- A toolchain install whose command name is taken by a folder now says the install failed and points at the log, instead of asking for free space that would not help.
-- A linked `.bashrc` holding only the start of the app's own text, cut short on a full disk by an older release, is now repaired through the link, with a copy kept aside.
-- A `~/.bashrc` or `~/.vscodroid/data/Machine/settings.json` that is a link to a missing file is no longer replaced by a copy: the app's text is written where the link points, and while the folder it points into is gone nothing is written, so the terminal starts without the app's setup, or the editor without its machine settings, until a launch can write the file.
-- A projects folder that resolves into `~/.ssh`, `~/.claude` or another location that must stay unreadable, or that a credential link such as `~/.npmrc` points into, is no longer served to webviews.
-- Renaming a folder of a device folder in the editor sends a save that was held back inside it under the new name, instead of leaving it inside the app until the file is saved again.
-- A save made just before its folder is renamed reaches the renamed folder on the device also when the rename lands on disk before the save is sent.
-- A save made just before its folder is renamed reaches the device under the folder's last name when the folder is renamed again while the first rename is being sent.
-- At the first open of a device folder after an update from 1.10.1 or earlier, a file only the app's copy holds that has not changed since that version last opened the folder or sent a save to it is kept inside the app with a notice naming it, instead of putting a document deleted on the device back there; saving it again sends it.
-- A file whose save or creation never reached the device folder is sent at the next open, even where an empty folder or an earlier open had kept it inside the app.
-- An edit of a file the device holds at over 50 MiB is sent at the next open after the device deletes the file, instead of staying inside the app for good.
-- An open that cannot read the folder's record no longer rewrites it, which kept copies of documents deleted on the device inside the app for good.
-- An open that lists a folder only in part says when it keeps files inside the app because it cannot read the folder's record.
-- A file the app cannot vouch for, where the device replaced it with a folder, stays inside the app with a notice instead of being sent into the device folder.
-- An edit left in a copy that a removal had taken is kept under a name of its own and sent to the device folder.
-- A save after one the device folder refused before writing anything keeps a shortened device file as a `.device-` copy instead of writing over it.
-- A save no longer writes over another app's edit when the device file's read ends before its reported size.
-- Files an open keeps inside the app because it cannot tell them from documents deleted on the device get a notice of their own that names one of them and says that saving it again sends it.
-- A folder moved out of a device folder's copy is no longer taken for the rename of an unrelated folder arriving within the same second, which wrote the arriving folder's files over the device's copies of the departed one's.
-- Renaming a folder no longer writes a file in it again that you have not changed since it was sent, a leftover of an earlier rename that gave way to another onto the same name.
-- After the screen is turned, a letter that a keyboard that underlines words writes over the last letter of a word is typed at the caret also when either letter has an accent, such as é over o, instead of replacing that letter.
-- After the screen is turned, a single letter that a keyboard that underlines words sends over the same word as the letter before it, while the caret is where that letter left it, is typed at the caret too, instead of replacing the word.
-- A keyboard that sends the same stale letter after every restart of input has the seventh typed at the caret like the six before it, instead of written over the word, so one key leaves seven copies of its letter.
-- A word before a single space that a keyboard that underlines words grows by a letter, such as `the` to `then`, takes the letter instead of having it typed after the space; a stale write that grows that word now goes into it too.
-- A correction that a keyboard that underlines words takes back, such as `you` back to `u` after its space is deleted, is applied instead of typing the letter after the word.
-- A save still queued or still arriving when a device folder is closed shows the notice that the only copy is inside VSCodroid, instead of only a log line.
-- Saves inside a renamed folder that the device stored under a name the copy could not take show the same notice instead of none.
-- Opening a device folder no longer keeps a `.device-` copy of a save VSCodroid itself delivered when the file was edited again since, also after the folder holding it was renamed.
-- A delete or a new file in a device folder that waits for another folder's write to the same storage no longer stalls that folder's saves for up to ten seconds.
-- A delete that gave up waiting for another write to the same storage says so, instead of saying the device folder refused it and to delete the file in the file manager.
-- While a device folder opens, a file or folder a program deletes in its copy is deleted on the device and a folder it renames is renamed there, instead of being copied back, and a file it saves after the open has read it is sent once the folder is open; if sending stops partway, a notice says so once; the user guide lists what this does not carry through.
-- A save written into a file just as opening its device folder puts the device's newer copy in place is kept beside it, whole, as a `.local-` copy instead of being lost.
+- A save made just before a device folder's subfolder is renamed reaches the device under its last name also when the rename reaches the disk first or another rename follows.
+- A file made or saved in a subfolder just after it is renamed, or a save held back there, is sent under the new name instead of staying inside VSCodroid.
+- A file deleted in a device folder's subfolder just after the subfolder is renamed is deleted on the device too.
+- A folder renamed twice in quick succession, or inside a folder just renamed, ends up on the device under its last name only.
+- Renaming a folder in a device folder no longer sends again files you have not changed since they were sent.
+- A folder moved out of a device folder is no longer taken for the rename of an unrelated folder arriving within the same second, which overwrote the departed folder's files on the device.
 - A folder renamed onto an existing empty folder in a device folder is watched under that name, so saves directly inside it reach the device.
-- A file made or saved in a device folder's subfolder just after the subfolder is renamed reaches the device under the new name instead of staying inside VSCodroid.
-- A file deleted in a device folder's subfolder just after the subfolder is renamed, also while the folder opens, is deleted on the device instead of coming back at the next open.
-- A folder renamed twice in quick succession, or renamed inside a folder that was just renamed, ends up on the device under its last name only instead of under both.
-- A folder made again at the name of one moved out of a device folder while it opens is watched, so saves in it reach the device instead of staying inside VSCodroid.
-- A folder renamed and then removed while its device folder opens is removed on the device instead of coming back at the next open.
-- A folder renamed while its device folder opens is sent without looking each file up on the device twice, so other saves no longer wait behind it.
-- A folder moved out of a device folder while it opens is no longer renamed onto a folder that arrives more than a second later with the same identity.
-- Closing a device folder, or opening another, while it sends what changed during its open now stops without notices for changes it never reached.
-- A deletion being sent while a device folder closes no longer holds the switch up for two seconds.
-- A save delivered while a device folder's record could not be read is no longer kept as another app's `.device-` copy when the next open cannot write the record at first.
-- At the first open after updating from 1.10.1 or earlier, a copy of a document deleted on the device stays inside VSCodroid with a notice also when a program renames its folder during the open.
-- A file sent with a folder renamed while an empty device folder opens is no longer also said to stay inside VSCodroid.
-- A copy kept inside VSCodroid beside a folder that replaced its file is told of once.
+- A folder moved into another folder while a write to the same storage is running is moved whole once that write ends, instead of being dropped with a notice.
+- A folder renamed through a name another folder takes right after ends up on the device whole under its last name, instead of staying under its first name beside a copy without its `.git`.
+- A folder moved into a folder made just before it is moved whole, instead of also being made again from the copy, also when the new folder is renamed right after.
+- Deletes and renames a program makes in a device folder's copy while the folder opens reach the device instead of being undone.
+- When opening another device folder fails, what a program saved, deleted or renamed meanwhile in the folder already open reaches the device once its watcher is back.
+- A file a program saves while a device folder opens, after the open has read it, is sent once the folder is open.
+- A save that lands just as a device folder's open puts the device's newer copy in place is kept beside it as a `.local-` copy instead of being lost.
+- Opening a device folder no longer keeps a `.device-` copy of a save VSCodroid itself delivered and you edited since, also after its folder was renamed.
+- A save no longer writes over another app's edit when reading the device file ends before its reported size.
+- After a save the device folder refused before writing anything, a shorter device file is kept as a `.device-` copy instead of being written over.
+- A delete or new file waiting for another folder's write to the same storage no longer stalls a device folder's saves for up to ten seconds.
+- A delete that gives up waiting for another folder's write says so instead of blaming the device folder.
+- The first open of a device folder after an update from 1.10.1 or earlier keeps unchanged files only the app's copy holds inside the app, instead of putting back documents deleted on the device.
+- A file whose save or creation never reached a device folder is sent at the next open, even where an earlier open kept it inside the app.
+- An edit of a file the device held at over 50 MiB reaches the device folder after the device deletes the file, instead of staying inside the app.
+- An open that cannot read a device folder's record no longer rewrites it, which kept copies of documents deleted on the device inside the app for good.
+- When the device replaces a file with a folder, an app copy that cannot be proved new stays inside the app with a notice instead of being sent into the device folder.
+- An edit made to the copy a removal left when the app was killed is kept under a name of its own and sent to the device folder.
+- Files an open keeps inside the app because they may have been deleted on the device get a notice of their own that names one and says saving it again sends it.
+- An open that lists a device folder only in part and cannot read its record now tells of the files it keeps inside the app.
+- A save still queued or arriving when a device folder closes, or inside a renamed folder the device stored under another name, shows the notice that the only copy is inside VSCodroid.
+- Running a file while the offer to reopen a device folder by its name is up no longer makes Reopen and Don't Ask Again do nothing.
+- The warning about a folder on shared storage keeps a digest of the editor server's note in the editor's storage instead of the note, which holds the server's run key.
+- A change of navigation device, night mode or keyboard no longer ends a word being composed in the editor or brings back a keyboard put away just after it.
+- On Android 10 to 14 the extra key row counts the navigation bar and the camera cutout when it measures the page above the keyboard, so it no longer stands down, or stays down, over a page with room for it.
+- After the screen is turned, a keyboard that underlines words no longer replaces the last letter of a word when either letter has an accent, such as é over o: the new letter is typed at the caret.
+- Each further letter such a keyboard sends over the same word after a turn is typed at the caret too, while the caret is where the letter before it left it.
+- A keyboard that keeps sending one stale letter has the seventh typed at the caret like the six before it, instead of over the word, leaving seven copies of the letter.
+- A word before a single space that a keyboard grows by a letter, such as `the` to `then`, takes the letter instead of it landing after the space, though a stale growth now goes into the word too.
+- A keyboard taking back its own correction, such as `you` back to `u` after its space is deleted, is applied instead of typing the letter after the word.
+- A program built for Android that an extension starts by its full path gets the terminal's exec interceptor and its own path, unless the start names, runs in or searches `~/.gemini`.
+- `spawnSync` and `execFileSync` from an extension start such a program through the system loader, as `spawn` and `execFile` do.
+- With **Vscodroid > Antigravity: Run Engine** off, a start of the engine with the system loader named in front of it, also in a shell command, fails with `EACCES` instead of running the engine.
+- A second launch during setup can no longer turn **Vscodroid > Antigravity: Run Engine** back on after setup turned it off for a phone restored from a backup.
+- The process monitor no longer offers to turn the Antigravity engine on in a window where the engine is already running.
+- The process monitor lists programs started through the system loader, such as clangd, under their own names, and counts clangd as a language server.
+- The process monitor's status item says it has no process data after 30 seconds without any, instead of showing its loading text for good.
+- The editor server's heap ceiling setting says it takes effect when the editor server next starts, not when the app does.
+- Loading a glibc native module, such as Copilot's, no longer resets the editor server's environment to the one it started with, which dropped the DNS proxy's variables.
+- `xdg-open` in the terminal reports the editor's error status when the answer is cut short after it, instead of exiting as if the link had opened.
+- Stop Server from the notification no longer freezes the screen for up to a few seconds.
+- The setup notification no longer offers Stop Server, which stopped the service while setup was still unpacking.
+- A toolchain install that finds a file, folder or link in the way of one of its files stops before writing anything and says the install failed, instead of asking for free space.
+- A toolchain removal that cannot take the files says the removal failed and keeps offering Remove, instead of a Retry that downloads the pack again.
+- Install is no longer ignored after Cancel on a Play download that Play could not cancel, such as one waiting for the mobile-data question.
+- A toolchain install short of space first removes the temporary files a killed copy left and measures again.
+- At first run, the reason the last toolchain download failed is shown before the editor opens, instead of being dropped.
+- At first run, Play's mobile-data question is asked once the setup screen is back in front, instead of while it is in the background.
+- A `~/.bashrc`, `~/.bash_profile`, `~/.tmux.conf`, `~/.ssh/config`, `~/.pip/pip.conf` or `~/.vscodroid/data/Machine/settings.json` that links to a missing file stays a link, and the app's text is written where it points.
+- A `~/.bashrc`, machine `settings.json` or the app's git configuration left full of NUL bytes is written again at the next launch.
+- A machine `settings.json` that starts with a byte order mark gets the settings the app adds.
+- A download the editor page cannot read, such as one from a webview or a `data:` link, is refused before the save picker opens, instead of failing after you named the file.
+- A projects folder that resolves into `~/.ssh`, `~/.claude` or another location that must stay unreadable, or that a credential link such as `~/.npmrc` points into, is no longer served to webviews.
+- Webviews can no longer read the SSH key, the key to the extension secrets, the WebView's stores or the connection token through a folder written as `/data/data/<package>`.
+- A credential linked into the projects folder after the editor loaded is refused to webviews from the next page load, instead of after the app is next started from scratch.
+- Sizes in translated messages use the language's decimal separator, and French and Russian use their own unit names, such as `Mo` and `МБ`.
+- The Spanish, French, Italian and Portuguese notice for kept device edits says they are the device's edits, and smaller wording slips in other translations are corrected.
+- The tools picture in Get Started shows C/C++ beside Java and Ruby.
+- CI refuses a user guide or `LEGAL_NOTICES.md` naming a mirrored Python wheel without its pinned version, and a `NOTICE.md` without a row for it.
+- CI refuses a user guide naming another npm major than the one that ships, and free-space figures that differ between the README, the guide and the requirements document.
+- CI refuses a Markdown table that does not render as written.
+- The release build refuses a user guide whose tool versions differ from what the build resolved, and a documented free space that differs from what setup asks of the APK.
+- The release build fails on a lint report carrying the label Play Console blocks on.
+- The Ruby toolchain no longer lacks gem code kept in folders named `test`, `spec`, `doc` or `ri`, so `require "test/unit"` works.
+- The build takes the musl loader that the Claude Code CLI runs on only from the package data it verified, and refuses a package with bytes after that data.
+- `scripts/fetch-vscode-oss.sh` puts the server tree in place only after its checks pass, so a refused tree is no longer left for the next build.
+- The privacy policy says the Antigravity setting governs only what an extension starts by naming the engine, not a program told what to run, and that the editor makes some of the listed connections on its own.
+- `NOTICE.md` names `libselfexe.so` as built here, gives ICU's licence as Unicode-3.0 and attributes `libc++_shared.so` to Termux under NCSA.
+- `CONTRIBUTING.md`'s steps for bundling a tool name the code and the lists a new binary has to be added to.
+- `NOTICE.md` gives numpy's licence as BSD 3-Clause with parts under 0BSD, MIT, Zlib and CC0 1.0, not BSD 2-Clause, and `LEGAL_NOTICES.md` quotes the expression the wheel declares.
+- The user guide explains the 800 MB setup asks for as the files plus their allocation on disk and a small margin, not working room, and the README calls its core size the files' own.
+- The README and the user guide no longer quote unmeasured figures: 400-700 MB of memory for the app, and the Antigravity engine's download, unpacked and memory sizes.
 
 ## [1.10.1] - 2026-11-21
 

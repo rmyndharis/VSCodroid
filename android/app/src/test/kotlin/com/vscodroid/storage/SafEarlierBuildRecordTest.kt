@@ -88,7 +88,8 @@ class SafEarlierBuildRecordTest : SafInitialSyncTestBase() {
 
     /**
      * An open whose listing is partial still rewrites the record, and the record's new time read as one this build
-     * wrote: the open after it, which could list the folder, sent the old copy.
+     * wrote: the open after it, which could list the folder, sent the old copy. It keeps the record's time, so a file
+     * made after the earlier build's record and before that rewrite is still sent.
      */
     @Test
     fun `a partial open after the update does not make the next open send an older copy`() {
@@ -99,28 +100,47 @@ class SafEarlierBuildRecordTest : SafInitialSyncTestBase() {
         deviceTree(folder)
         sync()
         recordLeftByEarlierBuild()
+        val writtenByEarlierBuild = record.lastModified()
         mirrorOnly("old.txt")
 
         deviceTree(folder, errors = setOf("doc:sub"))
         sync()
         assertEquals(emptyList<String>(), names())
         assertFalse(sortedMark.exists(), "a partial open marked a record it could not sort")
+        // Made after the earlier build's record and dated before the partial open's rewrite of it.
+        mirrorFile("later.txt").apply {
+            writeText("later.txt, only in the app")
+            setLastModified(writtenByEarlierBuild + 30_000)
+        }
 
         deviceTree(folder)
         sync()
 
-        assertEquals(emptyList<String>(), names(), "the open after a partial one sent a copy older than the record")
+        assertEquals(
+            listOf("later.txt"),
+            names(),
+            "the open after a partial one sent a copy older than the record, or kept one made after it",
+        )
         assertEquals(listOf(1 to "old.txt"), keptInApp)
     }
 
-    /** A save delivered while the folder is open rewrites the record too, and is no more the open that can sort it. */
+    /**
+     * A save delivered while the folder is open rewrites the record too, and is no more the open that can sort it. It
+     * keeps the record's time, so a file made after the earlier build's record and before the save is still sent.
+     */
     @Test
     fun `a save delivered after the update does not make the next open send an older copy`() {
         deviceTree(mapOf("root" to emptyList<Child>()))
         sync()
         recordLeftByEarlierBuild()
+        val writtenByEarlierBuild = record.lastModified()
         mirrorOnly("old.txt")
         val engine = sync()
+        // Made after the earlier build's record and dated before the delivered save's rewrite of it.
+        mirrorFile("later.txt").apply {
+            writeText("later.txt, only in the app")
+            setLastModified(writtenByEarlierBuild + 30_000)
+        }
         val saved = mirrorFile("new.txt").apply { writeText("new") }
         engine.handleMirrorEvent(FileObserver.CREATE, saved, mirror, named("tree"))
         engine.runWriteBackLoop { false }
@@ -131,6 +151,7 @@ class SafEarlierBuildRecordTest : SafInitialSyncTestBase() {
         sync()
 
         assertFalse("old.txt" in names(), "the open after a delivered save sent a copy older than the record")
+        assertTrue("later.txt" in names(), "the open after a delivered save kept a file made after the record")
     }
 
     /**
