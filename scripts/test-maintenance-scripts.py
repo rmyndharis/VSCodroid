@@ -721,7 +721,10 @@ class MaintenanceScriptsTest(unittest.TestCase):
         self.assertNotEqual(0, unread.returncode, unread.stdout + unread.stderr)
         self.assertIn("the pattern stopped matching", unread.stdout)
 
-    @unittest.skipUnless(importlib.util.find_spec("yaml"), "check-workflow-steps.py needs PyYAML, which CI images carry")
+    # Asked of the interpreter and flags the case runs the check with: `-I` hides the user site, so a PyYAML
+    # installed there is found by this process and not by the check.
+    @unittest.skipUnless(subprocess.run([sys.executable, "-I", "-c", "import yaml"], capture_output=True).returncode == 0,
+                         "check-workflow-steps.py needs PyYAML, which CI images carry")
     def test_workflow_step_check_holds_the_release_document_gates(self):
         """The release steps that hold the documents to the build are required steps like any other gate."""
         fixture = self.root / "workflow-steps"
@@ -745,6 +748,14 @@ class MaintenanceScriptsTest(unittest.TestCase):
         deleted = check(text.replace(sizes, ""))
         self.assertNotEqual(0, deleted.returncode, deleted.stdout + deleted.stderr)
         self.assertIn("Check the documented core sizes against the APK", deleted.stdout)
+        tables = ("      - name: Check every Markdown table is drawn as written\n"
+                  "        run: |\n"
+                  "          python3 scripts/check-markdown-tables.py --self-test\n"
+                  "          python3 scripts/check-markdown-tables.py\n")
+        self.assertEqual(1, text.count(tables))
+        dropped = check(text.replace(tables, ""))
+        self.assertNotEqual(0, dropped.returncode, dropped.stdout + dropped.stderr)
+        self.assertIn("Check every Markdown table is drawn as written", dropped.stdout)
         guide = "      - name: Hold the user guide's tool versions to what this build resolved\n"
         self.assertEqual(1, text.count(guide))
         for key in ("continue-on-error: true", "if: ${{ false }}"):

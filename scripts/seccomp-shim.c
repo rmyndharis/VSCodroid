@@ -6,7 +6,12 @@
 // android13 and android14 branches it is absent, so a program that calls it is
 // refused -- and the refusal is not an error it can recover from. That is what
 // kills the Claude Code CLI, whose runtime reaches for it as soon as its event
-// loop starts. See the Claude Code row in the invariants table.
+// loop starts. The CLI here is the musl build its extension brings (patch 0009
+// asks the marketplace for it, because the glibc build is refused even earlier,
+// on set_robust_list and rseq). It sits in the app's storage, where Android
+// refuses execve, so claude-launch.c starts musl's loader on it and hands the
+// loader this shim as --preload=: only the CLI's own process carries it, none of
+// its children.
 //
 // What makes a shim possible at all is that Android refuses with
 // SECCOMP_RET_TRAP rather than a kill: the syscall does not run, SIGSYS is

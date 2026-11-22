@@ -176,6 +176,7 @@ REQUIRED_STEPS = {
         "Check the documented build steps match the workflows",
         "Check every workflow step is runnable and pinned",
         "Check the Gradle distribution is pinned to a digest",
+        "Check every Markdown table is drawn as written",
         "Fetch Code - OSS server",
         "Verify assets",
         "Run unit tests",

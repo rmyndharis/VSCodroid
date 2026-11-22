@@ -143,6 +143,42 @@ class SettingsMigrationTest {
         assertFalse(legacy.exists(), "the original survived a completed move")
     }
 
+    /**
+     * The settings path can be a link to a file a person keeps elsewhere. When that file has gone, the move writes
+     * the settings where the link points and keeps the link, as every other writer of this file does: replaced by a
+     * copy, the link was lost.
+     */
+    @Test
+    fun `a move onto a link whose file has gone writes through the link and keeps it`() {
+        val target = File(filesDir, "projects/dotfiles/settings.json").apply { parentFile?.mkdirs() }
+        Files.createSymbolicLink(current.toPath(), target.toPath())
+
+        FirstRunSetup(context).updateSettingsNativeLibPaths()
+
+        assertTrue(Files.isSymbolicLink(current.toPath()), "the link was replaced by a copy")
+        assertTrue(target.readText().contains("Monokai"), "the user's settings did not reach the file the link names")
+        assertFalse(legacy.exists(), "the original was left behind, so the move can run twice")
+    }
+
+    /**
+     * A launch repairs before it moves: the repair writes the file a dangling settings link names, and the move
+     * then sees a file there and returns. With a legacy file waiting, the repair leaves the link to the move, or
+     * the defaults took the place of the person's own settings and the legacy file was never read again.
+     */
+    @Test
+    fun `a launch moves the legacy settings through a dangling link instead of writing defaults there`() {
+        val target = File(filesDir, "projects/dotfiles/settings.json").apply { parentFile?.mkdirs() }
+        Files.createSymbolicLink(current.toPath(), target.toPath())
+        val setup = FirstRunSetup(context)
+
+        setup.repairTruncatedSetupFiles()
+        setup.updateSettingsNativeLibPaths()
+
+        assertTrue(Files.isSymbolicLink(current.toPath()), "the link was replaced by a copy")
+        assertTrue(target.readText().contains("Monokai"), "defaults took the place of the user's settings")
+        assertFalse(legacy.exists(), "the original was left behind")
+    }
+
     /** Reflection rather than widened visibility, as [TerminalShellPathTest] does. */
     private fun createDefaultSettings() {
         FirstRunSetup::class.java

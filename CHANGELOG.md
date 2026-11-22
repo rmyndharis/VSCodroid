@@ -11,7 +11,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A program built for Android that an extension starts by its full path is given the terminal's exec interceptor and its own path, as a terminal gives them, unless the start names, runs in or searches `~/.gemini`.
 - `spawnSync` and `execFileSync` from an extension start such a program through the system loader, as `spawn` and `execFile` do.
-- Such a program started with an environment that inherits from `process.env` keeps the inherited variables, `PATH` among them, when it is given the exec interceptor.
 - With **Vscodroid > Antigravity: Run Engine** off, a start of the engine that names the system loader in front of it, or a shell command that spells out both, fails with `EACCES` instead of running the engine.
 - The process monitor warns, naming the file, when Settings shows **Run Engine** on but the settings file has an error VS Code works around, is over 1 MiB or nests past 64 levels, which keeps the engine off.
 - `NOTICE.md` gives numpy's licence as BSD 3-Clause with parts under 0BSD, MIT, Zlib and CC0 1.0, where it said BSD 2-Clause, and `LEGAL_NOTICES.md` quotes the licence expression the wheel declares.
@@ -21,17 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The release build refuses a user guide whose tool versions differ from what the build resolved, and a documented free space that differs from what setup asks of the APK.
 - A change of navigation device, night mode or keyboard no longer ends the word a keyboard is composing in the editor, or brings back a keyboard put away just after it; only a turn, a resize or a fold does.
 - Stop Server from the notification no longer freezes the screen for up to a few seconds while the server shuts down.
-- A crash of the old server reported while Stop Server is still ending it no longer starts a second restart beside the start that follows the stop.
 - A toolchain install whose command name is taken by a folder now says the install failed and points at the log, instead of asking for free space that would not help.
 - A linked `.bashrc` holding only the start of the app's own text, cut short on a full disk by an older release, is now repaired through the link, with a copy kept aside.
-- A `~/.bashrc` that is a link to a missing file is no longer replaced by a copy; the app's shell setup is written where the link points.
+- A `~/.bashrc` or `~/.vscodroid/data/Machine/settings.json` that is a link to a missing file is no longer replaced by a copy: the app's text is written where the link points, and while the folder it points into is gone nothing is written, so the terminal starts without the app's setup, or the editor without its machine settings, until a launch can write the file.
 - A projects folder that resolves into `~/.ssh`, `~/.claude` or another location that must stay unreadable, or that a credential link such as `~/.npmrc` points into, is no longer served to webviews.
 - Renaming a folder of a device folder in the editor sends a save that was held back inside it under the new name, instead of leaving it inside the app until the file is saved again.
 - A save made just before its folder is renamed reaches the renamed folder on the device also when the rename lands on disk before the save is sent.
 - A save made just before its folder is renamed reaches the device under the folder's last name when the folder is renamed again while the first rename is being sent.
-- At the first open of a device folder last opened by 1.10.1 or earlier, a file only the app's copy holds that is older than the folder's record is kept inside the app with a notice, instead of putting a document deleted on the device back there.
+- At the first open of a device folder after an update from 1.10.1 or earlier, a file only the app's copy holds that has not changed since that version last opened the folder or sent a save to it is kept inside the app with a notice naming it, instead of putting a document deleted on the device back there; saving it again sends it.
 - A file whose save or creation never reached the device folder is sent at the next open, even where an empty folder or an earlier open had kept it inside the app.
-- An edit of a file over 50 MiB that the app could not send reaches the device folder once the device deletes the file.
+- An edit of a file the device holds at over 50 MiB is sent at the next open after the device deletes the file, instead of staying inside the app for good.
 - An open that cannot read the folder's record no longer rewrites it, which kept copies of documents deleted on the device inside the app for good.
 - An open that lists a folder only in part says when it keeps files inside the app because it cannot read the folder's record.
 - A file the app cannot vouch for, where the device replaced it with a folder, stays inside the app with a notice instead of being sent into the device folder.
@@ -51,18 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Opening a device folder no longer keeps a `.device-` copy of a save VSCodroid itself delivered when the file was edited again since, also after the folder holding it was renamed.
 - A delete or a new file in a device folder that waits for another folder's write to the same storage no longer stalls that folder's saves for up to ten seconds.
 - A delete that gave up waiting for another write to the same storage says so, instead of saying the device folder refused it and to delete the file in the file manager.
-- A file or folder a program deletes while its device folder is opening is deleted on the device instead of being copied back, and a file it saves after the open has read it is sent once the folder is open.
+- While a device folder opens, a file or folder a program deletes in its copy is deleted on the device and a folder it renames is renamed there, instead of being copied back, and a file it saves after the open has read it is sent once the folder is open; if sending stops partway, a notice says so once; the user guide lists what this does not carry through.
 - A save written into a file just as opening its device folder puts the device's newer copy in place is kept beside it, whole, as a `.local-` copy instead of being lost.
-- A folder renamed while its device folder opens, or set aside by the open, is still watched afterwards, so saves in it reach the device instead of staying inside VSCodroid for the rest of the session.
-- A save made in a folder renamed while its device folder opens reaches the renamed folder on the device, whether it was made before or after the rename.
-- A folder renamed while its device folder opens is renamed on the device instead of ending up there under both names.
 - A folder renamed onto an existing empty folder in a device folder is watched under that name, so saves directly inside it reach the device.
-- Opening a device folder no longer keeps an event in memory for every 8 KiB it writes until the folder is open.
-- A save made just as a device folder finishes opening, in a folder made or renamed while it opened, reaches that folder on the device instead of being announced as kept inside VSCodroid or missing the rename.
-- A folder moved out of a device folder while it opens is no longer taken for the rename of an unrelated folder arriving within the same second.
-- A save VSCodroid delivers while a device folder's record cannot be read is no longer kept as another app's `.device-` copy at the next open.
-- A failure while sending what a program changed during a device folder's open no longer stops every later save in that folder from reaching the device, and a notice says what may not have been sent.
-- A file a program deletes while its device folder opens, after the open has read it, is deleted on the device instead of being kept there as changed by another app.
 - A file made or saved in a device folder's subfolder just after the subfolder is renamed reaches the device under the new name instead of staying inside VSCodroid.
 - A file deleted in a device folder's subfolder just after the subfolder is renamed, also while the folder opens, is deleted on the device instead of coming back at the next open.
 - A folder renamed twice in quick succession, or renamed inside a folder that was just renamed, ends up on the device under its last name only instead of under both.

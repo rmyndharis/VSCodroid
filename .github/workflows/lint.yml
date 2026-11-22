@@ -293,8 +293,9 @@ jobs:
 
       # GitHub draws a Markdown table only while each row has the header's cells
       # and no blank line breaks it. A row run into the one before it drops its
-      # text, and a blank line turns every row below it into a paragraph of
-      # pipes; neither fails anything else. The self-test hands it both shapes.
+      # text, a blank line turns every row below it into a paragraph of pipes,
+      # and a line of text right after a table becomes one more row of it; none
+      # fails anything else. The self-test hands it each shape.
       - name: Check every Markdown table is drawn as written
         run: |
           python3 scripts/check-markdown-tables.py --self-test
