@@ -32,6 +32,7 @@ import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.OutputStream
+import java.lang.ref.WeakReference
 import java.lang.management.ManagementFactory
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -883,6 +884,9 @@ class SafQueuedWriteBackTest {
         /** Run as any watch is stopped, before the stop reaches the kernel. */
         var onStop: (() -> Unit)? = null
 
+        /** [onStop] with the watch that stops, as the log names it: `watcher:.` for the watcher's watch of the root. */
+        var onStopOf: ((String) -> Unit)? = null
+
         private fun name(dir: File) = dir.relativeTo(mirror).path.ifEmpty { "." }
 
         private fun identity(dir: File): Any? = runCatching { identityOf(dir) }.getOrNull()
@@ -904,6 +908,7 @@ class SafQueuedWriteBackTest {
 
                     override fun stop() {
                         onStop?.invoke()
+                        onStopOf?.invoke("$whose:${name(dir)}")
                         synchronized(this@KernelWatches) {
                             log += "stop:$whose:${name(dir)}"
                             val (key, descriptor) = watched ?: return
@@ -1322,13 +1327,14 @@ class SafQueuedWriteBackTest {
 
         drain()
 
-        // The first rename gave way to the second, so `a` is the one thing the device keeps
-        // of what the user removed. It is not deleted: nothing in the queue can say the
-        // folder that left `b` was `a` and not something renamed away, and a delete is the
-        // one call that cannot be taken back. The next open brings `a` into the editor
-        // again, where it can be removed once more.
+        // The first rename gave way to the second, so the delete of `b` between them is of
+        // what the device still holds as `a`, and is looked up there. Nothing here read
+        // what `a` holds, so it is not deleted, as a delete that cannot name its document
+        // never is, and it is told of, as such a delete is: the next open brings `a` into
+        // the editor again. Where the open read it, it goes ([SafProviderClaimWaitTest]).
         assertEquals(setOf("a", "a/fa.txt", "b", "b/fc.txt"), device.keys)
-        assertEquals(emptyList<String>(), lost + refused)
+        assertEquals(emptyList<String>(), lost)
+        assertEquals(listOf("a"), refused, "the folder the device kept was not told of")
     }
 
     /**
@@ -1665,7 +1671,200 @@ class SafQueuedWriteBackTest {
         assertEquals(emptyList<String>(), lost + refused)
     }
 
-    /** The recording of a folder a switch left ends when another folder's watcher starts: the next open reads it. */
+    /**
+     * A program that deletes and makes again one file a thousand times while another folder opens. Each deletion is
+     * recorded, and the replay of what the switch recorded asked the device folder about each, a lookup per path
+     * segment and a scan of every listing it read, on the write-back thread while every save waited behind it, for a
+     * file that was there again anyway.
+     */
+    @Test
+    fun `a file deleted and made again many times while another folder opens is replayed without a lookup each time`() {
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } returns 0L
+        val count = 1000
+        onDevice("src")
+        onDevice("src/tmp.txt", "first")
+        onDevice("src/gone.txt", "gone")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val kernel = KernelWatches().also { it.install() }
+        kernel.owner = "watcher"
+        engine.startWatching(mirror, treeUri)
+        val before: Int
+        try {
+            engine.pauseWatching()
+            for (i in 1..count) {
+                assertTrue(File(mirror, "src/tmp.txt").delete())
+                kernel.fire(FileObserver.DELETE, "src/tmp.txt")
+                inMirror("src/tmp.txt", "write $i")
+                kernel.fire(FileObserver.CREATE, "src/tmp.txt")
+                // And one made again and deleted each time, which ends deleted.
+                if (i > 1) {
+                    inMirror("src/gone.txt", "write $i")
+                    kernel.fire(FileObserver.CREATE, "src/gone.txt")
+                }
+                assertTrue(File(mirror, "src/gone.txt").delete())
+                kernel.fire(FileObserver.DELETE, "src/gone.txt")
+            }
+            failedOpenOfAnotherFolder()
+            before = queries
+
+            engine.startWatching(mirror, treeUri)
+            waitFor { text("src/tmp.txt") == "write $count" && "src/gone.txt" !in device }
+        } finally {
+            engine.shutdown()
+        }
+        val asked = queries - before
+        assertEquals("write $count", text("src/tmp.txt"), "the last write never reached the device")
+        assertFalse("src/gone.txt" in device, "the deletion never reached the device")
+        assertTrue(asked <= 50, "the replay asked the device folder $asked times for $count deletions of two files")
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /**
+     * What a switch recorded, sent once the watcher of the folder already open is put back, can fail partway as what
+     * an open recorded can. It is told as a change made while another folder was opening: the folder it names never
+     * opened, and the notice of the failed switch had just said it was unaffected.
+     */
+    @Test
+    fun `a replay of what a switch recorded that fails is told as one made while another folder opened`() {
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } returns 0L
+        onDevice("a.txt", "alpha")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val told = mutableListOf<Pair<File, Boolean>>()
+        engine.onOpenChangesUnsent = { dir, afterSwitch -> told += dir to afterSwitch }
+        val kernel = KernelWatches().also { it.install() }
+        kernel.owner = "watcher"
+        engine.startWatching(mirror, treeUri)
+        try {
+            engine.pauseWatching()
+            inMirror("a.txt", "saved while another folder opened")
+            kernel.fire(FileObserver.MODIFY, "a.txt")
+            failedOpenOfAnotherFolder()
+            onProviderCall = {
+                if (told.isEmpty() && Thread.currentThread().name == "saf-writeback") {
+                    throw IllegalStateException("the provider went away")
+                }
+            }
+
+            engine.startWatching(mirror, treeUri)
+            waitFor { told.isNotEmpty() }
+        } finally {
+            onProviderCall = null
+            engine.shutdown()
+        }
+        assertEquals(listOf(mirror to true), told, "the failed replay of what the switch recorded was not told once, as the switch's")
+    }
+
+    /**
+     * A file deleted while another folder opened, where the device cannot be asked whether it holds the file when the
+     * switch's record is sent. A lookup that failed read as the device not holding it: the deletion was dropped with
+     * nothing said, and the file came back at the next open. It is not sent, and that is told once, as a replay that
+     * failed is; the path is asked once in the pass, however often it was deleted.
+     */
+    @Test
+    fun `a deletion a switch recorded whose lookup fails is not sent and is told once`() {
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } returns 0L
+        onDevice("a.txt", "alpha")
+        onDevice("b.txt", "bravo")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val told = mutableListOf<Pair<File, Boolean>>()
+        engine.onOpenChangesUnsent = { dir, afterSwitch -> told += dir to afterSwitch }
+        val kernel = KernelWatches().also { it.install() }
+        kernel.owner = "watcher"
+        engine.startWatching(mirror, treeUri)
+        var asked = 0
+        try {
+            engine.pauseWatching()
+            assertTrue(File(mirror, "b.txt").delete())
+            kernel.fire(FileObserver.DELETE, "b.txt")
+            inMirror("b.txt", "made again")
+            kernel.fire(FileObserver.CREATE, "b.txt")
+            assertTrue(File(mirror, "b.txt").delete())
+            kernel.fire(FileObserver.DELETE, "b.txt")
+            inMirror("a.txt", "saved while another folder opened")
+            kernel.fire(FileObserver.MODIFY, "a.txt")
+            failedOpenOfAnotherFolder()
+            // Every query of the write-back thread fails, as a provider that went away answers; the save's own lookup
+            // is not one of them, it goes through the cache.
+            onProviderCall = {
+                if (Thread.currentThread().name == "saf-writeback" && Throwable().stackTrace.any { it.methodName == "providerHolds" }) {
+                    asked++
+                    throw IllegalStateException("the provider went away")
+                }
+            }
+
+            engine.startWatching(mirror, treeUri)
+            waitFor { told.isNotEmpty() && text("a.txt") == "saved while another folder opened" }
+        } finally {
+            onProviderCall = null
+            engine.shutdown()
+        }
+        assertEquals(listOf(mirror to true), told, "the deletion that could not be sent was not told once, as the switch's")
+        assertEquals("bravo", text("b.txt"), "the deletion was sent though the device could not be asked")
+        assertEquals("saved while another folder opened", text("a.txt"), "the rest of what the switch recorded was not sent")
+        assertEquals(1, asked, "the device was asked about the deleted file $asked times in one pass")
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /**
+     * The switch ended the open folder's watches before it began recording the folder, and walked the whole folder
+     * in between: a save made then reached neither, so once a switch that failed put the watcher back it stayed
+     * inside the app with nothing said. Each save is made at the moment the switch ends the watcher's watch of its
+     * directory, where a switch does that, and otherwise once the switch has begun.
+     */
+    @Test
+    fun `a save made as a switch to another folder takes the open folder's watch over is sent once its watcher is back`() {
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } returns 0L
+        onDevice("a.txt", "alpha")
+        onDevice("src")
+        onDevice("src/c.txt", "charlie")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val kernel = KernelWatches().also { it.install() }
+        kernel.owner = "watcher"
+        engine.startWatching(mirror, treeUri)
+        val saves = mutableMapOf("watcher:." to "a.txt", "watcher:src" to "src/c.txt")
+        val save = { watch: String ->
+            val path = saves.remove(watch)
+            if (path != null) {
+                inMirror(path, "saved as the switch began")
+                kernel.fire(FileObserver.MODIFY, path)
+            }
+        }
+        val before = kernel.log.size
+        var duringSwitch = emptyList<String>()
+        try {
+            kernel.owner = "switch"
+            kernel.onStopOf = save
+            engine.pauseWatching()
+            kernel.onStopOf = null
+            duringSwitch = kernel.log.drop(before)
+            saves.keys.toList().forEach(save)
+            failedOpenOfAnotherFolder()
+            kernel.owner = "watcher"
+
+            engine.startWatching(mirror, treeUri)
+            waitFor { text("a.txt") == "saved as the switch began" && text("src/c.txt") == "saved as the switch began" }
+        } finally {
+            kernel.onStopOf = null
+            engine.shutdown()
+        }
+        assertEquals("saved as the switch began", text("a.txt"), "a save made as the switch began never reached the device")
+        assertEquals("saved as the switch began", text("src/c.txt"), "a save below the folder's root never reached the device")
+        assertEquals(emptyList<String>(), lost + refused)
+        assertTrue(duringSwitch.none { it.startsWith("stop:") }, "the switch ended a watch of the folder it left: $duringSwitch")
+        // The watches the switch kept go when the watcher put back stops: one left running is one only the collector
+        // stops, and a FileObserver stops in its finalizer, taking the kernel's watch from whoever shares it.
+        val (starts, stops) = kernel.log.partition { it.startsWith("start:") }
+        assertEquals(starts.map { it.removePrefix("start:") }.sorted(), stops.map { it.removePrefix("stop:") }.sorted())
+    }
+
+    /**
+     * The recording of a folder a switch left ends when another folder's watcher starts: the next open reads it. The
+     * switch records through the watcher's own watches, so it is their end that ends the recording.
+     */
     @Test
     fun `a folder a switch left is no longer recorded once another folder is watched`() {
         mockkStatic(SystemClock::class)
@@ -1673,14 +1872,18 @@ class SafQueuedWriteBackTest {
         onDevice("a.txt", "alpha")
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
         val kernel = KernelWatches().also { it.install() }
+        kernel.owner = "watcher"
         engine.startWatching(mirror, treeUri)
         try {
             kernel.owner = "switch"
             engine.pauseWatching()
-            assertTrue("start:switch:." in kernel.log, "precondition: the switch did not record the folder it left: ${kernel.log}")
+            assertTrue(
+                kernel.watched(".") && "stop:watcher:." !in kernel.log,
+                "precondition: the switch did not go on watching the folder it left: ${kernel.log}",
+            )
             kernel.owner = "other"
             engine.startWatching(File(filesDir, "other-mirror").apply { mkdirs() }, mockk(relaxed = true))
-            assertTrue("stop:switch:." in kernel.log, "the recording of the folder a switch left outlived the switch: ${kernel.log}")
+            assertTrue("stop:watcher:." in kernel.log, "the recording of the folder a switch left outlived the switch: ${kernel.log}")
         } finally {
             engine.shutdown()
         }
@@ -1694,13 +1897,17 @@ class SafQueuedWriteBackTest {
         onDevice("a.txt", "alpha")
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
         val kernel = KernelWatches().also { it.install() }
+        kernel.owner = "watcher"
         engine.startWatching(mirror, treeUri)
         try {
             kernel.owner = "switch"
             engine.pauseWatching()
-            assertTrue("start:switch:." in kernel.log, "precondition: the switch did not record the folder it left: ${kernel.log}")
+            assertTrue(
+                kernel.watched(".") && "stop:watcher:." !in kernel.log,
+                "precondition: the switch did not go on watching the folder it left: ${kernel.log}",
+            )
             engine.dropPausedRecording()
-            assertTrue("stop:switch:." in kernel.log, "the recording of a folder whose watcher is not put back went on: ${kernel.log}")
+            assertTrue("stop:watcher:." in kernel.log, "the recording of a folder whose watcher is not put back went on: ${kernel.log}")
         } finally {
             engine.shutdown()
         }
@@ -2150,6 +2357,49 @@ class SafQueuedWriteBackTest {
         assertFalse(departure.identity == replaced, "the folder that left a was recorded as the one it replaced")
     }
 
+    /** What [mirror]'s open is recording, as the engine keeps it for the watcher that takes it. */
+    private fun recordingOf(mirror: File): SafSyncEngine.ChangesDuringOpen {
+        @Suppress("UNCHECKED_CAST")
+        val kept = SafSyncEngine::class.java.getDeclaredField("changesDuringOpen")
+            .apply { isAccessible = true }.get(engine) as Map<String, SafSyncEngine.ChangesDuringOpen>
+        return checkNotNull(kept[mirror.absolutePath]) { "the open kept no record of its changes" }
+    }
+
+    /**
+     * The watcher keeps what an open recorded for as long as the folder is watched: its write-back thread holds it,
+     * and so does the observer of each directory that took a watch over from it. Every event of the open stayed in
+     * memory with it, an entry for each 8 KiB the open put in place and each file a program made, after the replay
+     * had sent them and nothing would read them again.
+     */
+    @Test
+    fun `what an open recorded is let go once it has been sent`() {
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } returns 0L
+        onDevice("a.txt", "alpha")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val kernel = KernelWatches().also { it.install() }
+        openRecording { _, _ -> }
+        val count = 200
+        for (i in 1..count) {
+            inMirror("new$i.txt", "made $i")
+            kernel.fire(FileObserver.CREATE, "new$i.txt")
+        }
+        val recording = WeakReference(recordingOf(mirror))
+        kernel.owner = "watcher"
+
+        engine.startWatching(mirror, treeUri)
+        try {
+            waitFor { text("new$count.txt") == "made $count" }
+            assertEquals("made $count", text("new$count.txt"), "precondition: the replay did not send what the open recorded")
+            System.gc()
+            val kept = checkNotNull(recording.get()) { "precondition: the watcher no longer holds what the open recorded" }
+            assertEquals(emptyList<SafSyncEngine.ChangesDuringOpen.Recorded>(), kept.recorded(), "what was sent is still held")
+            assertFalse(kept.placed(File(mirror, "new1.txt")), "what was sent is still held")
+        } finally {
+            engine.shutdown()
+        }
+    }
+
     /**
      * The replay of what an open recorded runs on the write-back thread before its loop. An exception in it ended
      * the thread there: the saves the watcher had held behind the replay were released into a queue nothing
@@ -2164,7 +2414,7 @@ class SafQueuedWriteBackTest {
         onDevice("c.txt", "charlie")
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
         val unsent = mutableListOf<File>()
-        engine.onOpenChangesUnsent = { unsent += it }
+        engine.onOpenChangesUnsent = { dir, _ -> unsent += dir }
         val kernel = KernelWatches().also { it.install() }
         var saved = false
         openRecording { done, _ ->
@@ -2535,7 +2785,11 @@ class SafQueuedWriteBackTest {
         onDevice("src/a.txt", "alpha")
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
         val unsent = mutableListOf<File>()
-        engine.onOpenChangesUnsent = { unsent += it }
+        val asSwitch = mutableListOf<Boolean>()
+        engine.onOpenChangesUnsent = { dir, afterSwitch ->
+            unsent += dir
+            asSwitch += afterSwitch
+        }
         val kernel = KernelWatches().also { it.install() }
         openRecording { _, _ -> }
         renameWatched(kernel, "src", "lib")
@@ -2554,6 +2808,7 @@ class SafQueuedWriteBackTest {
             engine.shutdown()
         }
         assertEquals(listOf(mirror), unsent, "the failed replay was not said once")
+        assertEquals(listOf(false), asSwitch, "what the open recorded was told as what a switch recorded")
         assertEquals(setOf("src", "src/a.txt"), device.keys, "the folder renamed while it opened did not keep its old name")
     }
 
