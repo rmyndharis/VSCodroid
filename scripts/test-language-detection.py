@@ -11,6 +11,8 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -191,13 +193,38 @@ if (vm.runInContext('typeof require', context) !== 'undefined') process.exitCode
             self.mod.patch_package(self.package, check_only=True)
 
     def test_server_verifier_requires_the_browser_backend(self):
+        # The package where a packaged tree carries it, which is where the
+        # verifier looks: a fixture at the root of the tree failed for being
+        # absent, whatever the verifier asked of it.
+        tree = Path(self.temp.name) / "tree"
+        package = tree / "node_modules/@vscode/vscode-languagedetection"
+        shutil.copytree(self.package, package, ignore=shutil.ignore_patterns("tree", "tools"))
+        # The verifier runs the helper as a program, and the program knows only
+        # the real package's digests; a copy beside the verifier knows the
+        # fixture's, so the answer is about inlining and not about the bytes.
+        tools = Path(self.temp.name) / "tools"
+        tools.mkdir()
+        helper = SCRIPT.read_text()
+        for name, body in (("INDEX_SHA256", INDEX), ("CHUNK_SHA256", CHUNK)):
+            helper = re.sub(rf'^{name} = "[0-9a-f]+"$', f'{name} = "{hashlib.sha256(body).hexdigest()}"',
+                            helper, count=1, flags=re.M)
+        (tools / SCRIPT.name).write_text(helper)
         spec = importlib.util.spec_from_file_location("server_tree", SCRIPT.with_name("verify-server-tree.py"))
         verifier = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(verifier)
-        output = io.StringIO()
-        with contextlib.redirect_stdout(output):
-            verifier.main(self.package)
-        self.assertIn("FAIL    language model CPU backend is inlined", output.getvalue())
+        verifier.__file__ = str(tools / "verify-server-tree.py")
+
+        def verdict():
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                verifier.main(tree)
+            return output.getvalue()
+
+        # Asked, never applied: an unpatched package fails and stays as it was.
+        self.assertIn("FAIL    language model CPU backend is inlined", verdict())
+        self.assertEqual((package / "dist/lib/index.js").read_bytes(), INDEX)
+        self.mod.patch_package(package)
+        self.assertIn("ok      language model CPU backend is inlined", verdict())
 
 
 if __name__ == "__main__":

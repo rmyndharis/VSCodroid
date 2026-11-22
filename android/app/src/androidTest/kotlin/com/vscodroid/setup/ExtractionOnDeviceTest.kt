@@ -52,8 +52,20 @@ class ExtractionOnDeviceTest {
     private lateinit var sandbox: File
     private lateinit var context: Context
 
-    /** The 29 MB one, so a nearly-full disk is certain to run out inside it. */
-    private val fetched = "ms-python.python-2026.4.0"
+    /**
+     * The 29 MB one, so a nearly-full disk is certain to run out inside it.
+     *
+     * Found by its id rather than named with its version, for the reason [own]
+     * gives: the version is the pin in `scripts/download-extensions.sh`, and a
+     * literal copy of it here turned red on every bump of that pin, as "asset not
+     * found", for a change that had nothing to do with extraction.
+     */
+    private val fetched: String by lazy {
+        val dirs = appContext.assets.list("extensions").orEmpty()
+            .filter { it.startsWith("ms-python.python-") }
+        assertTrue("the fetched extensions were never downloaded into the APK: $dirs", dirs.size == 1)
+        dirs.single()
+    }
 
     /**
      * One of the app's own bundled extensions that carries code, found rather

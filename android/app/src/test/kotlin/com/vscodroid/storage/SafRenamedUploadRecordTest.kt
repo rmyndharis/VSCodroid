@@ -20,6 +20,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeFalse
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -596,7 +597,8 @@ class SafRenamedUploadRecordTest {
      * The refusal is injected by taking write permission off the directory rather than by
      * mocking, so it does not depend on the temporary file's name; and the setup assertion
      * below fails loudly if it did not take, rather than letting the case pass on a rewrite
-     * that quietly succeeded.
+     * that quietly succeeded. An account that writes through directory permissions, such
+     * as root, cannot have the rewrite refused this way at all, and skips the case.
      *
      * NEGATIVE CONTROL, run by hand: move the `uploadClaims.forEach` in
      * `renameUploadsUnder` back above the `try`, which is where it was. The claim then
@@ -622,6 +624,7 @@ class SafRenamedUploadRecordTest {
                 "rewrite below is not being refused",
         )
         try {
+            assumeFalse(filesDir.canWrite(), "This account bypasses directory write permissions")
             observe(FileObserver.MOVED_TO or isDirFlag, "lib")
         } finally {
             filesDir.setWritable(true)

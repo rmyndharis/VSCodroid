@@ -173,6 +173,7 @@ class SafWriterTurnTest {
             release.countDown()
             workers.finish()
             File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).delete()
+            File(mirror.path + SafSyncEngine.SORTED_RECORD_SUFFIX).delete()
         } finally {
             unmockkAll()
         }

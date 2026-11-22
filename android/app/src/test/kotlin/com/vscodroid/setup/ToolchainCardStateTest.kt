@@ -508,10 +508,43 @@ class ToolchainCardStateTest {
         @Test
         fun `the card quotes sizes the way the rest of the app quotes them`() {
             val info = requireNotNull(rubyInfo) { "the registry no longer lists Ruby" }
-            val figures = manager().sizeFigures(info)
+            val german = java.util.Locale.GERMANY
+            val figures = manager().sizeFigures(info, german)
 
-            assertEquals(StorageManager.formatSize(info.downloadSize), figures.download)
-            assertEquals(StorageManager.formatSize(info.estimatedSize), figures.installed)
+            assertEquals(StorageManager.formatSize(info.downloadSize, german), figures.download)
+            assertEquals(StorageManager.formatSize(info.estimatedSize, german), figures.installed)
+        }
+
+        /**
+         * The adapter passes no language, so the card reads the default locale,
+         * which is the app's own language (the per-app choice included; the editor's
+         * language is resolved from it too). It wrote "100.0 MB" inside the French
+         * sentence beside it, which asks elsewhere for "Mo".
+         */
+        @Test
+        fun `a card on a French screen writes its sizes in French`() {
+            val info = ToolchainRegistry.ToolchainInfo(
+                packName = "toolchain_test",
+                displayName = "Test",
+                shortLabel = "Test",
+                descriptionRes = 0,
+                estimatedSize = 100_000_000L,
+                downloadSize = 2_500_000L,
+            )
+            val before = java.util.Locale.getDefault()
+            val display = java.util.Locale.getDefault(java.util.Locale.Category.DISPLAY)
+            val format = java.util.Locale.getDefault(java.util.Locale.Category.FORMAT)
+            java.util.Locale.setDefault(java.util.Locale.FRANCE)
+            try {
+                val figures = manager().sizeFigures(info)
+                assertEquals("2,5 Mo", figures.download)
+                assertEquals("100,0 Mo", figures.installed)
+            } finally {
+                // The suite runs in one JVM, so every category goes back as it was.
+                java.util.Locale.setDefault(before)
+                java.util.Locale.setDefault(java.util.Locale.Category.DISPLAY, display)
+                java.util.Locale.setDefault(java.util.Locale.Category.FORMAT, format)
+            }
         }
 
         /**
@@ -537,7 +570,7 @@ class ToolchainCardStateTest {
                 downloadSize = 100_000_000L,
             )
 
-            assertEquals("100.0 MB", manager().sizeFigures(info).installed)
+            assertEquals("100.0 MB", manager().sizeFigures(info, java.util.Locale.US).installed)
         }
     }
 

@@ -29,14 +29,21 @@ import java.util.concurrent.TimeUnit
  * one of them is measurable here in milliseconds, so none of them needs to stay an
  * argument.
  *
+ * The last two cases measure what the hand-over from an open's recording to the watcher
+ * rests on (`SafSyncEngine.ChangesDuringOpen.handOver`): two observers of one directory
+ * share one inotify watch, the events go to the one started last, and stopping either
+ * removes the watch for both. Every JVM test replaces the engine's watches with a model
+ * of exactly that (`directoryWatchFactory`), so these two are where the model meets the
+ * platform.
+ *
  * ## What this needs
  *
  * A temporary directory, and nothing else: no server, no first-run extraction, no SAF
- * grant, no picker. That is deliberate. `ServerHealthTest` passes its three cases on a
- * clean install by skipping all of them, because the state it needs is produced by a
- * class that sorts after it; this file has no such state to be missing, so there is
- * nothing here that a skip could hide. There is no `assumeTrue` below, and there must
- * not be one: an assertion that cannot fail is worse than an absent one.
+ * grant, no picker. That is deliberate. `ServerHealthTest` needs state a class that
+ * sorts after it produces, and once skipped all three of its cases on a clean install
+ * (it fails them now, naming the remedy); this file has no such state to be missing, so
+ * there is nothing here that a skip could hide. There is no `assumeTrue` below, and there
+ * must not be one: an assertion that cannot fail is worse than an absent one.
  *
  * Each claim about an event *not* arriving is preceded by a control on the same observer
  * and the same queue. An empty queue is also what a broken fixture produces, and without
@@ -196,6 +203,62 @@ class FileObserverTreeSemanticsTest {
         assertEquals(
             "the engine's directory flag is not the one inotify sets",
             IN_ISDIR, field.getInt(null)
+        )
+    }
+
+    @Test
+    fun twoObserversOfOneDirectory_onlyTheOneStartedLastIsTold() {
+        // What the hand-over from an open to the watcher rests on
+        // (`ChangesDuringOpen.handOver`): the open's watch of a directory starts first,
+        // the watcher's own starts after it, and from then on the events go to the
+        // watcher's alone, so none is recorded by the open and sent again by the watcher.
+        val shared = File(root, "shared").apply { mkdirs() }
+        val earlier = watch(shared)
+        File(shared, "before.txt").writeText("seen by the only observer there is")
+        assertNotNull(
+            "the first observer reported nothing on its own, so the absence asserted " +
+                "below would prove nothing",
+            earlier.firstFor("before.txt", ARRIVES_MS)
+        )
+
+        val later = watch(shared)
+        File(shared, "after.txt").writeText("written once both observers have started")
+
+        assertNotNull(
+            "the observer started last was not told of a change in the directory it " +
+                "watches, so the watcher misses what happens after the open hands over",
+            later.firstFor("after.txt", ARRIVES_MS)
+        )
+        assertNull(
+            "the observer started first was told as well, so a change made after the " +
+                "hand-over would be recorded by the open and sent a second time",
+            earlier.firstFor("after.txt", ABSENT_MS)
+        )
+    }
+
+    @Test
+    fun stoppingTheFirstObserverOfADirectory_leavesTheOneStartedLastDeaf() {
+        // Why the hand-over never stops the open's watch: the two observers share one
+        // inotify watch, and stopping either removes it for both. The watcher stops the
+        // open's watch with its own instead (`DirectoryObserver.stopWatching`).
+        val shared = File(root, "shared").apply { mkdirs() }
+        watch(shared) // the open's watch, started first: observers[0]
+        val later = watch(shared)
+        File(shared, "control.txt").writeText("both observers are running")
+        assertNotNull(
+            "the observer started last reported nothing while both ran, so the absence " +
+                "asserted below would prove nothing",
+            later.firstFor("control.txt", ARRIVES_MS)
+        )
+
+        observers[0].stopWatching()
+        File(shared, "after-stop.txt").writeText("written once the first observer stopped")
+
+        assertNull(
+            "the observer started last still heard its directory after the first one " +
+                "stopped, so the two do not share a watch and the hand-over's reason for " +
+                "leaving the open's watch running no longer holds",
+            later.firstFor("after-stop.txt", ABSENT_MS)
         )
     }
 

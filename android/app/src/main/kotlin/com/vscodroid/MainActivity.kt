@@ -2220,7 +2220,8 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                     AppNotices.showNotice(
                         this,
                         getString(
-                            R.string.saf_mirror_removed, StorageManager.formatSize(freed)
+                            R.string.saf_mirror_removed,
+                            StorageManager.formatSize(freed, resources.configuration.locales[0]),
                         ),
                         Toast.LENGTH_LONG,
                     )
@@ -8419,14 +8420,15 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      */
     private fun checkStorageHealth() {
         if (!StorageManager.isStorageLow(this)) return
-        val available = StorageManager.formatSize(StorageManager.getAvailableStorage(this))
+        val free = StorageManager.getAvailableStorage(this)
+        val available = StorageManager.formatSize(free, resources.configuration.locales[0])
         AppNotices.showNotice(
             this,
             getString(R.string.storage_low_warning, available),
             Toast.LENGTH_LONG,
             processOnceKey = AppNotices.ONCE_KEY_STORAGE_LOW,
         )
-        Logger.w(tag, "Storage low: $available available")
+        Logger.w(tag, "Storage low: ${StorageManager.formatSize(free)} available")
     }
 
     /**

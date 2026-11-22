@@ -29,7 +29,6 @@ import javax.xml.parsers.DocumentBuilderFactory
 class WriteBackNoticeWiringTest {
 
     private val activity = File("../../android/app/src/main/kotlin/com/vscodroid/MainActivity.kt")
-    private val manager = File("src/main/kotlin/com/vscodroid/storage/SafStorageManager.kt")
 
     /**
      * A manager per case, so no case inherits a throttle another case has already moved.
@@ -351,52 +350,10 @@ class WriteBackNoticeWiringTest {
     }
 
     /**
-     * That the reading the throttle subtracts from cannot move backwards.
-     *
-     * ⚠️ Source text, because the reading is taken inside the lambda this method installs
-     * on a private [SafSyncEngine], which no JVM test here can make fire. The behaviour
-     * either side of it is covered: the rule by the cases above, and the clock by the one
-     * below.
-     *
-     * The stamp lives in an `AtomicLong` for the life of the manager, and the rule is a
-     * subtraction against it, so a wall clock corrected backwards by more than the
-     * interval (NTP after a drifted RTC, or the user setting the date) makes every
-     * later difference negative and silences the notice until the clock catches up. A
-     * folder whose provider is refusing every save then stops saying so, which is the
-     * failure this notice exists to prevent. `AuthTabWindow` states the same reasoning
-     * one file over and takes `SystemClock.elapsedRealtime()`.
-     *
-     * Negative control, measured: put `System.currentTimeMillis()` back and this goes red.
-     */
-    @Test
-    fun `the write-back throttle reads the monotonic clock`() {
-        assertTrue(manager.isFile, "SafStorageManager.kt is not where this test expects it")
-        val body = manager.readText()
-            .substringAfter("fun onWriteBackFailed(", "")
-            .substringBefore("\n    }")
-        assertTrue(
-            body.contains("claimAnnouncement("),
-            "onWriteBackFailed is not where this test expects it, so the assertions below " +
-                "would be asked of nothing",
-        )
-
-        assertTrue(
-            Regex("""(?m)^\s*if \(claimAnnouncement\(SystemClock\.elapsedRealtime\(\)""")
-                .containsMatchIn(body),
-            "the throttle no longer reads the monotonic clock, so a device clock moved " +
-                "backwards silences every write-back failure notice for the rest of the " +
-                "session",
-        )
-        assertFalse(
-            body.contains("System.currentTimeMillis()"),
-            "the throttle reads wall time, which can move backwards under it",
-        )
-    }
-
-    /**
      * The first notice of a session is given however recently the device booted.
      *
-     * The clock above is milliseconds since boot, not since 1970, so "nothing announced
+     * The throttle's clock is milliseconds since boot, not since 1970 (which clock it
+     * reads is asked of the manager in SafManagerEngineWiringTest), so "nothing announced
      * yet" stopped being a reading further back than any interval and became one that
      * can sit inside it. A device a few seconds up, with a provider already refusing,
      * would have swallowed the one notice that always has to be given.
@@ -492,28 +449,6 @@ class WriteBackNoticeWiringTest {
             safManager.claimAnnouncement(now = now + interval - 1, last = now),
             "a failure inside the interval was announced, so a provider that refuses " +
                 "everything buries the editor under its own error",
-        )
-    }
-
-    /**
-     * That the seam above is the one the notice actually goes through.
-     *
-     * ⚠️ Source text, because the behaviour is out of reach here: the wrapper installs
-     * itself on the manager's own [SafSyncEngine], which is private and exposed by no
-     * accessor, so a JVM test can neither read the installed lambda nor make the engine
-     * call it. Everything else about the claim is behaviour; this one line is not.
-     *
-     * Anchored to the start of a line so commenting the call out cannot satisfy it,
-     * which is how a guard of this shape passes over wiring that is already dead.
-     */
-    @Test
-    fun `the write-back notice decides through the claim rather than beside it`() {
-        assertTrue(manager.isFile, "SafStorageManager.kt is not where this test expects it")
-
-        assertTrue(
-            Regex("""(?m)^\s*if \(claimAnnouncement\(""").containsMatchIn(manager.readText()),
-            "onWriteBackFailed no longer decides through claimAnnouncement, so whatever " +
-                "the four cases above pin is not what the user's screen goes through",
         )
     }
 }

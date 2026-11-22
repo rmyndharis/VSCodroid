@@ -21,8 +21,9 @@ not a candidate. Its absolute path is not knowable here (it carries the Android
 user id), and `sh` under it already resolves through PATH, which ends in
 /system/bin (see Environment.buildProcessEnvironment).
 
-Measured on the shipped set: six of the fourteen binaries in jniLibs name it,
-and the environment rescues none of them fully:
+Measured on the shipped set: six of the binaries in jniLibs name it (fifteen
+are required there today; `requiredJniLibs` in android/app/build.gradle.kts is
+the list), and the environment rescues none of them fully:
 
   * make deliberately does not take SHELL from the environment, so the compiled
     value runs every recipe line;
@@ -111,7 +112,7 @@ must not report as clean. It only ever reads.
 
 Which directories go under it is a decision, not a default. A sweep that fails a
 correct build is worse than no sweep, so a directory qualifies only once every
-file in it is answered for. Three are:
+file in it is answered for. Four are:
 
   * jniLibs, swept by the verifyBundledShellPaths Gradle task at packaging time,
     which is the moment a binary restored from a cache no download step re-ran
@@ -125,6 +126,9 @@ file in it is answered for. Three are:
     Ruby pack is. Every file in it is answered for: paths.h is rewritten, and
     no binary in it names the path (checked on libLLVM, libclang-cpp, the
     driver, lld and the llvm tools).
+  * the Codex asset pack, swept by download-codex.sh once it has placed the
+    pack. No Gradle task sweeps it again at packaging time, as the Ruby and
+    C/C++ tasks do theirs.
 
 The Python stdlib is deliberately not one of them. Three files under it name the
 path in a `#!` line rather than as a default they hand to execve, none of them
@@ -265,6 +269,16 @@ for _form in FORMS:
                          "source with NUL, which is not whitespace there")
 
 
+# The shell path ends at "sh": what follows it is a NUL, a quote, a space or
+# anything else that cannot continue a file name. Without that end the match
+# also took `.../usr/bin/sha256sum` or `.../usr/bin/shred`, which name no shell,
+# so a binary carrying one of those beside its real default was refused as
+# spelling the shell twice, and --check failed a file naming no shell at all.
+SHELL_NAME_END = rb"(?![\w.+/-])"
+
+# Termux's shell, counted with the same end.
+TERMUX_SH_RE = re.compile(re.escape(TERMUX_SH) + SHELL_NAME_END)
+
 # Any shell under any app's private data directory, not only Termux's.
 #
 # The rewriter knows one spelling and pads it in place, so it can only fix the
@@ -274,7 +288,13 @@ for _form in FORMS:
 # Termux literal does not match. SELinux refuses `execve` on anything under
 # `app_data_file` whoever owns it, so every such path is unrunnable and the
 # check should say so rather than only recognising the one it can repair.
-APP_DATA_SH = re.compile(rb"/data/data/[A-Za-z0-9._]+/files/usr/bin/sh")
+#
+# `/data/data/<package>` is one spelling of that directory. The same directory
+# is `/data/user/<user>/<package>` (what Context.getFilesDir() returns, and the
+# only spelling for any user but the first), and `/data/user_de/<user>/<package>`
+# is its device-encrypted twin, so a path built from either is the same dead end.
+APP_DATA_SH = re.compile(
+    rb"/data/(?:data|user(?:_de)?/[0-9]+)/[A-Za-z0-9._]+/files/usr/bin/sh" + SHELL_NAME_END)
 
 
 def carries_unrunnable_shell(data: bytes) -> "bytes | None":
@@ -299,7 +319,7 @@ def patch(path: pathlib.Path) -> bool:
     except OSError as e:
         print(f"  ERROR: {path}: {e}", file=sys.stderr)
         return False
-    found = data.count(TERMUX_SH)
+    found = len(TERMUX_SH_RE.findall(data))
 
     if found == 0:
         applied = [f for f in FORMS if f.marker in data]
