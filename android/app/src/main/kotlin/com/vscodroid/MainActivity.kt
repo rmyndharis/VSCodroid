@@ -1815,7 +1815,8 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 //
                 // What happens to it if the sync fails depends on which folder
                 // failed, and restoreWatcherAfterFailure is where that is
-                // decided.
+                // decided. What changes in the folder it stops watching is
+                // recorded from here, and sent if that watcher is put back.
                 //
                 // Off this thread, and the wrapper below is what made that easy
                 // to miss: only the sync was ever inside it, while this call and
@@ -2048,7 +2049,9 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * dead buys nothing and costs the user the write-back for the folder still
      * on screen, which they go on editing in the belief it is being saved. That
      * is the failure this whole reorder exists to avoid, arriving from the other
-     * direction.
+     * direction. What a program changed in it while its watcher was stopped is
+     * sent by the watcher put back here, which is what makes the notice's
+     * "unaffected" true; see [SafSyncEngine.pauseWatching].
      *
      * Suspending for the reason [openSafFolder] hops: starting a watcher walks
      * the whole mirror and registers one kernel watch per directory, and this
@@ -2064,7 +2067,12 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         mirrorUntouched: Boolean = false,
     ): Boolean {
         val (mirrorDir, uri) = previous ?: return false
-        if (!shouldRestorePreviousWatcher(uri.toString(), failed.toString(), mirrorUntouched)) return false
+        if (!shouldRestorePreviousWatcher(uri.toString(), failed.toString(), mirrorUntouched)) {
+            // Not put back, so what the stop began recording for it has no watcher to send it: ended here rather
+            // than at the next stop, its next open reads those changes as made while the folder was closed.
+            withContext(Dispatchers.IO) { safManager.dropStoppedFolderRecording() }
+            return false
+        }
         withContext(Dispatchers.IO) { safManager.startFileWatcher(mirrorDir, uri) }
         beginWatching(mirrorDir, uri)
         Logger.i(tag, "Restored the previous folder's watcher after a failed switch")

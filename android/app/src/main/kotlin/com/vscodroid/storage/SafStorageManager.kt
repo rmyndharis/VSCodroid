@@ -911,10 +911,17 @@ class SafStorageManager(context: Context) {
     }
 
     /**
-     * Stops the active file watcher. Call this when switching folders or on destroy.
+     * Stops the active file watcher for a switch to another folder, and records what changes in the folder it
+     * stopped watching until the next [startFileWatcher]: the one that puts that folder's watcher back after a
+     * switch that failed sends it; see [SafSyncEngine.pauseWatching]. On destroy, [shutdownFileWatcher].
      */
     fun stopFileWatcher() {
-        syncEngine.stopWatching()
+        syncEngine.pauseWatching()
+    }
+
+    /** Ends what [stopFileWatcher] recorded when the folder's watcher is not put back; see [SafSyncEngine.dropPausedRecording]. */
+    fun dropStoppedFolderRecording() {
+        syncEngine.dropPausedRecording()
     }
 
     /**
