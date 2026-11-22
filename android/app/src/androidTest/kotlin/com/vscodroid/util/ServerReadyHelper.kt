@@ -1,6 +1,7 @@
 package com.vscodroid.util
 
 import android.content.Context
+import com.vscodroid.service.EditorGateway
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -12,8 +13,9 @@ import java.net.URL
  *   SplashActivity skips extraction.
  * - [clearSetupState] removes them again, plus the toolchain picker flag.
  * - [healthCheck] asks the server for /version on a port and says whether it answered.
+ * - [version] says what /version answered on a port, or null.
  * - [waitForPort] polls that same check until the port answers or the timeout runs out.
- * - [waitForServer] does the same on whichever port `PortFinder` recorded, and says
+ * - [waitForServer] does the same on the port the app's editor gateway holds, and says
  *   which one it was.
  */
 object ServerReadyHelper {
@@ -126,6 +128,26 @@ object ServerReadyHelper {
     }
 
     /**
+     * What `GET /version` answers on [port], trimmed, or null unless it answered 200.
+     *
+     * The server answers with the commit its tree was built from, which is also what
+     * `vscode-reh/product.json` records: `server.js` rewrites that file on every start,
+     * and the commit is not among what it overrides.
+     */
+    fun version(port: Int): String? = try {
+        val conn = URL("http://127.0.0.1:$port/version").openConnection() as HttpURLConnection
+        conn.connectTimeout = 2000
+        conn.readTimeout = 2000
+        try {
+            if (conn.responseCode == 200) conn.inputStream.bufferedReader().use { it.readText().trim() } else null
+        } finally {
+            conn.disconnect()
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    /**
      * Waits for a port to become connectable (TCP connect succeeds).
      *
      * @param port TCP port to probe.
@@ -145,27 +167,28 @@ object ServerReadyHelper {
      * Waits for the server this install serves on to accept a connection, and
      * says which port that was; 0 when the deadline passed first.
      *
-     * The port is read from where the app records it, not assumed. The app scans
-     * up from 13337 and remembers its choice through [PortFinder], moving whenever
-     * something else holds the remembered port, so a probe of the literal turned
-     * every device where 13337 had ever been taken into red cases that said
-     * nothing about the server. It is read on every pass rather than once: on a
-     * clean install the record is written by `startServer`, which the activity
-     * the caller has just launched is still on its way to.
+     * The port is the one the app's [EditorGateway] has bound, read from the
+     * gateway itself. The service runs in the app's own process, which is the
+     * process this test runs in, so [EditorGateway.instance] is the very listener
+     * `startServer` bound. [PortFinder]'s record is not enough on its own: it holds
+     * the install's home port, and a start that finds home busy binds another
+     * port for that process only and never records it, so a probe of the record
+     * sent every case red on a device where something held home, while the server
+     * was healthy on the port the app moved to. The record is read only until the
+     * gateway is bound, which on a clean install is after the activity the caller
+     * has just launched reaches `startServer`; it is read on every pass for that
+     * reason.
      *
-     * Each pass demands `GET /version` answering 200 rather than a bare connect.
-     * The record is rewritten only inside `startServer`, after the activity the
-     * caller launched has bound the service, so on the first passes it still
-     * names the port the previous run used; a stranger holding that port
-     * accepts a connect, and a helper satisfied by one returned before the app
-     * had moved, sending the probe cases red on the stranger's port while the
-     * server was healthy on the new one. A stranger does not answer `/version`
-     * with 200, so the loop keeps reading the record until the app has moved.
+     * Each pass demands `GET /version` answering 200 rather than a bare connect:
+     * before the gateway is bound the record may name a port a stranger holds,
+     * which accepts a connect but does not answer `/version` with 200, and once it
+     * is bound the gateway accepts connections before a backend is selected and
+     * answers 503 until one is.
      */
     fun waitForServer(context: Context, timeoutMs: Long = 60_000L): Int {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
-            val port = PortFinder.rememberedPort(context)
+            val port = EditorGateway.instance.boundPort ?: PortFinder.rememberedPort(context)
             if (port != 0 && healthCheck(port, timeoutMs = 1_000L)) return port
             Thread.sleep(500)
         }

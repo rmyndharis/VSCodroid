@@ -83,8 +83,13 @@ class SafDeviceCopySetAsideTest {
         treeUri = mockk(relaxed = true)
     }
 
+    /** The record and its mark sit beside the mirror, outside what `@TempDir` cleans up. */
     @AfterEach
-    fun tearDown() = unmockkAll()
+    fun tearDown() {
+        File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).delete()
+        File(mirror.path + SafSyncEngine.SORTED_RECORD_SUFFIX).delete()
+        unmockkAll()
+    }
 
     /**
      * The device folder answers for one document: [name], holding [bytes], reported as

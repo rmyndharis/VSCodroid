@@ -87,7 +87,10 @@ def git_head() -> str:
                              cwd=ROOT, capture_output=True, text=True, check=True)
     except (OSError, subprocess.CalledProcessError):
         return "-"
-    lines = out.stdout.split()
+    # One answer per line. A checkout under a path with a space in it made
+    # split() return more than two words, so this recorded "-" for a tree that
+    # did come from a commit.
+    lines = out.stdout.splitlines()
     if len(lines) != 2:
         return "-"
     toplevel, head = lines

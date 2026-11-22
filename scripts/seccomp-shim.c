@@ -149,14 +149,6 @@ static void on_sigsys(int sig, siginfo_t *info, void *ctx) {
 }
 
 /**
- * Installs the handler before anything else in the process runs.
- *
- * SA_NODEFER so a refusal raised from inside the handler is not held back, and
- * SA_SIGINFO because only si_code says the signal is a refusal and only
- * si_syscall says which call was refused. No restorer: arm64 returns from a
- * signal through the vDSO.
- */
-/**
  * musl's own `struct sigaction`, which is not the kernel's: the mask comes
  * second and is 128 bytes wide, where the kernel wants flags second and an
  * 8-byte mask last. Declared here because a freestanding object has no headers
@@ -220,6 +212,14 @@ int shim_sigaction(int sig, const struct musl_sigaction *act, struct musl_sigact
     return (int)r;
 }
 
+/**
+ * Installs the handler before anything else in the process runs.
+ *
+ * SA_NODEFER so a refusal raised from inside the handler is not held back, and
+ * SA_SIGINFO because only si_code says the signal is a refusal and only
+ * si_syscall says which call was refused. No restorer: arm64 returns from a
+ * signal through the vDSO.
+ */
 __attribute__((constructor)) static void install(void) {
     struct kernel_sigaction sa = { 0 };
     sa.handler = on_sigsys;

@@ -18,7 +18,7 @@ the wrong size and the wrong contents.
 Two rules:
 
   * the stated total matches the sources, counted the way the file itself says
-    it counts: `grep -cE '^\\s*@Test'` over the directory;
+    it counts: `grep -cE '^\\s*@Test'` over the directory, Kotlin and Java alike;
   * every class carrying a `@Test` has a row in the "what is here" table, and
     every row names a class that exists.
 
@@ -36,8 +36,11 @@ import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-SUITE = ROOT / "android/app/src/androidTest/kotlin"
-README = ROOT / "android/app/src/androidTest/README.md"
+# The whole androidTest directory, not its kotlin/ half: a Java class there is
+# compiled into the same APK and run by the same runner, and counting only
+# kotlin/ let one run without being counted or listed.
+SUITE = ROOT / "android/app/src/androidTest"
+README = SUITE / "README.md"
 
 TEST = re.compile(r"^\s*@Test", re.M)
 # "**At HEAD there are 50 tests across eleven classes.**"
@@ -70,7 +73,7 @@ def main() -> int:
         return 1
 
     counts = {}
-    for path in sorted(SUITE.rglob("*.kt")):
+    for path in sorted(p for ext in ("kt", "java") for p in SUITE.rglob(f"*.{ext}")):
         found = len(TEST.findall(path.read_text(encoding="utf-8")))
         if found:
             counts[path.stem] = found

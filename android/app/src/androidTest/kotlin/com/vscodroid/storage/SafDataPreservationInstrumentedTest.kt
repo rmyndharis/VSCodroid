@@ -224,6 +224,37 @@ class SafDataPreservationInstrumentedTest {
         assertArrayEquals(EDITED, providerBytes())
     }
 
+    /**
+     * The case above, opened the way the folder open does: recording what changes while it
+     * runs. That open watches the mirror with a real FileObserver, and starting the watcher
+     * hands the watch over without stopping it, because the two share one inotify watch and
+     * stopping the open's would leave the watcher deaf (`ChangesDuringOpen.handOver`). The
+     * file is made only once the watcher has started, so nothing the open recorded names it
+     * and only the watcher's own watch can carry it: deaf, the provider never gets it.
+     */
+    @Test
+    fun createAfterAnOpenThatRecordedChangesReachesProviderAndSurvivesReopening() = runBlocking {
+        control("reset", Bundle().apply { putBoolean("empty", true) })
+        engine.initialSync(treeUri, mirror, recordChanges = true) { _, _ -> }
+        val local = File(mirror, SafDocumentsProvider.FILE_NAME)
+        assertFalse(local.exists())
+        engine.startWatching(mirror, treeUri)
+
+        local.writeBytes(EDITED)
+        assertTrue("The watcher never created the provider document after the hand-over", await {
+            control("stats").getBoolean("exists") && providerBytes().contentEquals(EDITED) &&
+                engine.uploadsInFlight().isEmpty()
+        })
+        engine.stopWatching()
+        assertEquals("The control must create exactly one provider document", 1, control("stats").getInt("createCalls"))
+        assertTrue("The control never wrote the new provider document", writeOpens() > 0)
+
+        val reopened = File(context.filesDir, "reopened").apply { mkdirs() }
+        engine.initialSync(treeUri, reopened) { _, _ -> }
+        assertArrayEquals(EDITED, File(reopened, SafDocumentsProvider.FILE_NAME).readBytes())
+        assertArrayEquals(EDITED, providerBytes())
+    }
+
     @Test
     fun localEditDuringProviderReadSurvivesReopeningWithBothVersions() {
         val local = File(mirror, SafDocumentsProvider.FILE_NAME)

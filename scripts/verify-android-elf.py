@@ -28,8 +28,10 @@ the first two above cannot be asked of such a tree without failing it for
 files that are correct.
 
 `--self-test` hands verify() a synthetic executable naming a glibc loader and
-two it must accept, since no file this repository places can make the refusal
-fire and a refusal that has stopped firing looks exactly like a clean tree.
+two it must accept, a shared object whose DT_NEEDED names cannot be read for
+want of a mapped string table, and --tree a 32-bit ELF it has to skip rather
+than fail, since no file this repository places can make those rules fire and a
+rule that has stopped firing looks exactly like a clean tree.
 
 Pure Python on purpose: the NDK's readelf is not available everywhere this runs,
 and having one implementation means the addon build and the runtime download
@@ -137,12 +139,19 @@ def read_elf(path: pathlib.Path):
         strtab = next((v for t, v in entries if t == DT_STRTAB), None)
         strsz = next((v for t, v in entries if t == DT_STRSZ), 0)
         base = to_offset(strtab) if strtab is not None else None
+        names = [val for tag, val in entries if tag == DT_NEEDED]
+        # Libraries named through a table that cannot be found are not no
+        # libraries. Read as an empty list they passed every dependency check,
+        # which is the one verdict a file this damaged must not get.
+        if names and base is None:
+            raise NotAnElf(f"{path.name} names {len(names)} DT_NEEDED "
+                           f"librar{'y' if len(names) == 1 else 'ies'} but has no "
+                           "string table in a LOAD segment to read them from")
         if base is not None:
             table = data[base:base + strsz]
-            for tag, val in entries:
-                if tag == DT_NEEDED:
-                    end = table.index(b"\0", val)
-                    needed.append(table[val:end].decode())
+            for val in names:
+                end = table.index(b"\0", val)
+                needed.append(table[val:end].decode())
 
     return machine, e_type, needed, [a for *_, a in loads], interp
 
@@ -260,18 +269,49 @@ def synthetic_elf(interp) -> bytes:
     return ehdr + phdrs + path
 
 
-def self_test() -> int:
-    """Hand verify() the executable it exists to refuse, and two it must accept.
+def synthetic_dynamic_elf(strtab) -> bytes:
+    """An aarch64 shared object naming libneeded.so in DT_NEEDED, with its string
+    table at a mapped address, at an unmapped one, or with no DT_STRTAB at all
+    (`strtab` is "mapped", "unmapped" or None)."""
+    ehsize, phentsize, phnum = 64, 56, 2
+    names = b"\0libneeded.so\0"
+    str_off = ehsize + phentsize * phnum
+    dyn_off = str_off + len(names) + (-(str_off + len(names)) % 8)
+    entries = [(DT_NEEDED, 1)]
+    if strtab is not None:
+        entries += [(DT_STRTAB, str_off if strtab == "mapped" else 0x7FFF0000),
+                    (DT_STRSZ, len(names))]
+    entries.append((DT_NULL, 0))
+    dynamic = b"".join(struct.pack("<qQ", tag, val) for tag, val in entries)
+    size = dyn_off + len(dynamic)
+    phdrs = struct.pack("<IIQQQQQQ", PT_LOAD, 6, 0, 0, 0, size, size, MIN_ALIGN)
+    phdrs += struct.pack("<IIQQQQQQ", PT_DYNAMIC, 6, dyn_off, dyn_off, dyn_off,
+                         len(dynamic), len(dynamic), 8)
+    ehdr = ELF_MAGIC + bytes([2, 1, 1, 0]) + b"\0" * 8 + struct.pack(
+        "<HHIQQQIHHHHHH", 3, EM_AARCH64, 1, 0, ehsize, 0, 0,
+        ehsize, phentsize, phnum, 0, 0, 0)
+    body = ehdr + phdrs + names
+    return body + b"\0" * (dyn_off - len(body)) + dynamic
 
-    Every real binary this repository places passes, so the refusal has no
+
+def self_test() -> int:
+    """Hand verify() the files it exists to refuse, and the ones it must accept.
+
+    Every real binary this repository places passes, so the refusals have no
     file in the tree to fire on, and a rule that has stopped firing prints
     exactly what a clean tree prints.
     """
+    import contextlib
+    import io
     import tempfile
 
     cases = (("glibc", "/lib/ld-linux-aarch64.so.1", False),
              ("android", ANDROID_INTERP, True),
              ("shared", None, True))
+    # A dependency list is only as good as the string table it is read from.
+    # One that cannot be found used to read as no dependencies at all, which is
+    # the one answer that passes every library check.
+    tables = (("mapped", True), ("unmapped", False), (None, False))
     with tempfile.TemporaryDirectory() as tmp:
         for name, interp, expected in cases:
             path = pathlib.Path(tmp) / f"lib{name}.so"
@@ -281,7 +321,30 @@ def self_test() -> int:
                 print(f"  FAIL   self-test: PT_INTERP {interp} was "
                       f"{'accepted' if expected is False else 'refused'}")
                 return 1
-    print("  ok     self-test: a foreign program interpreter is refused")
+        for strtab, expected in tables:
+            path = pathlib.Path(tmp) / f"libdynamic-{strtab}.so"
+            path.write_bytes(synthetic_dynamic_elf(strtab))
+            print(f"  {path.name}")
+            if verify(path, {"libneeded.so"}) != expected:
+                print(f"  FAIL   self-test: DT_NEEDED with a {strtab} string table was "
+                      f"{'accepted' if expected is False else 'refused'}")
+                return 1
+
+        # --tree names what it does not examine rather than failing it, and a
+        # 32-bit ELF is another ABI however it got there.
+        tree = pathlib.Path(tmp) / "tree"
+        tree.mkdir()
+        (tree / "libaarch64.so").write_bytes(synthetic_elf(None))
+        (tree / "libarm32.so").write_bytes(ELF_MAGIC + bytes([1, 1, 1, 0]) + b"\0" * 44)
+        swept = io.StringIO()
+        with contextlib.redirect_stdout(swept):
+            status = alignment_sweep(tree)
+        print(swept.getvalue(), end="")
+        if status != 0 or "libarm32.so (another ABI)" not in swept.getvalue():
+            print("  FAIL   self-test: --tree did not skip a 32-bit ELF as another ABI")
+            return 1
+    print("  ok     self-test: a foreign program interpreter and an unreadable "
+          "dependency list are refused, and --tree skips a 32-bit ELF")
     return 0
 
 
@@ -343,12 +406,19 @@ def alignment_sweep(root: pathlib.Path) -> int:
             try:
                 if path.is_symlink() or not path.is_file():
                     continue
-                # Four bytes rather than read_elf's whole file. Most of a tree
+                # Five bytes rather than read_elf's whole file. Most of a tree
                 # this size is JavaScript, and reading all of it to find out
                 # would cost more than the check.
                 with path.open("rb") as handle:
-                    if handle.read(4) != ELF_MAGIC:
-                        continue
+                    ident = handle.read(5)
+                if ident[:4] != ELF_MAGIC:
+                    continue
+                # ELFCLASS32 is another ABI as surely as another e_machine is:
+                # nothing this app ships can load it, and read_elf, which asks
+                # only of 64-bit files, would report it as a broken one.
+                if ident[4:5] == b"\x01":
+                    skipped.append((path, "another ABI"))
+                    continue
             except OSError as e:
                 print(f"  FAIL   {path}: {e}")
                 rejected.add(path)
