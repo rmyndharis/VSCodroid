@@ -544,7 +544,18 @@ class KeyRowAccessibilityInstrumentedTest {
         // Off the JVM for the reason the whole file is: the row's initialiser
         // reaches resources on its first line, and this drives a real adapter
         // swap through a real ViewPager2.
-        inWindow({ ctx -> ExtraKeyRow(ctx) }) { row, _ ->
+        //
+        // With a page behind the row, as the app always has. A row with no
+        // injector has no page to hold a modifier for, and its poll clears every
+        // latch at its first tick, 200 ms after the latch; this case once read
+        // the latch across several main-thread turns with no page, so it failed
+        // whenever the device took longer than that, 4 runs in 12 on an API 33
+        // emulator, while the repack had carried Ctrl across every time.
+        lateinit var page: FlagPage
+        inWindow({ ctx ->
+            page = FlagPage(ctx)
+            ExtraKeyRow(ctx).apply { keyInjector = KeyInjector(page) }
+        }) { row, _ ->
             val band = indicator(row)
             assertNotNull("the row publishes no page indicator at all", band)
 
@@ -562,15 +573,28 @@ class KeyRowAccessibilityInstrumentedTest {
 
             val ctrl = findKey(row, "Ctrl")
             assertNotNull("the row never bound its first page, so nothing can be latched", ctrl)
-            onMain { ctrl!!.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null) }
+            var pushed = false
+            onMain {
+                ctrl!!.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null)
+                pushed = page.ctrl
+            }
+            assertTrue("control: latching Ctrl did not reach the page", pushed)
 
             val resized = Configuration(row.resources.configuration).apply {
                 smallestScreenWidthDp = targetDp
             }
             onMain { row.dispatchConfigurationChanged(resized) }
             // The adapter swap requests a layout; the pages are bound on the
-            // traversal that follows, not inside the call above.
+            // traversal that follows, not inside the call above. The wait after
+            // it outlasts several ticks of the poll, so what is read below is the
+            // row after the poll has asked the page, never a race with its first
+            // tick.
             InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            Thread.sleep(POLL_TICKS_MS)
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            var asked = 0
+            onMain { asked = page.queries }
+            assertTrue("control: the poll never asked the page, so the wait proved nothing", asked > 0)
 
             var held: String? = null
             onMain { held = band!!.createAccessibilityNodeInfo()?.contentDescription?.toString() }
@@ -588,6 +612,8 @@ class KeyRowAccessibilityInstrumentedTest {
                     "KeyInjector still holds it and the next key goes out as a chord",
                 latched!!.isToggleActive,
             )
+            onMain { pushed = page.ctrl }
+            assertTrue("the page no longer holds the Ctrl the row still shows", pushed)
         }
     }
 
@@ -667,4 +693,11 @@ class KeyRowAccessibilityInstrumentedTest {
         }
     }
 
+    private companion object {
+        /**
+         * Three ticks of the row's modifier poll, which `ExtraKeyRow.startModifierSync`
+         * posts every 200 ms, and room for the answers to come back.
+         */
+        const val POLL_TICKS_MS = 700L
+    }
 }

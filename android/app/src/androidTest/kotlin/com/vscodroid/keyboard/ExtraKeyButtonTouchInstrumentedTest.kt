@@ -1,17 +1,12 @@
 package com.vscodroid.keyboard
 
-import android.content.Context
 import android.content.res.Configuration
-import android.os.Handler
-import android.os.Looper
 import android.os.SystemClock
 import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
-import android.webkit.ValueCallback
-import android.webkit.WebView
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.test.core.app.ActivityScenario
@@ -554,33 +549,5 @@ class ExtraKeyButtonTouchInstrumentedTest {
             )
         }
         instrumentation.waitForIdleSync()
-    }
-
-    /**
-     * A page holding the three flags the row pushes, `window.__vscodroid`'s,
-     * and answering the row's poll from them a turn later, as a page does.
-     * Nothing else of a page: no script it is sent is run.
-     */
-    private class FlagPage(context: Context) : WebView(context) {
-        var ctrl = false
-        private var alt = false
-        private var shift = false
-
-        override fun evaluateJavascript(script: String, resultCallback: ValueCallback<String>?) {
-            val pushed = PUSH.find(script)
-            if (pushed != null) {
-                ctrl = pushed.groupValues[1] == "true"
-                alt = pushed.groupValues[2] == "true"
-                shift = pushed.groupValues[3] == "true"
-            } else if (resultCallback != null) {
-                val answer = "{\"c\":$ctrl,\"a\":$alt,\"s\":$shift}"
-                Handler(Looper.getMainLooper()).post { resultCallback.onReceiveValue(answer) }
-            }
-        }
-
-        private companion object {
-            /** `KeyInjector.setModifierState`'s script, which is the only push there is. */
-            val PUSH = Regex("""\.ctrl=(\w+),window\.__vscodroid\.alt=(\w+),window\.__vscodroid\.shift=(\w+)""")
-        }
     }
 }

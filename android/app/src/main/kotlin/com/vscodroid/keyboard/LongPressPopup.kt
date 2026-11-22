@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
@@ -22,7 +23,12 @@ class LongPressPopup(
 ) {
     private var popup: PopupWindow? = null
 
-    fun show(anchor: View) {
+    /**
+     * Opens the popup over [anchor], a key on [row]. The row is passed because
+     * below Android 15 it, and not the window, is the stretch the popup is kept
+     * inside; see [LongPressPlacement.span].
+     */
+    fun show(anchor: View, row: View) {
         val container = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             val pad = dpToPx(6)
@@ -89,19 +95,23 @@ class LongPressPopup(
 
         // Position centered above anchor.
         //
-        // In the app window's coordinates, not the screen's, and the three
-        // numbers below have to agree on that. `showAtLocation` puts x and y in
-        // the LayoutParams of a window whose parent is the activity's, and a
-        // child window is laid out against its parent's frame, so what it
-        // consumes is window space. `getLocationInWindow` reports the anchor in
-        // that space, and `displayMetrics` taken off an activity's resources is
-        // the window's width on API 30 and up, not the display's. This used to
-        // read `getLocationOnScreen`, which agrees with the other two only while
-        // the window fills the display: split-screen and freeform put the origin
-        // somewhere else, and the popup then landed off by however far the
-        // window sits from the top left of the screen.
+        // In the app window's coordinates, not the screen's, and every number
+        // below has to agree on that. `showAtLocation` puts x and y in the
+        // LayoutParams of a window whose parent is the activity's, and a child
+        // window is laid out against its parent's frame, so what it consumes is
+        // window space. `getLocationInWindow` reports the anchor and the row in
+        // that space, and the span the popup is kept inside is in it too:
+        // [LongPressPlacement.span] takes it from the row below Android 15, where
+        // an activity's `displayMetrics` is the window less the navigation bar
+        // and the cutout, and from the metrics after that, where they are the
+        // window. This used to read `getLocationOnScreen`, which agrees with the
+        // others only while the window fills the display: split-screen and
+        // freeform put the origin somewhere else, and the popup then landed off
+        // by however far the window sits from the top left of the screen.
         val location = IntArray(2)
         anchor.getLocationInWindow(location)
+        val rowLocation = IntArray(2)
+        row.getLocationInWindow(rowLocation)
         val at = LongPressPlacement.above(
             anchorLeft = location[0],
             anchorTop = location[1],
@@ -109,7 +119,12 @@ class LongPressPopup(
             popupWidth = popupWidth,
             popupHeight = popupHeight,
             gapPx = dpToPx(4),
-            windowWidthPx = context.resources.displayMetrics.widthPixels,
+            span = LongPressPlacement.span(
+                sdkInt = Build.VERSION.SDK_INT,
+                displayMetricsWidthPx = context.resources.displayMetrics.widthPixels,
+                rowLeftPx = rowLocation[0],
+                rowWidthPx = row.width,
+            ),
         )
 
         popup = PopupWindow(container, popupWidth, popupHeight, true).apply {
