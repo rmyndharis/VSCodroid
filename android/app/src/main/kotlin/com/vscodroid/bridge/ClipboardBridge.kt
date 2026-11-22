@@ -48,9 +48,12 @@ class ClipboardBridge(private val context: Context) {
      * is the thing that makes `coerceToText` a provider read, so the URI is what
      * has to be tested.
      *
-     * What the coercion still buys is a styled or HTML clip, whose plain text it
-     * renders and whose text field can be absent; such a clip carries no URI, so it
-     * is unaffected. [hasClipboardText] asks the same question of the same clip,
+     * What the coercion still does, for a text clip with no text and no URI, is an
+     * Intent clip: its description is `text/vnd.android.intent`, which the `text/`
+     * wildcard matches, and `coerceToText` writes the Intent out as an `intent:` URI, so that
+     * string is what pastes. With no Intent either it returns the empty string. It
+     * renders no HTML: an HTML or styled clip's plain text is its own text field,
+     * read above. [hasClipboardText] asks the same question of the same clip,
      * because the two disagreeing is what let the guard say "no text here" while
      * the read returned a file.
      */

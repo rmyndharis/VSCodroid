@@ -65,6 +65,15 @@ private const val KEYGEN_TIMEOUT_SECONDS = 4L
 
 private val PRIVATE_KEY_MODE = setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE)
 
+/** The name a generation's temporary directory under `filesDir` starts with. */
+private const val KEYGEN_STAGE_PREFIX = ".ssh-keygen-"
+
+/**
+ * The largest file the SSH key methods read as a public key. OpenSSH's largest, a 16384-bit RSA
+ * key, is under 3 KiB with its comment.
+ */
+private const val PUBLIC_KEY_MAX_BYTES = 64 * 1024
+
 // The app's umask drops the group and other bits again, as it did for ssh-keygen writing here directly.
 private val PUBLIC_KEY_MODE = PRIVATE_KEY_MODE + setOf(PosixFilePermission.GROUP_READ, PosixFilePermission.OTHERS_READ)
 
@@ -1468,12 +1477,14 @@ class AndroidBridge(
             val homeDir = "${context.filesDir}/home"
             val sshDir = File(homeDir, ".ssh")
             sshDir.mkdirs()
+            sweepAbandonedKeygenStages()
             val keyFile = File(sshDir, "id_ed25519")
             val pubFile = File("${keyFile.absolutePath}.pub")
 
             // Existing private keys must never be replaced, even if their public file is missing.
-            if (keyFile.exists() && pubFile.isFile) {
-                val pubKey = pubFile.readText().trim()
+            val existingPublic = if (keyFile.exists()) readPublicKeyFile(pubFile) else null
+            if (existingPublic != null) {
+                val pubKey = existingPublic.trim()
                 result.put("success", true)
                 result.put("publicKey", pubKey)
                 result.put("existed", true)
@@ -1500,7 +1511,7 @@ class AndroidBridge(
             }
 
             val keyComment = if (comment.isBlank()) "vscodroid@android" else comment
-            val temporary = Files.createTempDirectory(context.filesDir.toPath(), ".ssh-keygen-").toFile()
+            val temporary = Files.createTempDirectory(context.filesDir.toPath(), KEYGEN_STAGE_PREFIX).toFile()
             stage = temporary
             val stagedKey = File(temporary, "id_ed25519")
             val stagedPublic = File(temporary, "id_ed25519.pub")
@@ -1622,6 +1633,54 @@ class AndroidBridge(
         }
     }
 
+    /**
+     * Removes what an earlier generation left in `filesDir/.ssh-keygen-*`. A process that died
+     * while ssh-keygen ran, or a child that could not be stopped, leaves its stage behind with a
+     * private key and no passphrase in it, and nothing else ever looks there. Run before a new
+     * stage is made, from the bridge thread every generation runs on, so a stage found here is not
+     * one in use. A link with the prefix is removed, never followed.
+     */
+    private fun sweepAbandonedKeygenStages() {
+        val leftovers = context.filesDir.listFiles { f -> f.name.startsWith(KEYGEN_STAGE_PREFIX) } ?: return
+        for (stage in leftovers) {
+            try {
+                val path = stage.toPath()
+                if (Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)) {
+                    Files.newDirectoryStream(path).use { entries -> entries.forEach { Files.deleteIfExists(it) } }
+                }
+                Files.deleteIfExists(path)
+            } catch (e: Exception) {
+                Logger.w(tag, "Could not remove an abandoned SSH key stage: ${e.javaClass.simpleName}")
+            }
+        }
+    }
+
+    /**
+     * The text of a public key file, or null when [file] is not a regular file or is larger than
+     * [PUBLIC_KEY_MAX_BYTES].
+     *
+     * The SSH key methods run on the bridge thread, which clipboard, storage and toolchain calls
+     * queue behind, and they used to read whatever carried a key's name: a FIFO named `x.pub` held
+     * the open until something wrote to it, which nothing does, and a device or a huge file was read
+     * whole. A link is still followed, because a key kept elsewhere and linked into `~/.ssh` is a
+     * key; what it names has to be a regular file. The type is asked before the open, so only a
+     * file swapped in between, by the app's own processes, could still block it.
+     */
+    private fun readPublicKeyFile(file: File): String? {
+        val path = file.toPath()
+        if (!Files.isRegularFile(path)) return null
+        Files.newInputStream(path).use { input ->
+            val buffer = ByteArray(PUBLIC_KEY_MAX_BYTES + 1)
+            var read = 0
+            while (read < buffer.size) {
+                val n = input.read(buffer, read, buffer.size - read)
+                if (n < 0) break
+                read += n
+            }
+            return if (read > PUBLIC_KEY_MAX_BYTES) null else String(buffer, 0, read, Charsets.UTF_8)
+        }
+    }
+
     private fun stopSshKeygen(process: Process): Boolean {
         var interrupted = Thread.interrupted()
         try {
@@ -1648,13 +1707,19 @@ class AndroidBridge(
 
     /**
      * Reads the SSH public key (~/.ssh/id_ed25519.pub).
-     * Returns the key contents or empty string if not found.
+     * Returns the key contents, or an empty string when there is no such file, it cannot be read,
+     * or it is not one [readPublicKeyFile] reads.
      */
     @JavascriptInterface
     fun getSshPublicKey(authToken: String): String {
         if (!security.validateToken(authToken)) return ""
         val pubKeyFile = File("${context.filesDir}/home/.ssh/id_ed25519.pub")
-        return if (pubKeyFile.exists()) pubKeyFile.readText().trim() else ""
+        return try {
+            readPublicKeyFile(pubKeyFile)?.trim() ?: ""
+        } catch (e: Exception) {
+            Logger.d(tag, "Failed to read the SSH public key: ${e.javaClass.simpleName}")
+            ""
+        }
     }
 
     /**
@@ -1684,9 +1749,10 @@ class AndroidBridge(
         val pubFiles = allFiles.filter { f -> f.name.endsWith(".pub") }
         for (pubFile in pubFiles) {
             try {
-                // The type only, so the comment that follows it is never read.
-                val content = pubFile.readText().trim()
-                val parts = content.split(" ", limit = 2)
+                // The type only, the first word of the first line, so the comment that follows
+                // it is never reported.
+                val content = readPublicKeyFile(pubFile) ?: continue
+                val parts = content.trim().lineSequence().first().split(" ", limit = 2)
                 keys.put(JSONObject().apply {
                     put("name", pubFile.name.removeSuffix(".pub"))
                     put("type", if (parts.isNotEmpty()) parts[0] else "unknown")

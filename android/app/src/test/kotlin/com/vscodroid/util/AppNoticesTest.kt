@@ -91,7 +91,7 @@ class AppNoticesTest {
         assertEquals(4, toastDisplayWidth("中文"))
         // CJK Extension B supplementary plane (U+20000) is 1 code point in UTF-16 surrogate pair, width 2.
         assertEquals(2, toastDisplayWidth("\uD840\uDC00"))
-        // Ordinary emoji (U+1F600) is outside the CJK wide ranges, counted as 1 like ToastLengthTest.
+        // Ordinary emoji (U+1F600) is outside the CJK wide ranges, counted as 1.
         assertEquals(1, toastDisplayWidth("\uD83D\uDE00"))
         assertTrue(isWideToastCodePoint('字'.code))
         assertTrue(isWideToastCodePoint('Ａ'.code))
@@ -121,6 +121,25 @@ class AppNoticesTest {
         assertTrue(fitsInToast("a".repeat(75), fontScale = 0f, sdkInt = 33))
         assertTrue(fitsInToast("a".repeat(75), fontScale = Float.NaN, sdkInt = 33))
         assertFalse(fitsInToast("a".repeat(76), fontScale = 0f, sdkInt = 33))
+    }
+
+    /**
+     * A line break starts a new line of the pill whatever room the line before it had left, so a
+     * text is measured line by line. Counted as one narrow unit, two notices joined by a blank line
+     * measured as one short line, and the toast that joins them showed the first alone while its
+     * count said nothing was missing.
+     */
+    @Test
+    fun `fitsInToast counts the lines a line break starts`() {
+        assertTrue(fitsInToast("First line\nSecond line", fontScale = 1.0f, sdkInt = 31))
+        assertFalse(fitsInToast("A\n\nB", fontScale = 1.0f, sdkInt = 31), "three lines in a two-line toast")
+        assertFalse(
+            fitsInToast("a".repeat(40) + "\nb", fontScale = 1.0f, sdkInt = 31),
+            "a first line that wraps leaves no room for a second",
+        )
+        assertTrue(fitsInToast("a".repeat(37) + "\nb", fontScale = 1.0f, sdkInt = 31))
+        assertTrue(fitsInToast("A\n\nB", fontScale = 1.0f, sdkInt = 30), "below Android 12 a toast wraps")
+        assertEquals("(+1) A\n\nB", noticesToast(listOf("A", "B"), 0) { fitsInToast(it, 1f, 31) })
     }
 
     @Test
@@ -162,6 +181,78 @@ class AppNoticesTest {
         coordinator.enqueueAndShow("Fresh notice", host)
         assertEquals(2, host.createdWindows.size)
         assertEquals("Fresh notice", host.createdWindows[1].text)
+    }
+
+    /**
+     * What waits for a notice dialog: the editor's start on the splash screen, whose finish would
+     * take the dialog down unread. It runs when the dialog closes, whoever closes it, and only then.
+     */
+    @Test
+    fun `an action waits for the open dialog and runs once it is closed`() {
+        val host = FakeNoticeHost()
+        val coordinator = NoticeDialogCoordinator()
+        var ran = 0
+
+        assertFalse(coordinator.afterDialog { ran += 1 }, "with no dialog open there is nothing to wait for")
+        assertEquals(0, ran, "an action with nothing to wait for is the caller's to run, not the coordinator's")
+
+        coordinator.enqueueAndShow("First long notice", host)
+        assertTrue(coordinator.afterDialog { ran += 1 })
+        coordinator.enqueueAndShow("Second long notice", host)
+        assertEquals(0, ran, "the action ran while the dialog was still open")
+
+        host.createdWindows.single().simulateUserDismiss()
+        assertEquals(1, ran)
+
+        coordinator.enqueueAndShow("Later notice", host)
+        host.createdWindows.last().simulateUserDismiss()
+        assertEquals(1, ran, "an action ran a second time, for a dialog it was not waiting on")
+    }
+
+    @Test
+    fun `an action waiting on a dialog the coordinator closes still runs`() {
+        val host = FakeNoticeHost()
+        val coordinator = NoticeDialogCoordinator()
+        var ran = 0
+        coordinator.enqueueAndShow("Slow start", host, topic = "slow")
+        assertTrue(coordinator.afterDialog { ran += 1 })
+
+        coordinator.retractTopic("slow")
+
+        assertEquals(1, host.createdWindows.single().dismissCount)
+        assertEquals(1, ran, "a dialog taken back left what waited on it waiting for ever")
+
+        // The other close of the coordinator's own: what is left on the dialog is a notice another
+        // screen has shown meanwhile, so the next start takes it off and closes the dialog.
+        val spent = mutableSetOf<String>()
+        val keyed = NoticeDialogCoordinator(onceKeys = spent)
+        keyed.enqueueAndShow("Taken back", host, topic = "gone")
+        keyed.holdOnce("Shown elsewhere", "once")
+        keyed.retractTopic("gone")
+        val window = host.createdWindows.last()
+        assertTrue(window.isShowing)
+        assertTrue(keyed.afterDialog { ran += 1 })
+        spent += "once"
+
+        keyed.flush(host)
+
+        assertEquals(1, window.dismissCount, "the dialog left with nothing on it was not closed")
+        assertEquals(2, ran, "a dialog closed at the start left what waited on it waiting for ever")
+    }
+
+    @Test
+    fun `a screen going away ends what waited on its dialog without running it`() {
+        val host = FakeNoticeHost()
+        val coordinator = NoticeDialogCoordinator()
+        var ran = 0
+        coordinator.enqueueAndShow("Long notice", host)
+        assertTrue(coordinator.afterDialog { ran += 1 })
+
+        coordinator.drop(host)
+        coordinator.enqueueAndShow("A notice after", host)
+        host.createdWindows.last().simulateUserDismiss()
+
+        assertEquals(0, ran, "the action of a screen that went away ran at the next dialog's close")
     }
 
     @Test

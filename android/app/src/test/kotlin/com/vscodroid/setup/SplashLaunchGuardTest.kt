@@ -244,6 +244,29 @@ class SplashLaunchGuardTest {
     }
 
     /**
+     * A notice raised while the user was away waits for this screen's next start,
+     * where it goes on a dialog, and the launch held over the same absence finishes
+     * the screen. Replayed first, it took the dialog down before it was drawn, and
+     * the reason for a failed toolchain was never shown whole.
+     *
+     * Source order because `onStart` calls its super first, which a JVM mock of the
+     * framework refuses. NEGATIVE CONTROL: move `AppNotices.flush(this)` below the
+     * replay and this reddens.
+     */
+    @Test
+    fun `the notices held while away go up before the held launch is replayed`() {
+        val onStart = code(SourceScan.body(source, "override fun onStart("))
+        val flush = onStart.indexOf("AppNotices.flush(this)")
+        val replay = onStart.indexOf("if (launchPending) {")
+
+        assertTrue(
+            flush in 0 until replay,
+            "onStart replays the held launch before it shows the notices held while the user " +
+                "was away, so the screen finishes under a dialog nobody has seen",
+        )
+    }
+
+    /**
      * The queue that outlives the screen must not depend on when the collector
      * runs.
      *
@@ -331,7 +354,7 @@ class SplashLaunchGuardTest {
     fun `a confirmation this screen cannot put ends the pack instead of waiting`() {
         val body = code(SourceScan.body(source, "private fun handleDownloadState("))
         assertFalse(
-            "private fun launchMain" in body,
+            "private fun askForCellularConfirmation" in body,
             "the body ran past handleDownloadState and swallowed what follows it, so the " +
                 "assertions below are really a file-wide search",
         )
