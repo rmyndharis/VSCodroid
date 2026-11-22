@@ -2246,10 +2246,12 @@ class FirstRunSetup(
      * `if (bashrc.exists())`. Deleting the file would have turned a truncated
      * one into no file at all, with nothing to write it again.
      *
-     * Which is why nothing here deletes. It does now CREATE, in the one case
+     * Which is why nothing here deletes. It does now CREATE, in the two cases
      * where there is nothing of the user's to protect: a `.bashrc` that is gone
      * rather than short, and only once `home/` itself is there, because before
-     * the first extraction has made it the write cannot do anything but fail.
+     * the first extraction has made it the write cannot do anything but fail;
+     * and the file a settings.json link names when that file has gone (a plain
+     * settings.json that is gone is not made again here).
      * That was the same dead end from the other direction: every writer keyed on
      * the file being there, so `rm ~/.bashrc` was permanent until the next app
      * update, and it is why this method reads `isFile` and `exists()` separately
@@ -2421,6 +2423,7 @@ class FirstRunSetup(
         }
 
         val settings = File(Environment.getMachineSettingsPath(context))
+        val linkedSettingsGone = Files.isSymbolicLink(settings.toPath()) && !settings.exists()
         if (settings.isFile && settings.length() == 0L) {
             // Replaced rather than deleted and rewritten, for the reason above.
             // Deleting a zero-byte file frees nothing, so the disk that emptied
@@ -2436,6 +2439,24 @@ class FirstRunSetup(
                     "Could not rewrite the empty settings.json. It is still there rather than " +
                         "gone, so the next launch tries again.",
                 )
+            }
+        } else if (linkedSettingsGone && !legacySettingsFile().exists()) {
+            // A link to a settings file that has gone, met as the .bashrc arm above meets one,
+            // and written through for the same reason. Setup leaves such a link as it is when
+            // the folder it points into has gone too (createDefaultSettings), and every
+            // per-launch writer of this file returns on its absence, so once the folder came
+            // back without the file the install had no terminal profile, no git.path, no
+            // claudeProcessWrapper and no verifySignature until the next update. A file at
+            // the legacy path is left to migrateSettingsToMachinePath, which runs after this
+            // and moves the person's own settings in through the link; defaults written here
+            // first would leave them behind for good.
+            val written = runCatching { writeDefaultSettings() }
+                .onFailure { Logger.e(tag, "The settings.json rewrite threw", it as? Exception) }
+                .getOrDefault(false)
+            if (written) {
+                Logger.i(tag, "Wrote the file a settings.json link names, which had gone")
+            } else {
+                Logger.w(tag, LINKED_SETTINGS_UNWRITTEN)
             }
         }
     }
@@ -3295,7 +3316,7 @@ claude() {
      * been in use.
      */
     private fun migrateSettingsToMachinePath() {
-        val legacy = File(context.filesDir, "home/.vscodroid/User/settings.json")
+        val legacy = legacySettingsFile()
         val current = File(Environment.getMachineSettingsPath(context))
         if (current.exists() || !legacy.exists()) return
 
@@ -3310,8 +3331,10 @@ claude() {
         // error either -- it reads it as the settings -- so the loss is silent.
         // Failing outright instead leaves the original in place and lets the
         // next launch, with room, finish the move.
+        // Through a link at the destination, as every writer of this file goes: replaced, a link to a settings
+        // file the person keeps elsewhere was lost.
         val copied = legacy.inputStream().use { source ->
-            writeAtomically(current) { source.copyTo(it) }
+            writeAtomically(current, throughLink = true) { source.copyTo(it) }
         }
         if (copied && legacy.delete()) {
             Logger.i(tag, "Moved settings.json to the path the workbench reads")
@@ -3319,6 +3342,9 @@ claude() {
             Logger.e(tag, "Could not move settings.json to ${current.absolutePath}")
         }
     }
+
+    /** Where this app wrote settings.json before the workbench's machine path; see [migrateSettingsToMachinePath]. */
+    private fun legacySettingsFile() = File(context.filesDir, "home/.vscodroid/User/settings.json")
 
     private fun createWelcomeProject() {
         val projectsDir = File(Environment.getProjectsDir(context))
@@ -3542,9 +3568,10 @@ claude() {
             // claudeProcessWrapper and no verifySignature until the app
             // updates -- reported to the user as a successful first run.
             if (!writeDefaultSettings()) {
-                // Not for a link into a folder that has gone, for the reason createBashrc gives.
+                // Not for a link into a folder that has gone, for the reason createBashrc gives:
+                // the launch repair writes through it once the folder is back (repairTruncatedSetupFiles).
                 if (!Files.isSymbolicLink(settingsFile.toPath())) throw IOException("could not write $settingsFile")
-                Logger.w(tag, "Could not write the file a settings.json link names, and left the link as it is")
+                Logger.w(tag, LINKED_SETTINGS_UNWRITTEN)
                 return
             }
             // This document is ours and was written a line ago, so it holds none
@@ -5199,6 +5226,11 @@ claude() {
 private const val LINKED_BASHRC_UNWRITTEN =
     "Could not write the file a .bashrc link names, and left the link as it is; " +
         "the terminal starts without this app's setup until that file can be written"
+
+/** Said when the file a settings.json link names cannot be written, which leaves the editor without this app's settings. */
+private const val LINKED_SETTINGS_UNWRITTEN =
+    "Could not write the file a settings.json link names, and left the link as it is; " +
+        "the editor runs without this app's machine settings until that file can be written"
 
 /**
  * The first line of every `.bashrc` this app writes.

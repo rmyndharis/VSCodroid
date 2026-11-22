@@ -431,7 +431,7 @@ jobs:
 
       # Also in lint.yml, and here for the reason the block's header gives: a tag
       # may name a commit that reached neither pull_request nor push to main, and
-      # this was the one committed-source check such a tree could skip. The set
+      # this was a committed-source check such a tree could skip. The set
       # build.yml runs is held to a subset of this block by check-build-steps.py;
       # lint.yml's set is not, so the omission was silent rather than caught.
       - name: Check the tree writes plain punctuation
@@ -446,6 +446,14 @@ jobs:
       # is being acted on.
       - name: Check the instrumented suite matches what documents it
         run: python3 scripts/check-instrumented-inventory.py
+
+      # Also in lint.yml, and here for the reason the block's header gives. The
+      # self-test hands it the broken shapes, so a refusal that stopped firing
+      # cannot pass the tree.
+      - name: Check every Markdown table is drawn as written
+        run: |
+          python3 scripts/check-markdown-tables.py --self-test
+          python3 scripts/check-markdown-tables.py
 
       # This job runs Gradle four times, so it is a place the wrapper actually
       # downloads a distribution. Presence only: a sum that is present and wrong

@@ -829,14 +829,20 @@ __vscodroid_pip_note() {
         assertTrue(setup.contains("File(context.filesDir, \"usr/etc/npmrc\")"), "the global file moved")
     }
 
+    /**
+     * Every name the source gives the machine settings file, not only `settingsFile`: the move from the legacy path
+     * calls it `current`, and a count by one name passed while that writer replaced the link.
+     */
     @Test
     fun `every writer of the settings writes through a link`() {
         val source = com.vscodroid.SourceScan.read("src/main/kotlin/com/vscodroid/setup/FirstRunSetup.kt")
-        val writers = Regex("""writeAtomically\(settingsFile\b""").findAll(source).count()
-        val through = Regex("""writeAtomically\(settingsFile, throughLink = true\)""").findAll(source).count()
+        val names = Regex("""val (\w+) = File\(Environment\.getMachineSettingsPath\(context\)\)""")
+            .findAll(source).map { it.groupValues[1] }.toSet()
+        val writers = names.sumOf { Regex("""writeAtomically\($it\b""").findAll(source).count() }
+        val through = names.sumOf { Regex("""writeAtomically\($it, throughLink = true\)""").findAll(source).count() }
 
-        assertTrue(writers > 0 && writers == through) {
-            "$writers writers of the settings, $through of them write through a link"
+        assertTrue("settingsFile" in names && writers > 0 && writers == through) {
+            "$writers writers of the settings under $names, $through of them write through a link"
         }
     }
 

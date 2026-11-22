@@ -128,13 +128,15 @@ JavaScript runtime` step of `lint.yml`, and again in `release.yml`, on Node 24,
 the major the APK ships (`check-build-steps.py` holds the pins there). `lint.yml`
 also runs the `--self-test` entry points of `check-workflow-steps.py`,
 `verify-android-elf.py`, `verify-server-tree.py`, `check-patch-fingerprints.py`,
-`check-editcontext-sync.py`, `check-asset-table.py`, `patch-venv-home.py`,
-`gen-glibc-forwarders.py` and `check-markdown-tables.py`, which hand each gate the
-input it exists to refuse, since no file in the tree can. `check-editcontext-ime.js`
+`check-editcontext-sync.py`, `check-asset-table.py`, `patch-venv-home.py` and
+`gen-glibc-forwarders.py`, which hand each gate the input it exists to refuse,
+since no file in the tree can. `check-editcontext-ime.js`
 is not in that step: it reads Code - OSS source with every patch applied, so the
 server build runs it, beside `check-editcontext-sync.py`, and a pull request that
 changes a patch meets it there. It needs the transform mode of Node's `module.stripTypeScriptTypes`,
-which Node 22.23 and 24.18 have and Node 26.11 does not.
+which Node 22.23 and 24.18 have and Node 26.11 does not. `check-markdown-tables.py`
+runs its `--self-test` in its own step, before the check, in `lint.yml` and in
+`release.yml`.
 
 **What is enforced**: the suites themselves. A single failing test fails the job.
 No workflow reads a coverage figure, no threshold exists, and none is planned.

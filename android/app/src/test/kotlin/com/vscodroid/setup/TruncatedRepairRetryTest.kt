@@ -34,7 +34,7 @@ import java.nio.file.Paths
  * failing is not an exotic case here, it is the expected one, and until now it
  * was the one path that could make the install permanently worse: the file was
  * deleted first to satisfy the writers' `!exists()` guards, and a rewrite that
- * then failed left nothing. Absence is outside the repair's own re-entry test,
+ * then failed left nothing. Absence was outside the repair's own re-entry test,
  * outside every per-launch appender (`createNpmWrappers`,
  * `ensureToolchainEnvSourcing`, `ensurePromptFix`, `ensureStartupDirGuard`,
  * `updateSettingsNativeLibPaths`, all `exists()`-gated) and outside
@@ -528,12 +528,16 @@ class TruncatedRepairRetryTest {
 
     /**
      * Setup's own writers meet the same link on the first launch after an update. Throwing there stops setup on
-     * every update for as long as the folder is away, and writing over the link loses it.
+     * every update for as long as the folder is away, and writing over the link loses it. A launch while the folder
+     * is away writes nothing and says no error; the first launch after it is back writes both files through their
+     * links, or the install ran without its shell setup and its machine settings (the terminal profile, git.path,
+     * claudeProcessWrapper) until the next update.
      */
     @Test
     fun `setup leaves rc links whose folders have gone as they are and carries on`() {
         Files.createSymbolicLink(bashrc.toPath(), Paths.get("../projects/dotfiles/bashrc"))
-        Files.createSymbolicLink(settings.toPath(), File(filesDir, "projects/dotfiles/settings.json").toPath())
+        val settingsTarget = File(filesDir, "projects/dotfiles/settings.json")
+        Files.createSymbolicLink(settings.toPath(), settingsTarget.toPath())
         val setup = FirstRunSetup(context)
 
         for (writer in listOf("createBashrc", "createDefaultSettings")) {
@@ -543,5 +547,24 @@ class TruncatedRepairRetryTest {
         assertTrue(Files.isSymbolicLink(bashrc.toPath()), "the .bashrc link was replaced by a copy")
         assertTrue(Files.isSymbolicLink(settings.toPath()), "the settings link was replaced by a copy")
         assertFalse(File(filesDir, "projects/dotfiles").exists(), "the folder the person moved was made again")
+
+        setup.repairTruncatedSetupFiles()
+
+        assertFalse(File(filesDir, "projects/dotfiles").exists(), "a launch made the folder the person moved again")
+        verify(exactly = 0) { Logger.e(any(), any(), any()) }
+
+        File(filesDir, "projects/dotfiles").mkdirs()
+        setup.repairTruncatedSetupFiles()
+
+        assertTrue(Files.isSymbolicLink(bashrc.toPath()), "the .bashrc link was replaced once its folder was back")
+        assertTrue(Files.isSymbolicLink(settings.toPath()), "the settings link was replaced once its folder was back")
+        assertTrue(
+            File(filesDir, "projects/dotfiles/bashrc").readText().contains("export PROJECTS_DIR"),
+            "the file the .bashrc link names was not written once its folder was back",
+        )
+        assertTrue(
+            settingsTarget.isFile && settingsTarget.readText().contains("terminal.integrated.profiles.linux"),
+            "the file the settings link names was not written once its folder was back",
+        )
     }
 }

@@ -157,12 +157,19 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   time you open it. Where VSCodroid cannot tell such a file from one deleted in
   the device folder, it keeps the file inside VSCodroid rather than put a deleted
   file back, and a notice names the file, or the first of them and how many.
-  That happens when its record of the folder is missing; once, at the first
-  opening of a folder last opened in VSCodroid 1.10.1 or earlier, for a file
-  older than that opening; and while a folder that has been empty at every
-  opening still is, for a file older than the last opening (as `unzip` or
-  `cp -p` leave its time). A file whose save or creation in the editor did not
-  finish is sent. Save a kept file again in the editor to send it.
+  That happens when its record of the folder is missing, and while a folder
+  that has been empty at every opening still is, for a file older than the last
+  opening (as `unzip` or `cp -p` leave its time). It also happens once after
+  an update from VSCodroid 1.10.1 or earlier: when a folder is opened for the
+  first time since (or, if that opening cannot list the whole folder, the first
+  time it can), a file that exists only in VSCodroid's copy, that has not changed
+  since VSCodroid last opened the folder or last sent a save to it, and that the
+  device folder does not list is kept inside VSCodroid, not sent, because it may
+  be a document someone deleted on the device. A file whose save or creation in
+  the editor did not finish is sent. Save a kept file again in the editor to
+  send it. In a folder with more than about 2,000 subfolders (not counting
+  folders such as `.git` and `node_modules`, which stay inside VSCodroid), a
+  save in the subfolders furthest down is sent at the next opening, not at once.
 - Device-folder copies stay inside VSCodroid after their folder permission is
   removed. Use **VSCodroid: Manage Device Folder Storage** to see and remove them.
   Copies may contain files that never reached the device folder. Save anything
@@ -1828,6 +1835,8 @@ If `node`, `python3`, `git`, or other tools show "command not found":
 1. Open a new terminal tab. PATH is set up when a new bash session starts.
 2. Verify the tool exists: `ls -la $(which node)` (should point to the bundled binary).
 3. If the issue persists, close the app completely and reopen.
+
+When `~/.bashrc` is a link to a file that does not exist, in a folder that does, VSCodroid creates that file with its own setup at the next launch; make the file exist with your own text to keep it.
 
 ### Permission Denied on a File in Downloads
 
