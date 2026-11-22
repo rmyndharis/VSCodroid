@@ -42,9 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A folder moved out of a device folder's copy is no longer taken for the rename of an unrelated folder arriving within the same second, which wrote the arriving folder's files over the device's copies of the departed one's.
 - Renaming a folder no longer writes a file in it again that you have not changed since it was sent, a leftover of an earlier rename that gave way to another onto the same name.
 - After the screen is turned, a letter that a keyboard that underlines words writes over the last letter of a word is typed at the caret also when either letter has an accent, such as é over o, instead of replacing that letter.
-- After the screen is turned, the next letter that a keyboard that underlines words sends over the same word as the letter before it, before the caret moves, is typed at the caret too, instead of replacing the word.
-- A keyboard that sends the same stale letter after every restart of input has the seventh typed at the caret like the six before it, instead of written over the word.
-- A word before a single space that a keyboard that underlines words grows by a letter, such as `the` to `then`, takes the letter instead of having it typed after the space.
+- After the screen is turned, a single letter that a keyboard that underlines words sends over the same word as the letter before it, while the caret is where that letter left it, is typed at the caret too, instead of replacing the word.
+- A keyboard that sends the same stale letter after every restart of input has the seventh typed at the caret like the six before it, instead of written over the word, so one key leaves seven copies of its letter.
+- A word before a single space that a keyboard that underlines words grows by a letter, such as `the` to `then`, takes the letter instead of having it typed after the space; a stale write that grows that word now goes into it too.
 - A correction that a keyboard that underlines words takes back, such as `you` back to `u` after its space is deleted, is applied instead of typing the letter after the word.
 - A save still queued or still arriving when a device folder is closed shows the notice that the only copy is inside VSCodroid, instead of only a log line.
 - Saves inside a renamed folder that the device stored under a name the copy could not take show the same notice instead of none.

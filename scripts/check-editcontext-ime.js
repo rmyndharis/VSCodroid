@@ -45,10 +45,10 @@
  * afterwards. That holds for what follows a refusal as well: the two cases named "as
  * recorded" replay what Gboard sent after the restart a refusal forced, and the two named
  * "a keyboard that goes on with the range" replay one that did not read the text again,
- * which neither Gboard recorded did. So do the cases that send the next letter or a Backspace over
- * the range of a stale letter, and no recording holds a correction taken back either, nor a step
- * of a keyboard of another script on a reopened letter: those cases state what the editor does if
- * a keyboard sends that.
+ * which neither Gboard recorded did. So do the cases that send the next letter, a Backspace or a
+ * correction over the range of a stale letter, and no recording holds a correction taken back
+ * either, nor a step of a keyboard of another script on a reopened letter: those cases state what
+ * the editor does if a keyboard sends that.
  *
  * 0052, 0053 and 0054 are reached without their widgets. `_onListTap` runs on an object
  * that has the three members it reads, and `SuggestModel` is built on an editor made of
@@ -56,7 +56,7 @@
  * a quick suggestion by another.
  *
  * NEGATIVE CONTROL, measured on the 1.139.1 tree with Node 22.23.2. Against upstream's
- * files, with no patch applied, 178 of the 195 cases fail. Each of these single edits to a
+ * files, with no patch applied, 189 of the 206 cases fail. Each of these single edits to a
  * copy of a patched file fails at least one case:
  *
  *   0046  the body of the blur listener removed; the composing clause dropped from the
@@ -92,10 +92,14 @@
  *         after the written text; the version the count belongs to not taken over after a
  *         stale letter; the range of a stale letter not kept, or the next update over it taken without
  *         the model's version, the caret the letter left (or with a caret that is never the
- *         caret's), its start, its end, the range's own text before the letter or the letter
+ *         caret's), its start, its end, the caret it asks for collapsed (or tested at its end
+ *         alone) and right after what it writes (or after one unit, or at the range's end), the
+ *         range's own text before the letter or the letter
  *         test, or with a Backspace on a word of two letters taken for a letter, any text that
  *         starts the range's text taken for that Backspace, the two letters counted in UTF-16
- *         units, or the test that the text starts the range's text removed; the range's own text
+ *         units, or the test that the text starts the range's text removed; that Backspace told
+ *         by the range's text when the letter was typed alone, by the text it holds now alone,
+ *         or by the buffer's text after the update; the range's own text
  *         read from the buffer as it is when the next update comes, or as the letter left it;
  *         `_takesBackReplacement` not called, or without the model's version, the text
  *         replaced, the start, the buffer's text of the range or its test for a text that starts
@@ -1792,7 +1796,8 @@ check('0050 a growth of the word under the caret is typing and is applied', asyn
     return [p.state(), applied('tob toe', 7)];
 });
 // Past the bound a stale letter is still typed at the caret, which is not the input that does nothing the bound is for, and no restart
-// is forced for it: a keyboard that answers every restart with the same stale write is not asked to read the text again.
+// is forced for it: a keyboard that answers every restart with the same stale write is not asked to read the text again. What it
+// costs: such a keyboard has the letter of one key typed seven times.
 check('0050 bound: six stale letters are typed for one run of refusals, and the seventh is typed as well with no restart forced', async () => {
     const p = page('line two', [8]);
     for (let i = 0; i < 7; i++) {
@@ -1919,7 +1924,7 @@ check('0050 after a stale letter, a letter over that range once the model has ch
     await p.update('y', 5, 8);
     return [p.state(), applied('line yxw', 6, 1)];
 });
-// The range is offsets in the buffer the keyboard last read, and a keyboard is told when the caret moves: once it has moved, an
+// The range is offsets in the buffer the keyboard last read, and a keyboard is told when the caret moves: while it is elsewhere, an
 // update that names the range again comes from a keyboard that knows where the caret is, and the same offsets can name another
 // word or another line. Nor is a Backspace on a word of two letters a letter, there as anywhere else in the patch.
 check('0050 after a stale letter, a Backspace on the earlier word tapped at its end deletes a letter there', async () => {
@@ -1949,6 +1954,14 @@ check('0050 after a stale letter, a letter typed at the end of the earlier word 
     await p.compose();
     await p.update('top', 4, 6);
     return [p.state(), { text: 'tob top tod toe', carets: [7], restarts: 1 }];
+});
+check('0050 after a stale letter, a word of one letter picked over the earlier word tapped at its end, with no composition open, is applied', async () => {
+    const p = page('tob to tod to', [13]);
+    await p.compose();
+    await p.update('toe', 4, 6);
+    await p.tap(6);
+    await p.update('I', 4, 6);
+    return [p.state(), { text: 'tob I tod toe', carets: [5], restarts: 1 }];
 });
 check('0050 after a stale letter over a word of two letters, a Backspace on the next line at the same offsets deletes a letter there', async () => {
     const p = page('go\nat', [2]);
@@ -2003,6 +2016,105 @@ check('0050 after a stale letter, a letter over that range once an edit elsewher
     await p.update('y', 5, 8);
     return [p.state(), applied('line yx\nabc!', 6, 1)];
 });
+// A keyboard that goes on with the range sends the next letter the way it sent the stale one, with the caret asked right after
+// what it writes. An update of the same range that asks for the caret anywhere else is not that letter: a correction of the
+// earlier word asks for the caret moved by the change in length, and is applied as the honest update it is.
+check('0050 after a stale letter, a correction of the earlier word over its range, the caret moved by the change in length, is applied', async () => {
+    const p = page('tob to tod to', [13]);
+    await p.compose();
+    await p.update('toe', 4, 6);
+    await p.compose();
+    await p.update('top', 4, 6, 15);
+    return [p.state(), { text: 'tob top tod toe', carets: [15], version: 3, restarts: 1 }];
+});
+check('0050 the same with a correction of one letter', async () => {
+    const p = page('tob to tod to', [13]);
+    await p.compose();
+    await p.update('toe', 4, 6);
+    await p.compose();
+    await p.update('I', 4, 6, 13);
+    return [p.state(), { text: 'tob I tod toe', carets: [13], version: 3, restarts: 1 }];
+});
+check('0050 the same correction with no composition open', async () => {
+    const p = page('tob to tod to', [13]);
+    await p.compose();
+    await p.update('toe', 4, 6);
+    await p.update('top', 4, 6, 15);
+    return [p.state(), { text: 'tob top tod toe', carets: [15], version: 3, restarts: 1 }];
+});
+check('0050 after a stale letter, an update over its range that asks for a selection is judged on its own', async () => {
+    const states = [];
+    for (const selection of [[4, 5], [5, 6]]) {
+        const p = page('tob to tod to', [13]);
+        await p.compose();
+        await p.update('toe', 4, 6);
+        await p.compose();
+        await p.update('I', 4, 6, ...selection);
+        const { text, carets, restarts } = p.state();
+        states.push({ text, carets, restarts });
+    }
+    return [states, [{ text: 'tob I tod toe', carets: [13], restarts: 1 }, { text: 'tob I tod toe', carets: [13], restarts: 1 }]];
+});
+check('0050 after a stale letter, the caret moved away and back with no edit, the next letter over its range is typed at the caret', async () => {
+    const p = page('line two', [8]);
+    await p.compose();
+    await p.update('x', 5, 8);
+    await p.tap(3);
+    await p.tap(9);
+    await p.compose();
+    await p.update('y', 5, 8);
+    return [p.state(), { text: 'line twoxy', carets: [10], version: 3, restarts: 2 }];
+});
+// The letter's own cursor event can start the buffer at the caret's line, and a keyboard that read the text again then names
+// other text with the same offsets. A Backspace is told by the text the range holds now as well as by the text it held when the
+// letter was typed, and a correction by the caret it asks for.
+check('0050 after a stale letter that moved the buffer to the caret line, a Backspace on the word at the caret over the same offsets is applied', async () => {
+    const p = page('xx to', [5]);
+    await p.update('\n', 5, 5);
+    await p.update('zz a', 6, 6);
+    const before = p.state().buffer;
+    await p.compose();
+    await p.update('toe', 3, 5, 6);
+    const moved = p.state().buffer;
+    await p.compose();
+    await p.update('a', 3, 5, 4);
+    return [{ before, moved, ...p.state() }, { before: 'xx to\nzz a', moved: 'zz ae', text: 'xx to\nzz a', carets: [10], version: 5, restarts: 1 }];
+});
+check('0050 the same with a correction of a word at the same offsets, the caret moved by the change in length', async () => {
+    const p = page('to', [2]);
+    await p.update('\n', 2, 2);
+    await p.update('ab two', 3, 3);
+    await p.compose();
+    await p.update('toe', 0, 2, 3);
+    const moved = p.state().buffer;
+    await p.compose();
+    await p.update('i', 0, 2, 6);
+    return [{ moved, ...p.state() }, { moved: 'ab twoe', text: 'to\ni twoe', carets: [9], restarts: 1 }];
+});
+check('0050 after a stale letter that moved the buffer, a Backspace on its word of two letters over the offsets the keyboard kept is not typed as a letter', async () => {
+    const p = page('line one', [8]);
+    await p.update('\n', 8, 8);
+    await p.update('go', 9, 9);
+    await p.compose();
+    await p.update('x', 9, 11, 10);
+    const moved = p.state().buffer;
+    await p.compose();
+    await p.update('g', 9, 11, 10);
+    return [{ moved, ...p.state() }, { moved: 'gox', text: 'line one\ngox', carets: [12], restarts: 2 }];
+});
+// What that costs: a next letter sent over the old offsets whose text starts the two letters the buffer holds there now is taken
+// for that Backspace and judged on its own, so it is applied there: the letter typed before it is deleted and its own is not typed.
+check('0050 known limit: after a stale letter that moved the buffer, a next letter that starts the two letters at the old offsets is taken for a Backspace', async () => {
+    const p = page('', [0]);
+    await p.update('\n', 0, 0);
+    await p.update('ab', 1, 1);
+    await p.compose();
+    await p.update('x', 1, 3, 2);
+    const moved = p.state().buffer;
+    await p.compose();
+    await p.update('b', 1, 3, 2);
+    return [{ moved, ...p.state() }, { moved: 'abx', text: '\nab', carets: [3], restarts: 1 }];
+});
 // A keyboard that commits the word before a single space asks for the caret where it is, after the space: Chromium puts the
 // caret at the end of a commit. The stale growth moves the caret back into the earlier word.
 check('0050 a word before a space grown by a letter, the caret asked where it is, is applied', async () => {
@@ -2016,6 +2128,14 @@ check('0050 the same for a word of two letters grown by its own last letter', as
     await p.compose();
     await p.update('goo', 0, 2, 3);
     return [p.state(), applied('goo ', 3)];
+});
+// What that costs: a stale growth of the word right before a single space asks for the caret where it is too, and goes into
+// that word, where the editor without the rule typed the letter at the caret.
+check('0050 known limit: a stale growth of the word right before a single space goes into that word', async () => {
+    const p = page('to to ', [6]);
+    await p.compose();
+    await p.update('toe', 3, 5, 6);
+    return [p.state(), applied('to toe ', 6)];
 });
 // The keyboard took back a correction the editor applied for it: u corrected to you and a space, the space deleted, and the
 // word reopened and written back as u with the caret after it. That is the one-letter-over-a-word shape, and it is the exact
