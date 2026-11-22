@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - A dotfile or `~/.vscodroid/data/Machine/settings.json` that links into a missing folder is left alone, without the app's text, until a later launch or setup can write it.
-- A one-letter suggestion picked over a word that a keyboard reopened, such as `I` over `is`, is typed after the word instead of replacing it, and picking it again does not change that, because a stale letter from the keyboard looks the same.
+- A one-letter suggestion picked over a word that a keyboard reopened, such as `I` over `is`, is typed after the word on every pick, where from the seventh in a row it replaced the word, because a stale letter from the keyboard looks the same.
 
 ### Fixed
 
@@ -23,10 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A file made or saved in a subfolder just after it is renamed, or a save held back there, is sent under the new name instead of staying inside VSCodroid.
 - A file deleted in a device folder's subfolder just after the subfolder is renamed is deleted on the device too.
 - A folder renamed twice in quick succession, or inside a folder just renamed, ends up on the device under its last name only.
-- Renaming a folder in a device folder no longer sends again files you have not changed since they were sent.
+- Renaming a folder in a device folder no longer sends again files you have not changed since they were sent, a leftover of an earlier rename that gave way to another onto the same name.
 - A folder moved out of a device folder is no longer taken for the rename of an unrelated folder arriving within the same second, which overwrote the departed folder's files on the device.
 - A folder renamed onto an existing empty folder in a device folder is watched under that name, so saves directly inside it reach the device.
-- A folder moved into another folder while a write to the same storage is running is moved whole once that write ends, instead of being dropped with a notice.
+- A folder moved into a folder that reaches the device while a write to the same storage is running is moved whole once that write ends, instead of being dropped with a notice.
 - A folder renamed through a name another folder takes right after ends up on the device whole under its last name, instead of staying under its first name beside a copy without its `.git`.
 - A folder moved into a folder made just before it is moved whole, instead of also being made again from the copy, also when the new folder is renamed right after.
 - Deletes and renames a program makes in a device folder's copy while the folder opens reach the device instead of being undone.
@@ -52,7 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A change of navigation device, night mode or keyboard no longer ends a word being composed in the editor or brings back a keyboard put away just after it.
 - On Android 10 to 14 the extra key row counts the navigation bar and the camera cutout when it measures the page above the keyboard, so it no longer stands down, or stays down, over a page with room for it.
 - On Android 10 to 14 the alternates of a long-pressed key line up with their key when the navigation bar or the camera cutout is on the far side of the screen.
-- After the screen is turned, a keyboard that underlines words no longer replaces the last letter of a word when either letter has an accent, such as é over o: the new letter is typed at the caret.
+- After the screen is turned, a keyboard that underlines words no longer replaces the last letter of a word with another letter when the two differ once accents are ignored, such as é over o: the new letter is typed at the caret.
 - Each further letter such a keyboard sends over the same word after a turn is typed at the caret too, while the caret is where the letter before it left it.
 - A keyboard that keeps sending one stale letter has the seventh typed at the caret like the six before it, instead of over the word, leaving seven copies of the letter.
 - A word before a single space that a keyboard grows by a letter, such as `the` to `then`, takes the letter instead of it landing after the space, though a stale growth now goes into the word too.
@@ -69,7 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `xdg-open` in the terminal reports the editor's error status when the answer is cut short after it, instead of exiting as if the link had opened.
 - Stop Server from the notification no longer freezes the screen for up to a few seconds.
 - The setup notification no longer offers Stop Server, which stopped the service while setup was still unpacking.
-- A toolchain install that finds a file, folder or link in the way of one of its files stops before writing anything and says the install failed, instead of asking for free space.
+- A toolchain install that finds a file, folder or link in the way of one of its files says the install failed, instead of asking for free space; it stops before writing anything, or takes its copy back when a folder holds the name of a command.
 - A toolchain removal that cannot take the files says the removal failed and keeps offering Remove, instead of a Retry that downloads the pack again.
 - Install is no longer ignored after Cancel on a Play download that Play could not cancel, such as one waiting for the mobile-data question.
 - A toolchain install short of space first removes the temporary files a killed copy left and measures again.
@@ -79,9 +79,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A `~/.bashrc`, machine `settings.json` or the app's git configuration left full of NUL bytes is written again at the next launch.
 - A machine `settings.json` that starts with a byte order mark gets the settings the app adds.
 - A download the editor page cannot read, such as one from a webview or a `data:` link, is refused before the save picker opens, instead of failing after you named the file.
-- A projects folder that resolves into `~/.ssh`, `~/.claude` or another location that must stay unreadable, or that a credential link such as `~/.npmrc` points into, is no longer served to webviews.
+- An SSH key generation that was cut short no longer leaves its staging folder, which holds a private key without a passphrase, in the app's storage: the next one removes it.
+- The SSH key list no longer blocks on a public key file that is a FIFO or a device, and skips an oversized one.
+- The server's output is redacted in linear time: a 32,000-character line with a credential-like name no longer holds up the output for about two seconds.
+- An unfinished toolchain reinstall no longer walks the toolchain's whole tree at every launch.
+- A projects folder that resolves into `~/.ssh`, `~/.claude` or another location that must stay unreadable, or that a credential link such as `~/.npmrc` points into, also a link to a file that does not exist yet, is no longer served to webviews; a link made after the editor loaded counts from the next page load.
 - Webviews can no longer read the SSH key, the key to the extension secrets, the WebView's stores or the connection token through a folder written as `/data/data/<package>`.
-- A credential linked into the projects folder after the editor loaded is refused to webviews from the next page load, instead of after the app is next started from scratch.
 - Sizes in translated messages use the language's decimal separator, and French and Russian use their own unit names, such as `Mo` and `МБ`.
 - The Spanish, French, Italian and Portuguese notice for kept device edits says they are the device's edits, and smaller wording slips in other translations are corrected.
 - The tools picture in Get Started shows C/C++ beside Java and Ruby.
