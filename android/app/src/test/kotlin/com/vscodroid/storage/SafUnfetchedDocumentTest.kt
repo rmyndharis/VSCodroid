@@ -1772,10 +1772,10 @@ class SafUnfetchedDocumentTest {
      * on the device reaches it (`createChildrenInSaf` calling `createOneInSaf`). A directory
      * event places no observer here: none is placed while the engine is not watching.
      *
-     * Two guards in the walk answer for the document, the unread-document refusal and the
-     * device-edit check behind it (`keepsDeviceEdit`), and either alone keeps it, so this pins
-     * what the person gets and not which guard gave it: the case below pins that the refusal
-     * is still there.
+     * Two guards in the walk answer for this document, the unread-document refusal and the
+     * device-edit check behind it (`keepsDeviceEdit`), which cannot set aside a document past
+     * [SafSyncEngine.MAX_FILE_SIZE] and holds the save back instead, so this pins what the
+     * person gets and not which guard gave it. The three cases after it pin each refusal.
      */
     @Test
     fun `a file that comes inside a folder moved in is refused over a document the sync never read`() {
@@ -1799,10 +1799,100 @@ class SafUnfetchedDocumentTest {
     }
 
     /**
-     * Each refusal site has another guard behind it, so a case that drives a site cannot tell
-     * which of the two answered: removing any one of the three refusals leaves every case in
-     * this class green, the walk's included. What holds each site to the behaviour above is
-     * that there is one refusal in the file, so this reads the source and pins that.
+     * A document the sync could not read because the provider refused the read, which reads
+     * again by the time the editor writes. The device-edit check behind the refusal would set
+     * it aside as a `.device-` copy and then write over it, so on this path the walk's own
+     * refusal is all that keeps the device's document as it is.
+     */
+    private fun docsWhoseNotesReadsOnlyOnceTheSyncIsOver() {
+        val readable = AtomicBoolean(false)
+        deviceTree(
+            mapOf(
+                "root" to listOf(Entry("docs", isDirectory = true)),
+                "doc:docs" to listOf(Entry("notes.md")),
+            )
+        )
+        every { resolver.openInputStream(any()) } answers {
+            if (!readable.get()) throw IOException("the provider refused the read")
+            ByteArrayInputStream("device contents".toByteArray())
+        }
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        assertFalse(File(mirror, "docs/notes.md").exists(), "setup failed: the sync read the document")
+        readable.set(true)
+    }
+
+    /** The walk's refusal: a folder moved in brings a file over a document whose read failed. */
+    @Test
+    fun `the walk refuses a file over a document whose read failed even once it reads again`() {
+        val announced = mutableListOf<String>()
+        engine.onWriteBackFailed = { announced.add(it.name) }
+        docsWhoseNotesReadsOnlyOnceTheSyncIsOver()
+        val incoming = File(filesDir, "incoming").apply { mkdirs() }
+        File(incoming, "notes.md").writeText("typed into a new file of that name")
+        assertTrue(incoming.renameTo(File(mirror, "docs")), "setup failed: the folder could not be moved in")
+
+        deliver(FileObserver.MOVED_TO or isDirFlag, "docs")
+
+        verify(exactly = 0) { resolver.openOutputStream(any(), any()) }
+        assertEquals(listOf("notes.md"), announced, "the walk wrote over a document the sync never read")
+    }
+
+    /**
+     * The write-back's refusal. When the save was made the device folder did not list the
+     * document, so the event let it through as a new file; by the time the write-back runs the
+     * device lists it again, and it is still one the sync never read. A job outlives the answer
+     * it was queued under, so the write-back asks again, and the device-edit check behind it
+     * would set the document aside and write over it.
+     */
+    @Test
+    fun `a save queued while the device did not list the document is refused once it lists it again`() {
+        val announced = mutableListOf<String>()
+        engine.onWriteBackFailed = { announced.add(it.name) }
+        val readable = AtomicBoolean(false)
+        val listed = mapOf("root" to listOf(Entry("notes.md")))
+        deviceTree(listed)
+        every { resolver.openInputStream(any()) } answers {
+            if (!readable.get()) throw IOException("the provider refused the read")
+            ByteArrayInputStream("device contents".toByteArray())
+        }
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        assertFalse(File(mirror, "notes.md").exists(), "setup failed: the sync read the document")
+        File(mirror, "notes.md").writeText("typed into a new file of that name")
+
+        deviceTree(mapOf("root" to emptyList()))
+        engine.handleMirrorEvent(FileObserver.MODIFY, File(mirror, "notes.md"), mirror, treeUri)
+        assertEquals(1, engine.session.queue.size, "setup failed: the save was not queued")
+        deviceTree(listed)
+        readable.set(true)
+        engine.runWriteBackLoop { false }
+
+        verify(exactly = 0) { resolver.openOutputStream(any(), any()) }
+        assertEquals(listOf("notes.md"), announced, "the write-back wrote over a document the sync never read")
+    }
+
+    /**
+     * The event's refusal, which is made as the save arrives and queues nothing. A job left
+     * queued is a write waiting for a later answer, which the case above shows can differ from
+     * the one at the event; the person is also told at once rather than when the queue drains.
+     */
+    @Test
+    fun `a save over a document the sync never read is refused as it arrives and queues nothing`() {
+        val announced = mutableListOf<String>()
+        engine.onWriteBackFailed = { announced.add(it.name) }
+        deviceHolding("notes.md", size = 64, readable = false)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        File(mirror, "notes.md").writeText("typed into a new file of that name")
+
+        engine.handleMirrorEvent(FileObserver.MODIFY, File(mirror, "notes.md"), mirror, treeUri)
+
+        assertEquals(listOf("notes.md"), announced, "the save was not refused when it arrived")
+        assertTrue(engine.session.queue.isEmpty(), "a write over the unread document is waiting in the queue")
+    }
+
+    /**
+     * Each refusal site is pinned by a case above that goes red when that refusal alone is
+     * removed. What holds a fourth site to them is that there is one refusal message in the
+     * file, so this reads the source and pins that.
      *
      * Two claims, and they fail differently. The message having one home says that a
      * second refusal cannot have been written that forgets to announce. The call count

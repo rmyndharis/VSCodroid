@@ -14,20 +14,23 @@ import java.io.File
 
 /**
  * That the engine's watch registration is wired to the decisions that were pinned in the
- * JVM tests, rather than merely containing them.
+ * JVM tests, on observers the kernel feeds.
  *
  * `SafWatchCoverageTest` pins `watchableDirectories`, and `SafWriteBackFilterTest` pins
- * `shouldWriteBack`, but neither can reach the code that calls them: constructing a
- * `DirectoryObserver` runs `FileObserver`'s static initializer, which starts a thread
- * whose constructor calls native code, and a plain JVM test cannot load the class at all.
- * The gap that leaves is not academic. Replacing the walk in `watchTree` with
- * `listOf(dir)` restores the exact regression this work fixed, and every JVM test stays
- * green; so does deleting the line that starts the observers, and so does deleting the
- * `shouldWriteBack` check from `onEvent`.
+ * `shouldWriteBack`. A JVM test reaches the code that calls them only with the platform's
+ * watch replaced (`SafSyncEngine.directoryWatchFactory`): the real one is a `FileObserver`,
+ * whose `startWatching` the android.jar a JVM test runs against answers with an exception
+ * ("not mocked"). Through that stand-in the JVM suite now goes red when the walk in
+ * `watchTree` is replaced with `listOf(dir)`, which restores the exact regression this
+ * work fixed, or when the line that starts the observers is deleted
+ * (`SafQueuedWriteBackTest`), and when the `shouldWriteBack` check is deleted from
+ * `handleMirrorEvent` (`SafEventResolutionTest`). What only this file shows is the same
+ * wiring on real observers.
  *
- * Nothing here needs SAF. `watchTree` only ever looks at directories, and `onEvent`
- * queues a job whether or not the document behind it resolves, so a tree URI pointing
- * at an authority that does not exist is enough, and the resolution simply misses.
+ * Nothing here needs SAF. `watchTree` only ever looks at directories, and
+ * `handleMirrorEvent` queues a job whether or not the document behind it resolves, so a
+ * tree URI pointing at an authority that does not exist is enough, and the resolution
+ * simply misses.
  *
  * The write-back thread is deliberately not started: the queue is the observable, and a
  * running drain would empty it under the assertions.

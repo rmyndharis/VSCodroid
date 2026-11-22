@@ -170,6 +170,24 @@ class SafEventResolutionTest {
         )
     }
 
+    /**
+     * What the write-back filter refuses is dropped here, before a job exists: the engine's own
+     * half-written copies, which it renames into place itself, and anything under a directory
+     * the walk skips, which the device has and the mirror never held. A job queued for either
+     * is a write the device should never see.
+     */
+    @Test
+    fun `what the write-back filter refuses is never queued`() {
+        observe(FileObserver.CREATE, "notes.txt" + SafSyncEngine.PARTIAL_SUFFIX)
+        observe(FileObserver.CREATE, "node_modules/left-pad/index.js")
+        assertEquals(emptyList<String>(), queued(), "a path the write-back filter refuses was queued")
+
+        observe(FileObserver.CREATE, "notes.txt")
+        assertEquals(listOf("notes.txt"), queued(), "setup failed: an ordinary new file was not queued")
+    }
+
+    private fun queued(): List<String> = engine.session.queue.map { File(it.localPath).name }
+
     /** A delete removes the document the path names, so it needs the same answer. */
     @Test
     fun `a deleted file is still resolved`() {
