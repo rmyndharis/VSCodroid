@@ -383,8 +383,15 @@
     <!-- Shown once when sending what a program changed while a device folder opened stopped
          partway. What was not sent is one of three things, and the sentence covers each: a
          save that stays inside VSCodroid, a deletion the device did not make, and a rename it
-         did not make. -->
+         did not make. The folder already open, whose watcher a failed switch to another
+         folder put back, has a sentence of its own, saf_switch_changes_unsent: it did not
+         open then. -->
     <string name="saf_open_changes_unsent">%1$s: Nicht jede Änderung, die während des Öffnens vorgenommen wurde, hat den Geräteordner erreicht. Eine in dieser Zeit gespeicherte Datei wird gesendet, wenn Sie sie erneut speichern. Eine in dieser Zeit gelöschte Datei erscheint beim nächsten Öffnen wieder, und ein in dieser Zeit umbenannter Ordner behält auf dem Gerät seinen alten Namen.</string>
+    <!-- The same, shown once for the folder already open when opening another device folder
+         failed and sending what a program changed in it meanwhile stopped partway. That
+         folder did not open then: the notice of the failed switch has just called it
+         unaffected, and sending these changes is what keeps that true. -->
+    <string name="saf_switch_changes_unsent">%1$s: Nicht jede Änderung, die vorgenommen wurde, während ein anderer Ordner geöffnet wurde, hat den Geräteordner erreicht. Eine in dieser Zeit gespeicherte Datei wird gesendet, wenn Sie sie erneut speichern. Eine in dieser Zeit gelöschte Datei erscheint beim nächsten Öffnen wieder, und ein in dieser Zeit umbenannter Ordner behält auf dem Gerät seinen alten Namen.</string>
     <!-- A save made into a file just as a folder's open put the device's newer copy in its
          place, which could not be copied out of the replaced file in full: a full disk, a quota
          or an I/O error. The file now holds the device's version, and what was written of the

@@ -251,6 +251,11 @@ class WriteBackNoticeWiringTest {
             Regex("""(?m)^\s*[^/\n]*saf_open_changes_unsent\b""").containsMatchIn(source),
             "the notice does not name the string that says the changes made while the folder opened did not all go",
         )
+        assertTrue(
+            Regex("""(?m)^\s*[^/\n]*saf_switch_changes_unsent\b""").containsMatchIn(source),
+            "the notice does not name the string for the folder whose watcher a failed switch put back, which " +
+                "never opened then",
+        )
     }
 
     /**

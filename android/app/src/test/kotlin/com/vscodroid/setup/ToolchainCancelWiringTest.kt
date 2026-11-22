@@ -69,4 +69,36 @@ class ToolchainCancelWiringTest {
                 "button of a toolchain that is still on disk",
         )
     }
+
+    /**
+     * The end of a cancelled download is reported later: Play's CANCELED ends the manager's request for the pack by
+     * name, and a cancelled HTTP transfer holds the pack until it stops. A Cancel branch that draws Install at once
+     * lets an Install tapped before that end have its request ended, or be refused with "already being installed"
+     * (ToolchainCardStateTest has the card's half). So the branch asks the manager whether an end is to be reported
+     * and, when one is, leaves the card offering nothing until it is; the screen's start ends any wait it missed.
+     */
+    @Test
+    fun `a cancel whose end is still to be reported leaves the card waiting for it`() {
+        val source = code()
+        val branch = com.vscodroid.SourceScan.body(source, "ToolchainAction.CANCEL ->")
+
+        assertTrue(
+            branch.contains("adapter.setCancelling(packName, transferId)"),
+            "the Cancel branch draws the card before Play has reported the cancel it accepted, so an Install " +
+                "tapped in between has its request ended by that report:\n$branch",
+        )
+        assertFalse(
+            Regex("""(?m)^\s*toolchainManager\.cancel\(packName\)\s*$""").containsMatchIn(branch),
+            "the Cancel branch drops the manager's answer, so it cannot tell a cancel Play will report:\n$branch",
+        )
+        assertTrue(
+            Regex("""(else|if\s*\(\s*!\s*\w+\s*\))\s*\{?\s*adapter\.updateState\(packName,\s*AssetPackStatus\.CANCELED""")
+                .containsMatchIn(branch),
+            "the card is drawn as cancelled at the tap also when Play's report is still to come:\n$branch",
+        )
+        assertTrue(
+            com.vscodroid.SourceScan.body(source, "override fun onStart()").contains("adapter.endCancelWaits()"),
+            "a cancel's end the screen did not hear holds its card past the screen's next start",
+        )
+    }
 }

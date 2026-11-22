@@ -234,18 +234,6 @@ class ToolchainInstallTest {
     }
 
     /**
-     * Play's own legacy package name, which is still the installer of record on
-     * a device whose app was installed by an older Store.
-     *
-     * Recognising only `com.android.vending` sent those devices down the HTTP
-     * route: a Play install fetching native binaries from a GitHub release,
-     * which is the one thing the Play route exists to avoid, on a device Play
-     * would have served the pack to for nothing.
-     *
-     * NEGATIVE CONTROL: take the name out of PLAY_INSTALLERS and this fails on
-     * the fetch, exactly as the sideload case one test below passes.
-     */
-    /**
      * Cancel ends this manager's request, so the next Install asks Play again.
      * Play cancels only a download that is running, so a pack waiting on its
      * cellular-data question, or already delivered, sends no CANCELED to clear
@@ -268,11 +256,11 @@ class ToolchainInstallTest {
     }
 
     /**
-     * Play's CANCELED for the cancelled request can arrive after the Install that followed it, and it ends that
-     * Install's request too, because requests are kept by pack name. The download carries on and still reports; what
-     * is lost is the record that this manager asked for it, so a further Install asks Play again rather than being
-     * swallowed, and a screen that hands its listener back on CANCELED may miss the rest until the next launch's
-     * reconcile.
+     * A CANCELED ends the request this manager holds for the pack, whichever Install made it: requests are kept by
+     * pack name, and a report carries no more than the name. So a CANCELED that arrives after a later Install ends
+     * that Install's request, and a further Install asks Play again rather than being swallowed. The toolchain screen
+     * does not offer Install in that gap when Play has said a CANCELED is coming ([ToolchainManager.cancel],
+     * `ToolchainCardState.setCancelling`); this pins what the manager does if another caller asks anyway.
      */
     @Test
     fun `a CANCELED arriving after the next Install ends that Install's request too`() {
@@ -302,6 +290,52 @@ class ToolchainInstallTest {
         verify(exactly = 3) { packManager.fetch(listOf("toolchain_java")) }
     }
 
+    private fun playAnswers(pack: String, status: Int): AssetPackStates = mockk {
+        every { packStates() } returns mapOf(pack to mockk<AssetPackState> { every { status() } returns status })
+    }
+
+    /**
+     * Play answers a cancel with the state it leaves the pack in. CANCELED is a download it stopped, whose CANCELED
+     * report is still to reach the listeners; anything else is a pack it had no download of to stop (already
+     * delivered, or unknown to it), and no report follows. The toolchain screen waits for the report only in the
+     * first case, so the answer has to reach it.
+     */
+    @Test
+    fun `a cancel says whether Play stopped a download that will report it`() {
+        installedBy("com.android.vending")
+        every { packManager.removePack(any()) } answers { completedPackRemoval() }
+        val m = manager()
+
+        every { packManager.cancel(listOf("toolchain_java")) } returns playAnswers("toolchain_java", AssetPackStatus.CANCELED)
+        assertEquals(true, m.cancel("toolchain_java"), "a download Play stopped was not said to report its end")
+
+        for (left in listOf(AssetPackStatus.COMPLETED, AssetPackStatus.TRANSFERRING, AssetPackStatus.NOT_INSTALLED)) {
+            every { packManager.cancel(listOf("toolchain_java")) } returns playAnswers("toolchain_java", left)
+            assertEquals(false, m.cancel("toolchain_java"), "a pack Play left at $left was said to report a cancel")
+        }
+    }
+
+    /** A sideloaded install has no Play download, whatever Play answers, and with no transfer nothing reports. */
+    @Test
+    fun `a cancel on a sideloaded install with no transfer waits for no report`() {
+        installedBy("com.example.sideloader")
+        every { packManager.cancel(any()) } returns playAnswers("toolchain_java", AssetPackStatus.CANCELED)
+
+        assertEquals(false, manager().cancel("toolchain_java"))
+    }
+
+    /**
+     * Play's own legacy package name, which is still the installer of record on
+     * a device whose app was installed by an older Store.
+     *
+     * Recognising only `com.android.vending` sent those devices down the HTTP
+     * route: a Play install fetching native binaries from a GitHub release,
+     * which is the one thing the Play route exists to avoid, on a device Play
+     * would have served the pack to for nothing.
+     *
+     * NEGATIVE CONTROL: take the name out of PLAY_INSTALLERS and this fails on
+     * the fetch, exactly as the sideload case one test below passes.
+     */
     @Test
     fun `a Play install recorded under the legacy installer name fetches the pack`() {
         installedBy("com.google.android.feedback")

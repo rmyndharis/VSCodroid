@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - The process monitor warns, naming the file, when Settings shows **Vscodroid > Antigravity: Run Engine** on but the settings file keeps it off: an error VS Code works around, over 1 MiB, or nesting past 64 levels.
-- A notice says when not every change made while a device folder opened reached the device.
+- A notice says when sending the changes a program made while a device folder, or another folder, opened fails partway.
 
 ### Changed
 
@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A file made or saved in a subfolder just after it is renamed, or a save held back there, is sent under the new name instead of staying inside VSCodroid.
 - A file deleted in a device folder's subfolder just after the subfolder is renamed is deleted on the device too.
 - A folder renamed twice in quick succession, or inside a folder just renamed, ends up on the device under its last name only.
+- A folder renamed onto a name and deleted there before another folder is renamed onto that name is deleted on the device instead of coming back at the next open, or a notice says it stays.
 - Renaming a folder in a device folder no longer sends again files you have not changed since they were sent, a leftover of an earlier rename that gave way to another onto the same name.
 - A folder moved out of a device folder is no longer taken for the rename of an unrelated folder arriving within the same second, which overwrote the departed folder's files on the device.
 - A folder renamed onto an existing empty folder in a device folder is watched under that name, so saves directly inside it reach the device.
@@ -74,11 +75,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The setup notification no longer offers Stop Server, which stopped the service while setup was still unpacking.
 - A toolchain install that finds a file, folder or link in the way of one of its files says the install failed, instead of asking for free space; it stops before writing anything, or takes its copy back when a folder holds the name of a command.
 - A toolchain removal that cannot take the files says the removal failed and keeps offering Remove, instead of a Retry that downloads the pack again.
-- Install is no longer ignored after Cancel on a Play download that Play could not cancel, such as one waiting for the mobile-data question.
+- Install is no longer ignored after Cancel on a Play download that Play could not cancel, such as one already delivered.
+- After Cancel on a toolchain downloaded from GitHub, Install is offered once the download has stopped, instead of being refused with "That toolchain is already being installed."
 - A toolchain install short of space first removes the temporary files a killed copy left and measures again.
 - At first run, the reason the last toolchain download failed is shown before the editor opens, instead of being dropped.
 - At first run, Play's mobile-data question is asked once the setup screen is back in front, instead of while it is in the background.
 - A `~/.bashrc`, `~/.bash_profile`, `~/.tmux.conf`, `~/.ssh/config`, `~/.pip/pip.conf` or `~/.vscodroid/data/Machine/settings.json` that links to a missing file stays a link, and the app's text is written where it points.
+- Git over ssh works when `~/.ssh/config` is deleted or links to a missing file, using the default key and known hosts, instead of failing with `Can't open user config file`.
 - A `~/.bashrc`, machine `settings.json` or the app's git configuration left full of NUL bytes is written again at the next launch.
 - A machine `settings.json` that starts with a byte order mark gets the settings the app adds.
 - A download the editor page cannot read, such as one from a webview or a `data:` link, is refused before the save picker opens, instead of failing after you named the file.

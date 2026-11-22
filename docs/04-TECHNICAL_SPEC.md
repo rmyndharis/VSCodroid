@@ -394,7 +394,10 @@ val env = mapOf(
     "PYTHONPYCACHEPREFIX"     to "${cacheDir}/pycache",
     "GIT_EXEC_PATH"           to "${filesDir}/usr/lib/git-core",
     "GIT_TEMPLATE_DIR"        to "${filesDir}/usr/share/git-core/templates",
-    "GIT_SSH_COMMAND"         to "${nativeLibDir}/libssh.so -F ${filesDir}/home/.ssh/config",
+    "GIT_SSH_COMMAND"         to "${nativeLibDir}/libssh.so $(...)",  // decided each time git runs ssh: -F
+                                                                       // ~/.ssh/config if it can be read, else that
+                                                                       // config's settings as -o options
+                                                                       // (Environment.sshDefaults)
     "GIT_SSL_CAPATH"          to "${filesDir}/usr/etc/tls",            // no raw Android roots bypass the bundle
     "GIT_SSL_CAINFO"          to "${filesDir}/usr/etc/tls/cert.pem",
     "SSL_CERT_FILE"           to "${filesDir}/usr/etc/tls/cert.pem",

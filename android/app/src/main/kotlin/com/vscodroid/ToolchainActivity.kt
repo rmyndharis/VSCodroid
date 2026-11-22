@@ -195,7 +195,7 @@ class ToolchainActivity : AppCompatActivity() {
                 }
                 ToolchainAction.CANCEL -> {
                     val transferId = ToolchainManager.downloadProgress()[packName]?.transferId
-                    toolchainManager.cancel(packName)
+                    val reportFollows = toolchainManager.cancel(packName)
                     // Dropped here as well as on the report the download now
                     // makes, because the two answer different moments. This one
                     // is immediate: an `onStop` between the tap and the download
@@ -222,7 +222,17 @@ class ToolchainActivity : AppCompatActivity() {
                     // Remove button until the screen was reopened. CANCELED
                     // carries no such meaning, so the card falls back to what the
                     // install record says.
-                    adapter.updateState(packName, AssetPackStatus.CANCELED, 0, transferId)
+                    //
+                    // Drawn now only when no end is to be reported. A download Play
+                    // stopped reports CANCELED later, and that report ends the
+                    // manager's request for the pack by name, so an Install tapped
+                    // before it would have its request ended and the pack taken off
+                    // `outstanding` while the new download ran; a cancelled HTTP
+                    // transfer holds the pack until it stops, so an Install tapped
+                    // before that is refused. The card offers nothing until the end
+                    // draws it, in the states setCancelling names.
+                    val waiting = reportFollows && adapter.setCancelling(packName, transferId)
+                    if (!waiting) adapter.updateState(packName, AssetPackStatus.CANCELED, 0, transferId)
                 }
             }
         }
@@ -380,6 +390,9 @@ class ToolchainActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         toolchainManager.registerListener()
+        // A cancel's end that this screen did not hear holds its card no longer than this: Play and
+        // the process are asked again below.
+        adapter.endCancelWaits()
         // Refresh installed state on resume (user may have installed from terminal)
         adapter.setInstalled(
             toolchainManager.getInstalledToolchains(), toolchainManager.installedLabels(),

@@ -1059,6 +1059,12 @@ class SafProviderClaimWaitTest {
 
         fun reparent(docId: String, parentId: String) = synchronized(lock) { nodes[docId]?.parentId = parentId }
 
+        /** The names of the documents in the folder at [relativePath], one per document, sorted. */
+        fun childNames(treeTag: String, relativePath: String = ""): List<String> = synchronized(lock) {
+            val parent = if (relativePath.isEmpty()) nodes["$treeTag::root"] else findByPath(treeTag, relativePath)
+            nodes.values.filter { it.parentId == parent?.id }.map { it.name }.sorted()
+        }
+
         private fun deleteRecursive(docId: String) {
             val children = nodes.values.filter { it.parentId == docId }.map { it.id }
             children.forEach { deleteRecursive(it) }
@@ -1759,6 +1765,167 @@ class SafProviderClaimWaitTest {
     }
 
     @Test
+    fun `a folder renamed onto a name and removed there before another folder takes that name is gone from the device`() {
+        // mv old tmp; rm -r tmp; mv other tmp, inside one poll. The first rename gave way to the third, onto the same
+        // name, so the deletes between looked up a tmp the device did not hold yet and did nothing: the device kept
+        // old, and the next open brought it back.
+        val harness = VirtualSafHarness()
+        harness.addDir("treeA", "old")
+        harness.addFile("treeA", "old/from_old.txt", "from old")
+        harness.addDir("treeA", "other")
+        harness.addFile("treeA", "other/from_other.txt", "from other")
+        val tree = harness.treeUris.getValue("treeA")
+        val engine = harness.buildEngine()
+        runBlocking { engine.initialSync(tree, mirror) { _, _ -> } }
+
+        moveFolder(engine, tree, "old", "tmp")
+        val file = File(mirror, "tmp/from_old.txt")
+        assertTrue(file.delete())
+        engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, tree)
+        assertTrue(File(mirror, "tmp").delete())
+        engine.handleMirrorEvent(FileObserver.DELETE or 0x40000000, File(mirror, "tmp"), mirror, tree)
+        moveFolder(engine, tree, "other", "tmp")
+
+        engine.runWriteBackLoop { false }
+
+        assertEquals(listOf("tmp"), harness.childNames("treeA"), "the removed folder is on the device under some name")
+        assertEquals(listOf("from_other.txt"), harness.childNames("treeA", "tmp"))
+        assertEquals("from other", harness.findByPath("treeA", "tmp/from_other.txt")?.bytes?.toString(Charsets.UTF_8))
+        assertTrue(harness.createdCalls.isEmpty(), "a folder was made again from the copy: ${harness.createdCalls}")
+        assertEquals(emptyList<String>(), harness.failedNames + harness.deleteRefusedNames)
+    }
+
+    /** The device folder `old` holding a file the open reads, and `other` beside it. */
+    private fun twoReadFolders(): Pair<VirtualSafHarness, SafSyncEngine> {
+        val harness = VirtualSafHarness()
+        harness.addDir("treeA", "old")
+        harness.addFile("treeA", "old/from_old.txt", "from old")
+        harness.addDir("treeA", "other")
+        harness.addFile("treeA", "other/from_other.txt", "from other")
+        val engine = harness.buildEngine()
+        runBlocking { engine.initialSync(harness.treeUris.getValue("treeA"), mirror) { _, _ -> } }
+        return harness to engine
+    }
+
+    @Test
+    fun `a delete after the folder renamed onto a name has arrived there is of that folder`() {
+        // mv old tmp; rm -r tmp; mv other tmp; rm tmp/from_other.txt, inside one poll. The last delete is of what other
+        // brought to tmp, not of what old left there.
+        val (harness, engine) = twoReadFolders()
+        val tree = harness.treeUris.getValue("treeA")
+        moveFolder(engine, tree, "old", "tmp")
+        for (file in listOf(File(mirror, "tmp/from_old.txt"), File(mirror, "tmp"))) {
+            assertTrue(file.delete())
+            engine.handleMirrorEvent(FileObserver.DELETE or (if (file.name == "tmp") 0x40000000 else 0), file, mirror, tree)
+        }
+        moveFolder(engine, tree, "other", "tmp")
+        val later = File(mirror, "tmp/from_other.txt")
+        assertTrue(later.delete())
+        engine.handleMirrorEvent(FileObserver.DELETE, later, mirror, tree)
+
+        engine.runWriteBackLoop { false }
+
+        assertEquals(listOf("tmp"), harness.childNames("treeA"))
+        assertEquals(emptyList<String>(), harness.childNames("treeA", "tmp"), "the file deleted from the folder that arrived is still there")
+        assertEquals(emptyList<String>(), harness.failedNames + harness.deleteRefusedNames)
+    }
+
+    @Test
+    fun `a folder renamed onto a name and moved out of the folder stays on the device when something made there since is removed`() {
+        // mv old tmp; mv tmp <out of the folder>; mkdir tmp; rmdir tmp; mv other tmp, inside one poll. A folder moved out
+        // stays on the device, and the folder removed at tmp is the one made there since, not old.
+        val (harness, engine) = twoReadFolders()
+        val tree = harness.treeUris.getValue("treeA")
+        moveFolder(engine, tree, "old", "tmp")
+        assertTrue(File(mirror, "tmp").renameTo(File(filesDir, "moved-out")))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, File(mirror, "tmp"), mirror, tree)
+        // Past the window in which a folder arriving at tmp could be taken for the one that left it, which an event
+        // without the watcher's identities would otherwise do.
+        Thread.sleep(SafSyncEngine.RENAME_PAIR_WINDOW_MS + 100)
+        val made = File(mirror, "tmp").apply { assertTrue(mkdir()) }
+        engine.handleMirrorEvent(FileObserver.CREATE or 0x40000000, made, mirror, tree)
+        assertTrue(made.delete())
+        engine.handleMirrorEvent(FileObserver.DELETE or 0x40000000, made, mirror, tree)
+        moveFolder(engine, tree, "other", "tmp")
+
+        engine.runWriteBackLoop { false }
+
+        assertEquals("from old", harness.findByPath("treeA", "old/from_old.txt")?.bytes?.toString(Charsets.UTF_8), "a folder moved out was deleted on the device")
+        assertEquals(listOf("from_other.txt"), harness.childNames("treeA", "tmp"))
+    }
+
+    /**
+     * `mv old tmp; rm -r tmp; mv other tmp` where a delete cannot go through: [beforeOpen] and [afterOpen] leave the
+     * device folder `old` as the shape needs it. The delete is refused under the name the device holds the folder by,
+     * as any delete there is, and the folder renamed onto `tmp` next lands there alone. Sent first instead, the rename
+     * left the folder at `tmp`, and the next one was put beside it under a name the provider made up.
+     */
+    private fun renamedRemovedAndReplaced(
+        beforeOpen: (VirtualSafHarness) -> Unit,
+        afterOpen: (VirtualSafHarness) -> Unit = {},
+    ): VirtualSafHarness {
+        val harness = VirtualSafHarness()
+        harness.addDir("treeA", "old")
+        harness.addDir("treeA", "other")
+        harness.addFile("treeA", "other/from_other.txt", "from other")
+        val tree = harness.treeUris.getValue("treeA")
+        val engine = harness.buildEngine()
+        beforeOpen(harness)
+        runBlocking { engine.initialSync(tree, mirror) { _, _ -> } }
+        afterOpen(harness)
+
+        moveFolder(engine, tree, "old", "tmp")
+        File(mirror, "tmp").listFiles()!!.forEach { file ->
+            assertTrue(file.delete())
+            engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, tree)
+        }
+        assertTrue(File(mirror, "tmp").delete())
+        engine.handleMirrorEvent(FileObserver.DELETE or 0x40000000, File(mirror, "tmp"), mirror, tree)
+        moveFolder(engine, tree, "other", "tmp")
+
+        engine.runWriteBackLoop { false }
+
+        assertEquals(listOf("old", "tmp"), harness.childNames("treeA"), "the device does not hold each folder once")
+        assertEquals(listOf("from_other.txt"), harness.childNames("treeA", "tmp"))
+        assertTrue(harness.createdCalls.isEmpty(), "a folder was made again from the copy: ${harness.createdCalls}")
+        return harness
+    }
+
+    @Test
+    fun `an empty folder renamed onto a name and removed there stays under its first name, said, and the name goes to the next folder`() {
+        // Nothing this engine read lies under an empty folder, so a delete of it cannot name its document.
+        val harness = renamedRemovedAndReplaced(beforeOpen = {})
+        assertEquals(listOf("old"), harness.deleteRefusedNames, "the folder the device kept was not told of")
+    }
+
+    @Test
+    fun `a folder holding what the copy never held, renamed onto a name and removed there, keeps only that under its first name`() {
+        val harness = renamedRemovedAndReplaced(beforeOpen = {
+            it.addFile("treeA", "old/from_old.txt", "from old")
+            it.addFile("treeA", "old/.git/head", "ref: old")
+        })
+        assertEquals(listOf(".git"), harness.childNames("treeA", "old"), "the delete of what the copy held did not reach the device")
+    }
+
+    @Test
+    fun `a folder another app changed, renamed onto a name and removed there, keeps the change under its first name`() {
+        val harness = renamedRemovedAndReplaced(
+            beforeOpen = { it.addFile("treeA", "old/from_old.txt", "from old") },
+            afterOpen = {
+                it.findByPath("treeA", "old/from_old.txt")!!.apply {
+                    bytes = "changed by another app".toByteArray()
+                    lastModified += 60_000L
+                }
+            },
+        )
+        assertEquals(
+            "changed by another app",
+            harness.findByPath("treeA", "old/from_old.txt")?.bytes?.toString(Charsets.UTF_8),
+            "the delete went over another app's change",
+        )
+    }
+
+    @Test
     fun `a folder moved into a folder made just before it that is then renamed ends up whole under the last name`() {
         // mkdir sub; mv old sub/mid; mv sub sub2, inside one poll. The device holds no sub, and the move into it lost
         // its place when sub was renamed: the device kept old, and sub2/mid was made from the copy without its .git.
@@ -1801,11 +1968,12 @@ class SafProviderClaimWaitTest {
     }
 
     /**
-     * The move into a folder the device does not hold follows that folder's rename; a rename made inside the folder,
-     * whose document is not moving into it, is left where it was queued.
+     * The move into a folder the device does not hold follows that folder's rename, and so does the rename made inside
+     * the folder of what the move brings, behind it: that rename finds its source on the device only once the move has
+     * run, and left where it was queued it ran first.
      */
     @Test
-    fun `a folder made just before a move into it and renamed takes the move along and leaves a rename inside it`() {
+    fun `a folder made just before a move into it and renamed takes the move and the rename of what it moves along`() {
         val harness = VirtualSafHarness()
         harness.addDir("treeA", "old")
         harness.addFile("treeA", "old/child.txt", "original")
@@ -1832,7 +2000,135 @@ class SafProviderClaimWaitTest {
 
         val renames = engine.session.queue.filter { it.type == SyncType.RENAME }
             .map { File(it.previousPath!!).toRelativeString(mirror) to it.relativePath }
-        assertEquals(listOf("sub/mid" to "sub/inner", "old" to "sub2/mid"), renames)
+        assertEquals(listOf("old" to "sub2/mid", "sub2/mid" to "sub2/inner"), renames)
+    }
+
+    /** `mv` of a folder in [mirror] as the watcher reports it: the departure, then the arrival a moment later. */
+    private fun moveFolder(engine: SafSyncEngine, tree: Uri, from: String, to: String) {
+        val source = File(mirror, from)
+        val target = File(mirror, to)
+        assertTrue(source.renameTo(target))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, source, mirror, tree)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, target, mirror, tree)
+    }
+
+    /** A device folder `old` holding a file and, below `.git`, what the copy never holds. */
+    private fun deviceFolderWithGit(): Pair<VirtualSafHarness, SafSyncEngine> {
+        val harness = VirtualSafHarness()
+        harness.addDir("treeA", "old")
+        harness.addFile("treeA", "old/child.txt", "original")
+        harness.addFile("treeA", "old/.git/head", "ref: old")
+        val engine = harness.buildEngine()
+        movesDocuments(harness)
+        runBlocking { engine.initialSync(harness.treeUris.getValue("treeA"), mirror) { _, _ -> } }
+        return harness to engine
+    }
+
+    /** Asserts that the device folder `old` ended up whole at [path] and nowhere else. */
+    private fun assertMovedWhole(harness: VirtualSafHarness, path: String) {
+        assertNull(harness.findByPath("treeA", "old"), "the device kept the folder under its first name")
+        assertNotNull(harness.findByPath("treeA", "$path/.git/head"), "the folder was not moved whole to $path")
+        assertEquals("original", harness.findByPath("treeA", "$path/child.txt")?.bytes?.toString(Charsets.UTF_8))
+        assertTrue(
+            harness.createdCalls.none { it.second == "child.txt" || it.second == File(path).name },
+            "the moved folder was made again from the copy: ${harness.createdCalls}",
+        )
+        assertEquals(emptyList<String>(), harness.failedNames)
+    }
+
+    @Test
+    fun `a folder moved into a folder made just before it and renamed there ends up whole under its last name when that folder is renamed`() {
+        // mkdir sub; mv old sub/mid; mv sub/mid sub/inner; mv sub sub2, inside one poll. The rename inside sub looks
+        // its source up when it runs, and it ran before the move it waits for, which follows sub's rename: it found
+        // nothing, sub2 was made with inner from the copy, and the move then put the whole folder at sub2/mid.
+        val (harness, engine) = deviceFolderWithGit()
+        val tree = harness.treeUris.getValue("treeA")
+        val subDir = File(mirror, "sub").apply { mkdirs() }
+        engine.handleMirrorEvent(FileObserver.CREATE or 0x40000000, subDir, mirror, tree)
+        moveFolder(engine, tree, "old", "sub/mid")
+        moveFolder(engine, tree, "sub/mid", "sub/inner")
+        moveFolder(engine, tree, "sub", "sub2")
+
+        engine.runWriteBackLoop { false }
+
+        assertMovedWhole(harness, "sub2/inner")
+        assertNull(harness.findByPath("treeA", "sub2/mid"), "the folder is on the device under the name it had in sub too")
+        assertNull(harness.findByPath("treeA", "sub"), "the device holds the folder made first under its first name")
+        // A save dropped under a rename's source is filed by that source until its job takes it; filed under the name
+        // the source had before it was followed, it was never taken, and caught every later drop under that name.
+        assertEquals(emptyMap<String, List<String>>(), engine.session.claimedDrops.toMap(), "a dropped save is filed for no job")
+    }
+
+    @Test
+    fun `a folder renamed twice inside a folder made just before the move into it ends up whole under its last name`() {
+        // mkdir sub; mv old sub/a; mv sub/a sub/b; mv sub/b sub/c; mv sub sub2, inside one poll.
+        val (harness, engine) = deviceFolderWithGit()
+        val tree = harness.treeUris.getValue("treeA")
+        val subDir = File(mirror, "sub").apply { mkdirs() }
+        engine.handleMirrorEvent(FileObserver.CREATE or 0x40000000, subDir, mirror, tree)
+        moveFolder(engine, tree, "old", "sub/a")
+        moveFolder(engine, tree, "sub/a", "sub/b")
+        moveFolder(engine, tree, "sub/b", "sub/c")
+        moveFolder(engine, tree, "sub", "sub2")
+
+        engine.runWriteBackLoop { false }
+
+        assertMovedWhole(harness, "sub2/c")
+        for (name in listOf("sub2/a", "sub2/b", "sub")) {
+            assertNull(harness.findByPath("treeA", name), "the device holds the folder at $name too")
+        }
+    }
+
+    @Test
+    fun `a folder moved on from one folder made just before it into another, both then renamed, ends up whole in the second`() {
+        // mkdir sub sub3; mv old sub/mid; mv sub/mid sub3/mid; mv sub sub2; mv sub3 sub4, inside one poll.
+        val (harness, engine) = deviceFolderWithGit()
+        val tree = harness.treeUris.getValue("treeA")
+        for (name in listOf("sub", "sub3")) {
+            val made = File(mirror, name).apply { mkdirs() }
+            engine.handleMirrorEvent(FileObserver.CREATE or 0x40000000, made, mirror, tree)
+        }
+        moveFolder(engine, tree, "old", "sub/mid")
+        moveFolder(engine, tree, "sub/mid", "sub3/mid")
+        moveFolder(engine, tree, "sub", "sub2")
+        moveFolder(engine, tree, "sub3", "sub4")
+
+        engine.runWriteBackLoop { false }
+
+        assertMovedWhole(harness, "sub4/mid")
+        assertNotNull(harness.findByPath("treeA", "sub2"), "the first folder made did not reach the device")
+        assertNull(harness.findByPath("treeA", "sub2/mid"), "the folder is on the device in the first folder too")
+    }
+
+    @Test
+    fun `a folder moved into a folder made just before it and deleted there is gone from the device once that folder is renamed`() {
+        // mkdir sub; mv old sub/mid; rm -r sub/mid; mv sub sub2, inside one poll. The deletes look their documents up
+        // when they run, and ran before the move they wait for, which follows sub's rename: they found nothing, and the
+        // move then put the deleted folder at sub2/mid, where the next open fetched it back.
+        val harness = VirtualSafHarness()
+        harness.addDir("treeA", "old")
+        harness.addFile("treeA", "old/child.txt", "original")
+        val tree = harness.treeUris.getValue("treeA")
+        val engine = harness.buildEngine()
+        movesDocuments(harness)
+        runBlocking { engine.initialSync(tree, mirror) { _, _ -> } }
+        val subDir = File(mirror, "sub").apply { mkdirs() }
+        engine.handleMirrorEvent(FileObserver.CREATE or 0x40000000, subDir, mirror, tree)
+        moveFolder(engine, tree, "old", "sub/mid")
+        val child = File(mirror, "sub/mid/child.txt")
+        assertTrue(child.delete())
+        engine.handleMirrorEvent(FileObserver.DELETE, child, mirror, tree)
+        assertTrue(File(mirror, "sub/mid").delete())
+        engine.handleMirrorEvent(FileObserver.DELETE or 0x40000000, File(mirror, "sub/mid"), mirror, tree)
+        moveFolder(engine, tree, "sub", "sub2")
+
+        engine.runWriteBackLoop { false }
+
+        assertNull(harness.findByPath("treeA", "old"), "the device kept the deleted folder under its first name")
+        assertNull(harness.findByPath("treeA", "sub2/mid"), "the deleted folder is on the device in the renamed folder")
+        assertNotNull(harness.findByPath("treeA", "sub2"), "the renamed folder did not reach the device")
+        assertEquals(emptyList<String>(), harness.failedNames + harness.deleteRefusedNames)
     }
 
     /** `moveDocument` as a provider that supports it answers: the document goes under the target parent, name kept. */

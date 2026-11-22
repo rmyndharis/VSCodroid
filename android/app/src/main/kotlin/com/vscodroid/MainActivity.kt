@@ -925,10 +925,11 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         }
 
         // Sending what a program changed while the folder opened failed partway. What was not sent then is a save
-        // inside the app, a deletion or a rename the device did not get; one sentence says all three.
-        safManager.onOpenChangesUnsent { dir ->
+        // inside the app, a deletion or a rename the device did not get; one sentence says all three. After a switch
+        // that failed, the folder named is the one already open, which did not open then: its sentence says so.
+        safManager.onOpenChangesUnsent { dir, afterSwitch ->
             val message = appContext.getString(
-                R.string.saf_open_changes_unsent,
+                if (afterSwitch) R.string.saf_switch_changes_unsent else R.string.saf_open_changes_unsent,
                 mirrorDisplayName(storage.getPersistedFolders(), dir),
             )
             toMainThread.post {

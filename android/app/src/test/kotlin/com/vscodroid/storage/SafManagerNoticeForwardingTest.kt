@@ -77,10 +77,10 @@ class SafManagerNoticeForwardingTest {
     @Test
     fun `every open whose changes were not all sent is told`() {
         val told = mutableListOf<String>()
-        manager.onOpenChangesUnsent { told += it.name }
+        manager.onOpenChangesUnsent { folder, _ -> told += folder.name }
 
-        engine.onOpenChangesUnsent(File("Docs"))
-        engine.onOpenChangesUnsent(File("Photos"))
+        engine.onOpenChangesUnsent(File("Docs"), false)
+        engine.onOpenChangesUnsent(File("Photos"), false)
 
         assertEquals(listOf("Docs", "Photos"), told)
     }
@@ -95,5 +95,20 @@ class SafManagerNoticeForwardingTest {
         engine.onHeldSaveIncomplete(File("todo.md"))
 
         assertEquals(listOf("notes.md", "todo.md"), told)
+    }
+
+    /**
+     * The same failure for the folder whose watcher a failed switch put back reaches the screen as that, so its
+     * sentence can say the changes were made while another folder was opening: the folder it names never opened.
+     */
+    @Test
+    fun `a failed switch whose changes were not all sent is told as the switch's`() {
+        val told = mutableListOf<Pair<String, Boolean>>()
+        manager.onOpenChangesUnsent { folder, afterSwitch -> told += folder.name to afterSwitch }
+
+        engine.onOpenChangesUnsent(File("Docs"), true)
+        engine.onOpenChangesUnsent(File("Docs"), false)
+
+        assertEquals(listOf("Docs" to true, "Docs" to false), told)
     }
 }
