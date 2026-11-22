@@ -846,11 +846,11 @@ class ProcessManager internal constructor(
             // reads `serverProcess`, which is still null everywhere above this line, so
             // a Stop pressed inside the few milliseconds `ProcessBuilder.start()`
             // takes destroys nothing and returns, and what it leaves behind is a
-            // Node process with no foreground service tracking it, no watchdog
-            // (this returns before either is started), and the editor port in its
-            // hand. The next cold start then either adopts it, which keeps the
-            // session and the working DNS proxy that survivor carries, or moves to
-            // another port and takes the workbench's IndexedDB with it.
+            // Node process with no foreground service tracking it and no watchdog
+            // (this returns before either is started), serving a private socket
+            // nothing routes to. The next cold start then finds it by its note and
+            // either adopts it, which keeps the session and the working DNS proxy
+            // that survivor carries, or reaps it.
             //
             // Read after the spawn rather than before it, because before it the
             // answer is meaningless: the window this closes opens at the spawn.
@@ -1382,7 +1382,11 @@ class ProcessManager internal constructor(
      * the terminal state leaves (`stopServingRecoverably`), which is detached, and
      * a Stop never promotes the service (`startCommand`). Little is left to end
      * there, because the last server has already died: at most an editor server
-     * its bootstrap left behind, which the reap finds.
+     * its bootstrap left behind, which the reap finds by the run identity this
+     * instance still holds. A Stop that had to start a new process for the
+     * service, the old one reclaimed, holds no such identity and ends nothing; an
+     * editor that outlived the reclaimed process is met by its note at the next
+     * start, which adopts or reaps it.
      *
      * A second is enough because it is not the real mechanism: server.js
      * forwards SIGTERM to the editor server it forked (its own SIGTERM handler),
