@@ -992,8 +992,8 @@ val verifyNativeAddons = tasks.register<Exec>("verifyNativeAddons") {
             "\n" +
             "scripts/build-all.sh runs them in the order that works. If the\n" +
             "missing half is the compatibility shim rather than an addon, that is\n" +
-            "scripts/build-glibc-shim.sh, which download-termux-tools.sh removes\n" +
-            "as a side effect of refreshing its own libraries."
+            "scripts/build-glibc-shim.sh, which has not run since the addons it\n" +
+            "scans were last written."
     )
 }
 

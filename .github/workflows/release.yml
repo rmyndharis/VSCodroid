@@ -552,6 +552,7 @@ jobs:
           python3 scripts/test-patch-sysroot-paths.py
           python3 scripts/test-exec-trampoline.py
           python3 scripts/test-move-noreplace.py
+          python3 scripts/test-musl-loader.py
           python3 scripts/test-selfexe-shim.py
           python3 scripts/test-check-server-published.py
           python3 scripts/test-extension-updates.py

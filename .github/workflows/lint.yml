@@ -253,6 +253,9 @@ jobs:
       - name: Check the move helper with the host compiler
         run: python3 scripts/test-move-noreplace.py
 
+      - name: Check the download and native build scripts offline
+        run: python3 scripts/test-musl-loader.py
+
       - name: Check release version declarations are read exactly
         run: python3 scripts/test-release-versions.py
 
