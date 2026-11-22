@@ -84,4 +84,16 @@ class SafManagerNoticeForwardingTest {
 
         assertEquals(listOf("Docs", "Photos"), told)
     }
+
+    /** Each names its own file, so nothing throttles it: one folded into another's burst is a save nobody is told about. */
+    @Test
+    fun `every save that could not be kept whole is told`() {
+        val told = mutableListOf<String>()
+        manager.onHeldSaveIncomplete { told += it.name }
+
+        engine.onHeldSaveIncomplete(File("notes.md"))
+        engine.onHeldSaveIncomplete(File("todo.md"))
+
+        assertEquals(listOf("notes.md", "todo.md"), told)
+    }
 }

@@ -391,6 +391,13 @@
          save that stays inside VSCodroid, a deletion the device did not make, and a rename it
          did not make. -->
     <string name="saf_open_changes_unsent">%1$s: nem todas as alterações feitas enquanto a pasta abria chegaram à pasta do dispositivo. Um arquivo salvo nesse momento é enviado quando você o salva novamente. Um arquivo excluído nesse momento volta na próxima vez que a pasta for aberta, e uma pasta renomeada nesse momento mantém o nome antigo no dispositivo.</string>
+    <!-- A save made into a file just as a folder's open put the device's newer copy in its
+         place, which could not be copied out of the replaced file in full: a full disk, a quota
+         or an I/O error. The file now holds the device's version, and what was written of the
+         save, if anything, is the .local- copy beside it, which saf_local_copy_preserved names
+         too. One sentence for a copy cut short and for none at all: the person looks in the
+         same place either way. -->
+    <string name="saf_held_save_incomplete">%1$s: um salvamento feito enquanto a pasta abria não pôde ser mantido inteiro. O arquivo agora tem a versão da pasta do dispositivo. O que foi mantido do salvamento está ao lado, com .local- e um horário no nome.</string>
 
     <!-- The Toolchains toolbar's only icon-only control, and the app's only visible
          way back out of that screen. Without it a screen reader announces an

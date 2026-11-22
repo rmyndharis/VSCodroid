@@ -157,7 +157,8 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   time you open it. Where VSCodroid cannot tell such a file from one deleted in
   the device folder, it keeps the file inside VSCodroid rather than put a deleted
   file back, and a notice names the file, or the first of them and how many.
-  That happens when its record of the folder is missing, and while a folder
+  That happens when its record of the folder is missing (for a file in a
+  subdirectory that opening cannot list, at the first opening that can), and while a folder
   that has been empty at every opening still is, for a file older than the last
   opening (as `unzip` or `cp -p` leave its time). It also happens once after
   an update from VSCodroid 1.10.1 or earlier: when a folder is opened for the
@@ -1759,7 +1760,7 @@ While a device folder is opening, VSCodroid shows a progress dialog and records 
 
 ### A Program Writes a File While Its Folder Opens
 
-When opening a device folder brings in a newer copy of a file you already have and a program saves into that file in the same moment, the save is kept beside it as `<name>.local-<time>`, in the editor and in the device folder, and a notice says so. Three cases are not covered, each within a fraction of a second of the newer copy going in: a save into the old file made just after VSCodroid has looked at it for the last time, a save made by renaming a finished file over the name, and a file a program creates at the name of one the folder is bringing in for the first time. In those, what the program wrote goes. Let such programs finish before you open the folder.
+When opening a device folder brings in a newer copy of a file you already have and a program saves into that file in the same moment, the save is kept beside it as `<name>.local-<time>`, in the editor and in the device folder, and a notice says so. If the storage is full, as much of the save as could be copied is kept under that name and a notice says the save could not be kept whole. Three cases are not covered, each within a fraction of a second of the newer copy going in: a save into the old file made just after VSCodroid has looked at it for the last time, a save made by renaming a finished file over the name, and a file a program creates at the name of one the folder is bringing in for the first time. In those, what the program wrote goes. Let such programs finish before you open the folder.
 
 ### Saving a Download Over an Existing File
 

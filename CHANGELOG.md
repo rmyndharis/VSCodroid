@@ -32,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Deletes and renames a program makes in a device folder's copy while the folder opens reach the device instead of being undone.
 - When opening another device folder fails, what a program saved, deleted or renamed meanwhile in the folder already open reaches the device once its watcher is back.
 - A file a program saves while a device folder opens, after the open has read it, is sent once the folder is open.
-- A save that lands just as a device folder's open puts the device's newer copy in place is kept beside it as a `.local-` copy instead of being lost.
+- A save that lands just as a device folder's open puts the device's newer copy in place is kept beside it as a `.local-` copy instead of being lost, or as far as it could be copied, with a notice, when the disk is full.
 - Opening a device folder no longer keeps a `.device-` copy of a save VSCodroid itself delivered and you edited since, also after its folder was renamed.
 - A save no longer writes over another app's edit when reading the device file ends before its reported size.
 - After a save the device folder refused before writing anything, a shorter device file is kept as a `.device-` copy instead of being written over.
@@ -40,12 +40,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A delete that gives up waiting for another folder's write says so instead of blaming the device folder.
 - The first open of a device folder after an update from 1.10.1 or earlier keeps unchanged files only the app's copy holds inside the app, instead of putting back documents deleted on the device.
 - A file whose save or creation never reached a device folder is sent at the next open, even where an earlier open kept it inside the app.
+- A file only VSCodroid's copy of a device folder holds is sent when the folder opens even behind more than 2,000 files the app keeps inside it, instead of staying behind them without a notice.
 - An edit of a file the device held at over 50 MiB reaches the device folder after the device deletes the file, instead of staying inside the app.
 - An open that cannot read a device folder's record no longer rewrites it, which kept copies of documents deleted on the device inside the app for good.
 - When the device replaces a file with a folder, an app copy that cannot be proved new stays inside the app with a notice instead of being sent into the device folder.
 - An edit made to the copy a removal left when the app was killed is kept under a name of its own and sent to the device folder.
 - Files an open keeps inside the app because they may have been deleted on the device get a notice of their own that names one and says saving it again sends it.
-- An open that lists a device folder only in part and cannot read its record now tells of the files it keeps inside the app.
+- An open that lists a device folder only in part and cannot read its record now tells of the files it keeps inside the app, and leaves those in folders it could not list for the first open that can.
 - A save still queued or arriving when a device folder closes, or inside a renamed folder the device stored under another name, shows the notice that the only copy is inside VSCodroid.
 - Running a file while the offer to reopen a device folder by its name is up no longer makes Reopen and Don't Ask Again do nothing.
 - The warning about a folder on shared storage keeps a digest of the editor server's note in the editor's storage instead of the note, which holds the server's run key.
