@@ -314,14 +314,34 @@ private fun redactNamedSecrets(line: String): String = buildString {
  * and no boundary exists inside `DB_PASSWORD` or `AWS_SECRET_ACCESS_KEY`: anchored
  * that way the rule fired on `password=` and on almost nothing an environment
  * variable is ever called, which is the shape a Node server prints and the shape
- * an extension leaks. The lookbehind is over letters and digits only, so a `_` or
- * `-` before the keyword is a boundary while a letter is not, and `mytoken=` or
+ * an extension leaks. So the keyword has to start the name or follow a `_` or `-`
+ * inside it, and a letter or digit before it disqualifies it: `mytoken=` or
  * `InvalidTokenError:` is still left alone. `pgpassword` is spelled out for that
- * same reason: libpq's variable welds its prefix on with no separator, so the
- * lookbehind refuses it exactly as it refuses `mytoken`, and it is the one name
- * of that shape common enough on this stream to be worth naming.
+ * same reason: libpq's variable welds its prefix on with no separator, so the rule
+ * refuses it exactly as it refuses `mytoken`, and it is the one name of that
+ * shape common enough on this stream to be worth naming.
  *
- * The rest of the name is one optional class, `(?:[_-][A-Za-z0-9_-]*)?`, and not
+ * Each name is read once, and the rule is shaped by that. A match starts only
+ * where a name starts, `(?<![A-Za-z0-9_-])`; the lazy prefix finds the first
+ * keyword in it that starts the name or follows a `_` or `-`; the rest of the
+ * name is taken to its end; and the atomic group `(?>...)` commits to that, so a
+ * name with no separator after it is given up whole instead of being read again
+ * from its next keyword. Nothing is lost by not trying those: every reading of a
+ * name ends at the name's end, so they all meet the same next character. The
+ * lookahead after the keyword, `(?![A-Za-z0-9])`, is what makes committing safe:
+ * a keyword with letters welded onto its right (`Tokenizer`, the `token` of
+ * `tokenizer_secret=`) is passed over for the next one rather than committed to,
+ * and it could never be a name's keyword anyway, since nothing that follows a
+ * letter reaches the separator. The whitespace runs either side of the optional
+ * quote are possessive for the same cost. Before both, a run such as
+ * `-token-token-token` was read again from every keyword in it, and a name
+ * followed by spaces and no separator had its two whitespace runs trade the
+ * spaces between them on every way of failing: each quadratic, about two seconds
+ * for 32,000 characters on the JVM, on the thread draining the server's stdout,
+ * whose pipe fills while it waits. The header rule's two whitespace runs are
+ * possessive for the second of those reasons.
+ *
+ * The rest of the name is one optional class, `(?:[_-][A-Za-z0-9_-]*+)?`, and not
  * a repeated group. java.util.regex compiles a quantified group into a `Loop`
  * that recurses once per repetition, so `(?:[_-][A-Za-z0-9]+)*` raises
  * StackOverflowError on a long enough run of segments: measured here at 2000 of
@@ -330,10 +350,6 @@ private fun redactNamedSecrets(line: String): String = buildString {
  * `ProcessManager.startOutputReader`, reaching the default handler, which kills
  * the process the editor runs in. A character class repeats iteratively and has
  * no such limit to find: 500000 segments on the same stack return normally.
- * Nothing guards the right-hand end of the name, because nothing has to: whatever
- * follows it has to be the `[:=]` this rule is built around, and no separator is
- * a letter, so a keyword with letters welded onto its right (`Tokenizer: 12
- * tokens`) cannot reach one.
  *
  * A quoted value is taken whole, closing quote included, and is tried before the
  * unquoted alternative. Unquoted, the value has to stop at the first space or it
@@ -353,15 +369,16 @@ private fun redactNamedSecrets(line: String): String = buildString {
  * is one word rather than one line, but is more than the name alone suggests.
  */
 private val NAMED_SECRET_PREFIX = Regex(
-    """(?i)(?<![A-Za-z0-9])(?:vscodroid_server_run_id|api[_-]?key|apikey|access[_-]?token|refresh[_-]?token""" +
-        """|run[_-]?id|auth[_-]?token|client[_-]?secret|private[_-]?key|pgpassword|password""" +
-        """|passwd|secret|token)(?:[_-][A-Za-z0-9_-]*)?\s*(?:\\?["'])?\s*[:=]\s*"""
+    """(?i)(?<![A-Za-z0-9_-])(?>(?:[A-Za-z0-9_-]*?[_-])??(?:vscodroid_server_run_id|api[_-]?key|apikey""" +
+        """|access[_-]?token|refresh[_-]?token|run[_-]?id|auth[_-]?token|client[_-]?secret|private[_-]?key""" +
+        """|pgpassword|password|passwd|secret|token)(?![A-Za-z0-9])(?:[_-][A-Za-z0-9_-]*+)?)""" +
+        """\s*+(?:\\?["'])?\s*+[:=]\s*"""
 )
 private val UNQUOTED_SECRET_VALUE = Regex("""["']?[^\s"',}&]+""")
 
 private val SECRET_PATTERNS: List<Pair<Regex, String>> = listOf(
     Regex(
-        """(?i)(\b(?:authorization|cookie|set-cookie)\b\s*(?:\\?["'])?\s*[:=]\s*)""" +
+        """(?i)(\b(?:authorization|cookie|set-cookie)\b\s*+(?:\\?["'])?\s*+[:=]\s*)""" +
             """(?:\\?["'])?[^"',}]+"""
     ) to "\$1<redacted>",
     Regex("""(?i)(\b(?:bearer|basic)\s+)[A-Za-z0-9._~+/=-]{8,}""") to "\$1<redacted>",

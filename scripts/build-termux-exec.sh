@@ -75,11 +75,15 @@ export LC_ALL=C
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-OUT_DIR="${OUT_DIR:-$ROOT_DIR/android/app/src/main/assets/usr/lib}"
+# Both directories can be moved for a build into another tree, through names of
+# this script's own. Not OUT_DIR and WORK_DIR from the environment: a shell may
+# hold either for anything else, and this script deletes WORK_DIR/src and
+# WORK_DIR/obj, which would then be directories of that other thing.
+OUT_DIR="${TERMUX_EXEC_OUT_DIR:-$ROOT_DIR/android/app/src/main/assets/usr/lib}"
 # Beside the Termux notices, at usr/share/doc relative to the library, so a run
-# into another OUT_DIR mirrors the whole layout rather than half of it.
+# into another TERMUX_EXEC_OUT_DIR mirrors the whole layout rather than half of it.
 DOC_DIR="$(dirname "$OUT_DIR")/share/doc/termux-exec"
-WORK_DIR="${WORK_DIR:-$ROOT_DIR/toolchains/build/termux-exec}"
+WORK_DIR="${TERMUX_EXEC_WORK_DIR:-$ROOT_DIR/toolchains/build/termux-exec}"
 PATCH="$SCRIPT_DIR/termux-exec.patch"
 OUT="$OUT_DIR/libtermux-exec.so"
 

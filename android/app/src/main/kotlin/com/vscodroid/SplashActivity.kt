@@ -121,6 +121,16 @@ class SplashActivity : AppCompatActivity() {
     private var launchPending = false
 
     /**
+     * Play wanted its cellular-data question put for the pack in flight while this screen was
+     * [stopped], so the question waits for the next [onStart]: its window takes the foreground,
+     * and put from a stopped screen it lands over whatever the person moved to, or is refused as
+     * a start from the background with nothing said and never asked again. Taken back by any
+     * other status of that pack, which means the question was answered elsewhere or is moot, and
+     * by [onDestroy], where a screen that will not start again ends the pack instead.
+     */
+    private var confirmationDeferred = false
+
+    /**
      * The setup hold a first run took ahead of its launch repairs, until a setup
      * run takes it over ([runSetupWithRetry]) or the launch gives it back.
      */
@@ -635,8 +645,9 @@ class SplashActivity : AppCompatActivity() {
      *
      * The re-read exists for that one screen; [ToolchainActivity] re-reads in its
      * own `onStart` for the same reason. Reading here costs one small JSON file and
-     * only while the picker is up. It also runs a [launchMain] that was asked while
-     * the user was away.
+     * only while the picker is up. It also shows the notices held while the user
+     * was away, runs a [launchMain] that was asked meanwhile, and puts Play's
+     * cellular-data question if it was asked meanwhile ([confirmationDeferred]).
      */
     override fun onStart() {
         super.onStart()
@@ -644,11 +655,17 @@ class SplashActivity : AppCompatActivity() {
         ToolchainManager(applicationContext).let {
             pickerAdapter?.setInstalled(it.getInstalledToolchains(), it.installedLabels())
         }
+        // Before the launch held while the user was away: a notice raised meanwhile goes on a
+        // dialog now, and the launch then waits for it rather than finishing the screen under it.
+        AppNotices.flush(this)
         if (launchPending) {
             launchPending = false
             launchMain()
         }
-        AppNotices.flush(this)
+        if (confirmationDeferred) {
+            confirmationDeferred = false
+            askForCellularConfirmation()
+        }
     }
 
     // A paused screen can return without another onStart.
@@ -671,6 +688,16 @@ class SplashActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        // A question kept for a start this screen will not have. The platform marks the screen
+        // destroyed before it calls this, so handleDownloadState reads the question as one it
+        // cannot put, ends the pack and moves the queue on; left waiting, the queue stopped on it
+        // for good. First, so a queue that ends here gives back the listener released below.
+        if (confirmationDeferred) {
+            confirmationDeferred = false
+            downloadQueue.getOrNull(currentDownloadIndex)?.let {
+                handleDownloadState(it, AssetPackStatus.REQUIRES_USER_CONFIRMATION, 0)
+            }
+        }
         // A Play completion installs the current pack and advances the queue even
         // after this screen leaves. The queue releases the listener and callback when done.
         toolchainManager?.unregisterListenerIfIdle()
@@ -900,7 +927,6 @@ class SplashActivity : AppCompatActivity() {
         // on the callback arriving; here everything does.
         manager.onStateChange = { packName, status, percent, why, _ ->
             runOnUiThread {
-                handleDownloadState(packName, status, percent)
                 // The row has space for one word and the reason is a sentence, so
                 // it is said here rather than squeezed in there. Without it the
                 // queue moves on and the only record of WHY is in logcat.
@@ -911,11 +937,20 @@ class SplashActivity : AppCompatActivity() {
                 // rule as ToolchainActivity, which gates its own Toast on the
                 // screen being started; the test on it is weaker here because
                 // this screen never comes back, so there is nothing to defer to.
+                //
+                // Before handleDownloadState, never after it. The pack that settles
+                // last ends the queue in there, and the end of the queue starts the
+                // editor and finishes this screen, so a reason asked for afterwards
+                // met a finishing screen and was dropped: one toolchain ticked on a
+                // full disk flashed "Failed" and the editor opened with nothing said.
+                // A reason too long for a toast is a dialog on this screen, and
+                // [launchMain] waits for it to be closed.
                 val reason =
                     if (isFinishing || isDestroyed) null else reasonToAnnounce(why, alreadySaid)
                 if (reason != null) {
                     AppNotices.showNotice(this, getString(reason.message), Toast.LENGTH_LONG)
                 }
+                handleDownloadState(packName, status, percent)
             }
         }
         manager.registerListener()
@@ -1098,14 +1133,18 @@ class SplashActivity : AppCompatActivity() {
         // only where the queue ends, this destroyed screen and its whole view
         // hierarchy stay in Play Core's process-wide registry for the life of the
         // process. ToolchainActivity defers the question to its next onStart
-        // instead; here there is no next onStart, since launchMain finishes this
-        // screen for good.
+        // instead; a screen that is gone has no next onStart, since launchMain
+        // finishes this screen for good. One that is only stopped does, and the
+        // question waits for it ([confirmationDeferred]).
         //
         // Losing the pack is the lesser half of that trade, and it is recoverable:
         // ToolchainActivity's poll picks up a pack still sitting in this status
         // and puts the question itself.
         val unaskable = status == AssetPackStatus.REQUIRES_USER_CONFIRMATION &&
             (isFinishing || isDestroyed)
+        // A question kept for the next start is about this pack waiting on it; any other status
+        // of the pack means it was answered elsewhere or no longer matters.
+        if (status != AssetPackStatus.REQUIRES_USER_CONFIRMATION) confirmationDeferred = false
 
         when (status) {
             AssetPackStatus.DOWNLOADING, AssetPackStatus.TRANSFERRING -> {
@@ -1127,12 +1166,10 @@ class SplashActivity : AppCompatActivity() {
                 if (unaskable) {
                     row.statusText.text = getString(R.string.progress_failed)
                     showResult(row.statusText, R.color.colorError, row.nameText.text.toString())
+                } else if (stopped) {
+                    confirmationDeferred = true
                 } else {
-                    try {
-                        toolchainManager?.showConfirmationDialog(this)
-                    } catch (e: Exception) {
-                        Logger.e(tag, "Failed to show confirmation dialog", e)
-                    }
+                    askForCellularConfirmation()
                 }
             }
             // Anything else ends this pack without installing it, with one
@@ -1183,6 +1220,19 @@ class SplashActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Puts Play's cellular-data question, from a screen that is in front: from
+     * [handleDownloadState] when the question arrives on a started screen, and from [onStart] for
+     * one [confirmationDeferred] kept.
+     */
+    private fun askForCellularConfirmation() {
+        try {
+            toolchainManager?.showConfirmationDialog(this)
+        } catch (e: Exception) {
+            Logger.e(tag, "Failed to show confirmation dialog", e)
+        }
+    }
+
 
 
     // -- Navigation --
@@ -1209,11 +1259,17 @@ class SplashActivity : AppCompatActivity() {
         // whatever they are doing, and the finish() below closed the task with nothing
         // started. [onStart] runs this again when they come back.
         val away = !gone && stopped
+        // A dialog on this screen is a notice too long for a toast, most often why a toolchain
+        // the queue just ended on could not be installed, and the finish() below takes it down
+        // with the screen, read or not. The editor starts when the person closes it instead.
+        val held = !gone && !away && AppNotices.afterDialog(this) { launchMain() }
         if (gone) {
             Logger.i(tag, "The splash screen is gone; not launching the editor behind the user")
         } else if (away) {
             Logger.i(tag, "The splash screen is in the background; the editor starts when it returns")
             launchPending = true
+        } else if (held) {
+            Logger.i(tag, "A notice is on the splash screen; the editor starts when it is closed")
         } else {
             startActivity(Intent(this, MainActivity::class.java).apply {
                 data = intent?.data
@@ -1235,7 +1291,7 @@ class SplashActivity : AppCompatActivity() {
         // Those are floor numbers. The devices this project exists for have a
         // busier system server than an idle emulator does.
         publishToolchainShortcut()
-        if (!gone && !away) finish()
+        if (!gone && !away && !held) finish()
     }
 
     /**

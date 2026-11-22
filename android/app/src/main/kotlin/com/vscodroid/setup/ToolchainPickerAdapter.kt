@@ -161,8 +161,8 @@ class ToolchainPickerAdapter(
         // ToolchainCardState.toggleSelection refuses it too; that is the half a
         // test can drive, this is the half the user sees.
         //
-        // Drawn rather than dropped from the grid: two cards are the whole list,
-        // and one going missing reads as a build that withdrew the toolchain.
+        // Drawn rather than dropped from the grid: the picker offers only a few
+        // cards, and one going missing reads as a build that withdrew the toolchain.
         // Every field is set on both paths because a recycled holder arrives
         // carrying the previous card's badge, listener and clickability.
         if (state.badge == ToolchainBadge.INSTALLED) {

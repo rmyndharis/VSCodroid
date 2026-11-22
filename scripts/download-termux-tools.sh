@@ -258,9 +258,13 @@ echo ""
 echo "Placing shared libraries in assets/usr/lib/..."
 # Clean previous libs (avoids stale versioned files from earlier runs).
 #
-# Only the ones this script places. `usr/lib` has two owners: the Termux
-# libraries below, and the glibc compatibility shim that build-glibc-shim.sh
-# writes there. A blanket `*.so*` swept the shim away as well, and nothing
+# Every library there but the glibc compatibility shim's. `usr/lib` has more
+# owners than this script: the shim, which build-glibc-shim.sh writes;
+# libpython and its libraries, from download-python.sh; libtermux-exec.so, from
+# build-termux-exec.sh; and libselfexe.so, from build-selfexe-shim.sh. The last
+# three go with this script's own stale versions and are written again by their
+# scripts, which build-all.sh and both workflows run after this one. The shim is
+# kept, because a blanket `*.so*` swept it away as well, and nothing
 # rebuilt it or noticed it was gone -- the sweep at the end of this script runs
 # after the wipe, so it examines only what this script just wrote, and absence is
 # invisible to it. What that costs is every addon that names a glibc soname

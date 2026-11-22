@@ -3,7 +3,6 @@ package com.vscodroid.service
 import android.os.ParcelFileDescriptor
 import android.system.ErrnoException
 import android.system.Os
-import android.system.OsConstants
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkStatic
@@ -52,9 +51,12 @@ class OwnLoopbackClientsTest {
 
     private fun address(port: Int) = InetSocketAddress(loopback, port)
 
-    /** What `Os` and `ParcelFileDescriptor` throw on a device, with an errno the JVM stand-in does not keep. */
-    private fun errno(number: Int): ErrnoException =
-        mockk<ErrnoException>(relaxed = true).also { ErrnoException::class.java.getField("errno").setInt(it, number) }
+    /**
+     * What `Os` and `ParcelFileDescriptor` throw on a device, with an errno the JVM stand-in does not keep.
+     * The numbers are Linux's own, as the code compares them: `OsConstants` reads 0 for every one here,
+     * so a case written with it matched whatever the code compared against.
+     */
+    private fun errno(number: Int): ErrnoException = errnoException(number)
 
     private fun descriptor(number: Int, kind: String) {
         File(fds, number.toString()).createNewFile()
@@ -67,7 +69,7 @@ class OwnLoopbackClientsTest {
         val copy = mockk<ParcelFileDescriptor>(relaxed = true) { every { fileDescriptor } returns fd }
         every { ParcelFileDescriptor.fromFd(number) } returns copy
         every { Os.getsockname(fd) } returns local
-        if (peer == null) every { Os.getpeername(fd) } throws errno(OsConstants.ENOTCONN) else every { Os.getpeername(fd) } returns peer
+        if (peer == null) every { Os.getpeername(fd) } throws errno(ENOTCONN) else every { Os.getpeername(fd) } returns peer
         duplicates[number] = copy
     }
 
@@ -99,7 +101,7 @@ class OwnLoopbackClientsTest {
     @Test
     fun `a descriptor whose link cannot be read is passed over`() {
         File(fds, "5").createNewFile()
-        every { Os.readlink("${fds.path}/5") } throws errno(OsConstants.EBADF)
+        every { Os.readlink("${fds.path}/5") } throws errno(EBADF)
         socket(4, address(40000), listener)
 
         assertEquals(setOf(address(40000)), ownLoopbackClients(listener, fds))
@@ -108,7 +110,7 @@ class OwnLoopbackClientsTest {
     @Test
     fun `a socket closed since the listing is passed over`() {
         descriptor(5, "socket:[1]")
-        every { ParcelFileDescriptor.fromFd(5) } throws IOException("dup", errno(OsConstants.EBADF))
+        every { ParcelFileDescriptor.fromFd(5) } throws IOException("dup", errno(EBADF))
         socket(4, address(40000), listener)
 
         assertEquals(setOf(address(40000)), ownLoopbackClients(listener, fds))
@@ -117,7 +119,7 @@ class OwnLoopbackClientsTest {
     @Test
     fun `a socket that cannot be looked at for any other reason is not an answer`() {
         descriptor(5, "socket:[1]")
-        every { ParcelFileDescriptor.fromFd(5) } throws IOException("dup", errno(OsConstants.EBADF + 1))
+        every { ParcelFileDescriptor.fromFd(5) } throws IOException("dup", errno(ECHILD))
         socket(4, address(40000), listener)
 
         assertThrows<IOException> { ownLoopbackClients(listener, fds) }
@@ -126,5 +128,12 @@ class OwnLoopbackClientsTest {
     @Test
     fun `descriptors that cannot be listed are not an answer`() {
         assertThrows<IOException> { ownLoopbackClients(listener, File(fds, "absent")) }
+    }
+
+    private companion object {
+        // The generic Linux table that arm64 uses.
+        const val EBADF = 9
+        const val ECHILD = 10
+        const val ENOTCONN = 107
     }
 }

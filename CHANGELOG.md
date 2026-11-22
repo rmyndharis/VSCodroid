@@ -55,6 +55,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A file made or saved in a device folder's subfolder just after the subfolder is renamed reaches the device under the new name instead of staying inside VSCodroid.
 - A file deleted in a device folder's subfolder just after the subfolder is renamed, also while the folder opens, is deleted on the device instead of coming back at the next open.
 - A folder renamed twice in quick succession, or renamed inside a folder that was just renamed, ends up on the device under its last name only instead of under both.
+- A folder made again at the name of one moved out of a device folder while it opens is watched, so saves in it reach the device instead of staying inside VSCodroid.
+- A folder renamed and then removed while its device folder opens is removed on the device instead of coming back at the next open.
+- A folder renamed while its device folder opens is sent without looking each file up on the device twice, so other saves no longer wait behind it.
+- A folder moved out of a device folder while it opens is no longer renamed onto a folder that arrives more than a second later with the same identity.
+- Closing a device folder, or opening another, while it sends what changed during its open now stops without notices for changes it never reached.
+- A deletion being sent while a device folder closes no longer holds the switch up for two seconds.
+- A save delivered while a device folder's record could not be read is no longer kept as another app's `.device-` copy when the next open cannot write the record at first.
+- At the first open after updating from 1.10.1 or earlier, a copy of a document deleted on the device stays inside VSCodroid with a notice also when a program renames its folder during the open.
+- A file sent with a folder renamed while an empty device folder opens is no longer also said to stay inside VSCodroid.
+- A copy kept inside VSCodroid beside a folder that replaced its file is told of once.
 
 ## [1.10.1] - 2026-11-21
 

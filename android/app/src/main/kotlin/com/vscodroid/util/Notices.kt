@@ -61,7 +61,7 @@ object Notices {
      * to re-derive this set when the bundled binaries change; that script fails
      * a build whose components carry a copyleft licence with no text here.
      *
-     * Deliberately not in [BUNDLED]. These are 78 KiB of legalese that nobody
+     * Deliberately not in [BUNDLED]. These are 85 KiB of legalese that nobody
      * opens the notices screen to read, and appending them to the body would
      * bury the attribution and the source offer under a screenful-per-scroll of
      * licence. They are one tap away from the same dialog instead, which keeps

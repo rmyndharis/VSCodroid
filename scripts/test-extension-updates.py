@@ -2,6 +2,7 @@
 """Exercise extension version checks against real, temporary Git histories."""
 
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -10,6 +11,11 @@ import tempfile
 import unittest
 
 CHECK = Path(__file__).with_name("check-extension-updates.py")
+# git reads none of the machine's configuration, and no git variable a hook may have
+# exported: a developer's commit.gpgsign or core.hooksPath otherwise fails or rewrites
+# every fixture commit here, and the checker runs git too.
+ENV = {**{k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+       "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
 
 
 class ExtensionUpdatesTest(unittest.TestCase):
@@ -28,15 +34,17 @@ class ExtensionUpdatesTest(unittest.TestCase):
         (self.directory / "package.nls.json").write_text('{"title":"Original","enabled":false}')
         self.git("add", "--", str(self.directory.relative_to(self.root)))
         self.git("commit", "-qm", "Add extension")
+        # Released, so every case below edits a directory a device may already hold.
+        self.git("tag", "v1.0.0")
         self.check = self.root / "scripts/check-extension-updates.py"
         self.check.parent.mkdir()
         shutil.copyfile(CHECK, self.check)
 
     def git(self, *args):
-        return subprocess.run(["git", "-C", str(self.root), *args], capture_output=True, check=True)
+        return subprocess.run(["git", "-C", str(self.root), *args], capture_output=True, check=True, env=ENV)
 
     def check_status(self):
-        return subprocess.run([sys.executable, str(self.check)], capture_output=True, text=True)
+        return subprocess.run([sys.executable, str(self.check)], capture_output=True, text=True, env=ENV)
 
     def test_semantic_manifest_edit_requires_new_directory(self):
         pkg = json.loads(self.manifest.read_text())
@@ -64,6 +72,16 @@ class ExtensionUpdatesTest(unittest.TestCase):
         self.git("commit", "-qm", "Change title")
         self.assertNotEqual(0, self.check_status().returncode)
 
+    def test_adding_translation_requires_new_directory(self):
+        # A language file the directory did not ship with is served stale like an edited one:
+        # the server's extension scan is cached until the directory name changes.
+        (self.directory / "package.nls.ja.json").write_text('{"title":"Japanese"}')
+        result = self.check_status()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("package.nls.ja.json added without a directory version bump", result.stdout)
+        self.directory.rename(self.directory.with_name("vscodroid.example-1.0.1"))
+        self.assertEqual(0, self.check_status().returncode)
+
     def test_removing_translation_requires_new_directory(self):
         (self.directory / "package.nls.json").unlink()
         self.assertNotEqual(0, self.check_status().returncode)
@@ -89,6 +107,55 @@ class ExtensionUpdatesTest(unittest.TestCase):
         self.git("commit", "-qm", "Restore extension")
         self.assertNotEqual(0, self.check_status().returncode)
 
+    def test_unreleased_directory_takes_further_commits(self):
+        # A bumped directory no release carries yet is on no device a user holds, so a
+        # second commit to it, such as a fix-up in the same pull request, needs no
+        # second bump.
+        bumped = self.directory.with_name("vscodroid.example-1.0.1")
+        self.directory.rename(bumped)
+        manifest = bumped / "package.json"
+        manifest.write_text(manifest.read_text().replace('"1.0.0"', '"1.0.1"'))
+        self.git("add", "--", str(self.directory.relative_to(self.root)), str(bumped.relative_to(self.root)))
+        self.git("commit", "-qm", "Bump extension")
+        (bumped / "package.nls.json").write_text('{"title":"Fixed","enabled":false}')
+        self.git("add", "--", str(bumped.relative_to(self.root)))
+        self.git("commit", "-qm", "Fix the title")
+        result = self.check_status()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        # Once a release carries it, the same edit needs a new directory again.
+        self.git("tag", "v1.0.1")
+        (bumped / "package.nls.json").write_text('{"title":"Again","enabled":false}')
+        self.assertNotEqual(0, self.check_status().returncode)
+
+    def test_released_content_is_the_baseline(self):
+        # Changed in place after it was added but before any release carried it, then
+        # released: what devices hold is the released content, so that is what an edit
+        # is measured against, not the commit that first added the directory.
+        directory = self.directory.with_name("vscodroid.later-1.0.0")
+        directory.mkdir()
+        nls = directory / "package.nls.json"
+        (directory / "package.json").write_text('{"name":"later","version":"1.0.0"}')
+        nls.write_text('{"title":"Draft"}')
+        self.git("add", "--", str(directory.relative_to(self.root)))
+        self.git("commit", "-qm", "Add another extension")
+        nls.write_text('{"title":"Shipped"}')
+        self.git("add", "--", str(directory.relative_to(self.root)))
+        self.git("commit", "-qm", "Reword it")
+        self.git("tag", "v1.1.0")
+        result = self.check_status()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        nls.write_text('{"title":"Changed after release"}')
+        self.assertNotEqual(0, self.check_status().returncode)
+
+    def test_no_release_tag_is_refused_instead_of_passed(self):
+        # With no release tag in sight every directory reads as unreleased, so an
+        # edit to one that shipped would pass. A clone made without tags is refused.
+        self.git("tag", "-d", "v1.0.0")
+        self.manifest.write_text('{"name":"example","version":"1.0.0","displayName":"Changed"}')
+        result = self.check_status()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("release tag", result.stdout + result.stderr)
+
     def test_shallow_clone_is_refused_instead_of_passed(self):
         # In a depth-1 clone the tip is the oldest commit git can see, so it reads as the
         # one that added the extension and an edit made since compares equal to itself.
@@ -101,13 +168,13 @@ class ExtensionUpdatesTest(unittest.TestCase):
         clone = Path(clones.name) / "shallow"
         subprocess.run(
             ["git", "clone", "-q", "--depth", "1", self.root.as_uri(), str(clone)],
-            capture_output=True, check=True,
+            capture_output=True, check=True, env=ENV,
         )
         (clone / "scripts").mkdir()
         shutil.copyfile(CHECK, clone / "scripts/check-extension-updates.py")
         result = subprocess.run(
             [sys.executable, str(clone / "scripts/check-extension-updates.py")],
-            capture_output=True, text=True,
+            capture_output=True, text=True, env=ENV,
         )
         self.assertNotEqual(0, result.returncode)
         self.assertIn("shallow", result.stdout + result.stderr)

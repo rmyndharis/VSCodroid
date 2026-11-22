@@ -18,6 +18,12 @@ be stricter than Play but never more permissive: a bundle it passes cannot be
 one Play rejects for module size. It does not reproduce Play's own number and
 does not try to.
 
+The caps are read in the smaller of the two units Play's "MB" and "GB" could
+mean, 10^6 and 10^9 bytes, for the same reason. They were read in binary units,
+500 MiB and 1536 MiB, which are 4.9% and 7.4% larger, so a base module between
+476.8 and 500 MiB passed here, and if Play counts in decimal units it would
+have refused it at upload.
+
 What it does not cover -- stated rather than implied
 ----------------------------------------------------
 Delivery mode (install-time, fast-follow, on-demand) lives in each module's
@@ -39,9 +45,10 @@ import zipfile
 
 MIB = 1024 * 1024
 
-# support.google.com/googleplay/android-developer/answer/9859372
-BASE_CAP_MIB = 500
-PACK_CAP_MIB = 1536
+# support.google.com/googleplay/android-developer/answer/9859372: 500 MB for the
+# base module, 1.5 GB for an asset pack. Decimal units, the stricter reading.
+BASE_CAP_BYTES = 500 * 1000 ** 2
+PACK_CAP_BYTES = 1500 * 1000 ** 2
 
 # Not modules: bundle-level metadata and the config protobuf.
 NOT_A_MODULE = {"BUNDLE-METADATA", "META-INF", "BundleConfig.pb"}
@@ -99,11 +106,11 @@ def main(argv) -> int:
 
     failed = False
     for module, (comp, raw) in sorted(sizes.items(), key=lambda kv: -kv[1][0]):
-        cap = BASE_CAP_MIB if module == "base" else PACK_CAP_MIB
-        over = comp / MIB > cap
+        cap = BASE_CAP_BYTES if module == "base" else PACK_CAP_BYTES
+        over = comp > cap
         status = "FAIL  " if over else "ok    "
         print(f"  {status} {module:<18} {comp / MIB:8.1f} MiB compressed "
-              f"({raw / MIB:7.1f} MiB raw)  cap {cap} MiB")
+              f"({raw / MIB:7.1f} MiB raw)  cap {cap / MIB:.1f} MiB ({cap // 1000 ** 2} MB)")
         if over:
             print(f"         Play refuses this at upload. Reduce {module} or move "
                   f"content into an on-demand pack.")

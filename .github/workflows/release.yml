@@ -64,8 +64,10 @@ permissions:
 # install resolves its toolchain ZIPs. So it stays open deliberately: it needs a
 # tag to move, while the pointer is read on every sideloaded install. What
 # reaches it is narrower than it was: the version gate below refuses a tag
-# re-aimed at a different commit, so a second run is one re-pushed at the same
-# commit, which rebuilds the same tree.
+# force-pushed to another commit, so a second run is either a re-run of the
+# first from the Actions page, which replays its event and rebuilds the same
+# commit, or a tag deleted and pushed again, which the gate lets through on
+# purpose.
 # `draft: true` is no shortcut to it either, because `finalizeRelease` returns
 # early when that input is set and the release would never be published at all.
 #
@@ -160,11 +162,15 @@ jobs:
           # FirstRunSetup.setupIsStale also compares the package update time,
           # but migrations are version-based and release identity is ambiguous.
           #
-          # Forty zeros means the tag is new. TAG_WAS equal to TAG_NOW means it
-          # was re-pushed at the same commit, which rebuilds the same tree and is
-          # how a run cancelled or killed midway is retried. A push event
-          # carrying no `before` at all is allowed through rather than blocking a
-          # release on the shape of a payload.
+          # Forty zeros means the tag is new. A run cancelled or killed midway is
+          # retried with Re-run, which replays this same event, zeros included.
+          # TAG_WAS equal to TAG_NOW would be a push that moved nothing, which git
+          # does not send and GitHub therefore never delivers; the arm only keeps
+          # such a payload from being refused. A push event carrying no `before`
+          # at all is allowed through rather than blocking a release on the shape
+          # of a payload. For an annotated tag both values name tag objects, not
+          # commits, so one re-created at the same commit and force-pushed is
+          # refused like a re-aimed one: delete it and push it again instead.
           #
           # This is a guardrail and not a wall, deliberately: deleting the tag and
           # pushing it again presents as a new tag and is allowed, which is the
@@ -552,6 +558,7 @@ jobs:
           python3 scripts/test-patch-sysroot-paths.py
           python3 scripts/test-exec-trampoline.py
           python3 scripts/test-move-noreplace.py
+          python3 scripts/test-musl-loader.py
           python3 scripts/test-selfexe-shim.py
           python3 scripts/test-check-server-published.py
           python3 scripts/test-extension-updates.py
@@ -851,6 +858,17 @@ jobs:
         working-directory: android
         run: ./gradlew lint
 
+      # Lint cannot fail on this one. The Play SDK Index ids are informational in
+      # android/app/build.gradle.kts so that a label Google sets on its own
+      # schedule cannot turn every build red, and lint has no setting that keeps
+      # the blocking label an error, so a dependency Play Console refuses passes
+      # the step above. Lint still writes it into the report, and a tag is the
+      # last moment to stop it before the GitHub release is public and the store
+      # upload is refused. Here and not in lint.yml, because a pull request is
+      # not where a label Google added overnight should be answered.
+      - name: Refuse a dependency Play Console would block
+        run: python3 scripts/check-lint-baseline.py --play-console-labels android/app/build/reports
+
       # The last thing build.yml does that a tag did not. Nothing runs the
       # instrumented suite -- no runner measured here can, see
       # androidTest/README.md -- so compiling it is the whole of what CI can
@@ -999,6 +1017,16 @@ jobs:
           VSCODROID_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           VSCODROID_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: ./gradlew bundleRelease
+
+      # The decoded signing key is read by the two signing builds above and by
+      # nothing after them. It stayed on disk for the rest of the job: through the
+      # packaging scripts, the uploads and the post steps of every third-party
+      # action. Removed here whether or not the builds succeeded. Between the two
+      # builds it is still on disk while this repository's own checks run, none
+      # of which reads it.
+      - name: Remove the decoded keystore
+        if: always()
+        run: rm -f android/keystore.jks
 
       # The merged half of the permission check, asked of the artefact rather
       # than of a task name. The step before the downloads runs the same script

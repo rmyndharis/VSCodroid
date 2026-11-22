@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
-const { execFileSync } = require('node:child_process');
+const { applyFixturePatch } = require('./lib/apply-fixture-patch');
 const { stripTypeScriptTypes } = require('node:module');
 const { createHmac } = require('node:crypto');
 const http = require('node:http');
@@ -24,7 +24,7 @@ module.exports = (async () => {
         fs.mkdirSync(path.dirname(sourceFile));
         fs.copyFileSync(path.join(__dirname, 'fixtures/server-run-proof.ts'), sourceFile);
         const patch = path.join(__dirname, '../patches/0039-authenticate-the-editor-listener.patch');
-        if (fs.existsSync(patch)) execFileSync('git', ['apply', patch], { cwd: temporary });
+        applyFixturePatch(temporary, patch, { changes: ['src/server-main.ts'] });
         const source = fs.readFileSync(sourceFile, 'utf8')
             .replace(/^import .*;$/gm, '');
         let installedHandler;

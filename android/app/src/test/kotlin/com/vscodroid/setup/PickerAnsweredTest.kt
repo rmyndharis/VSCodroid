@@ -31,6 +31,15 @@ class PickerAnsweredTest {
         val chosen = onContinue.substringAfter("} else {")
         assertTrue(chosen.contains("startDownloads(selected)"), "the branch that starts the downloads moved")
         assertEquals(0, count(chosen), "the picker is answered before the queue of downloads has ended")
+        // Nor on the way in: startDownloads is reached from that branch alone, so a call there
+        // answers the picker at the tap just the same. Every call in the file is one of the three
+        // the cases below name (Continue with nothing new, Skip, the end of the queue), beside the
+        // declaration itself.
+        assertEquals(
+            0, count(SourceScan.body(splash, "private fun startDownloads(")),
+            "starting the downloads answers the picker before they have ended",
+        )
+        assertEquals(4, count(splash), "markPickerShown() is called somewhere other than the three places that answer the picker")
     }
 
     @Test
@@ -50,7 +59,7 @@ class PickerAnsweredTest {
         assertTrue(end.indexOf("markPickerShown()") < end.indexOf("unregisterListener()"))
         val next = SourceScan.body(splash, "private fun downloadNext(")
         assertTrue(next.contains("endDownloadQueue()"), "the last pack no longer ends the queue")
-        val cancel = splash.substringAfter("cancelBtn.setOnClickListener {").substringBefore("// Start first download")
+        val cancel = SourceScan.body(splash, "cancelBtn.setOnClickListener")
         assertTrue(cancel.contains("endDownloadQueue()"), "cancel no longer ends the queue, so it never answers the picker")
     }
 

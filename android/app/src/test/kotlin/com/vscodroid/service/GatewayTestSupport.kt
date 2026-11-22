@@ -1,5 +1,6 @@
 package com.vscodroid.service
 
+import android.system.ErrnoException
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkObject
@@ -19,6 +20,15 @@ internal fun openUnixServerChannel(): ServerSocketChannel =
 internal fun openUnixClientChannel(): SocketChannel =
     SocketChannel::class.java.getMethod("open", ProtocolFamily::class.java)
         .invoke(null, StandardProtocolFamily.UNIX) as SocketChannel
+
+/**
+ * An [ErrnoException] carrying [number]. The JVM stand-in keeps no errno of its own, so a constructed
+ * one reads 0 whatever it was given, which is also what every `OsConstants` field reads there. A real
+ * instance, not a mock: one that escapes a failing case is serialized whole, and a mock drags MockK's
+ * state along until the test worker runs out of heap.
+ */
+internal fun errnoException(number: Int): ErrnoException =
+    ErrnoException("fixture", number).also { ErrnoException::class.java.getField("errno").setInt(it, number) }
 
 /** Stubs only the native transport boundary; process probes still use real fixture sockets. */
 internal fun mockEditorGateway(): EditorGateway {

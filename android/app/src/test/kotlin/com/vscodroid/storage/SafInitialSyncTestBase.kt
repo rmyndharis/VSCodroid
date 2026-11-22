@@ -64,6 +64,9 @@ abstract class SafInitialSyncTestBase {
     /** The files an open said it keeps inside the app, as (count, first file) per notice. */
     protected val keptInApp = mutableListOf<Pair<Int, String>>()
 
+    /** The `.local-` copies an open said it kept beside their files, by name. */
+    protected val localCopies = mutableListOf<String>()
+
     protected val record: File get() = File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
 
     /** The mark beside [record] that an open of this build sorted the files only the app holds. */
@@ -192,11 +195,13 @@ abstract class SafInitialSyncTestBase {
         notCopied = 0
         didNotReach.clear()
         keptInApp.clear()
+        localCopies.clear()
         val engine = SafSyncEngine(context)
         engine.onWriteBackFailed = { lost += it.name }
         engine.onDocumentsNotCopied = { count, _ -> notCopied = count }
         engine.onUploadIncomplete = { _, count, _ -> didNotReach += count }
         engine.onFilesKeptInApp = { _, count, first -> keptInApp += count to first }
+        engine.onLocalCopiesPreserved = { copies -> localCopies += copies.map { it.name } }
         engine.initialSync(named("tree"), mirror) { _, _ -> }
         engine
     }

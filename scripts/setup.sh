@@ -23,6 +23,18 @@ echo "Checking prerequisites..."
 check_command node
 check_command git
 check_command python3
+# Each called by a step build-all.sh runs after this one, which would otherwise
+# stop minutes in at the step that needs it: curl by every download, bsdtar to
+# read a Termux .deb, gpg to check the Termux index signature, openssl to check
+# Alpine's, unzip for the bundled extensions and pip's wheel, patch for the
+# termux-exec sources. zip and bc are package-toolchains.sh's alone, which
+# build-all.sh does not run.
+check_command curl
+check_command bsdtar
+check_command gpg
+check_command openssl
+check_command unzip
+check_command patch
 
 # Check Node.js version
 NODE_VERSION=$(node --version | sed 's/v//')

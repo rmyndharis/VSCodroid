@@ -558,6 +558,26 @@ class ForegroundPromotionCallSiteTest {
     }
 
     @Test
+    fun `setup's card carries no Stop`() {
+        // NotificationCompat needs Android, so this reads the builder, as the case above
+        // does. No server runs behind setup's card, and its Stop ran the whole stop:
+        // the service left the foreground and stopped itself in the middle of the
+        // unpack, taking away the hold setup takes against the low-memory killer.
+        // NodeServiceStopTest holds which card asks for the action; this holds that
+        // the builder obeys.
+        val card = bodyOf("private fun createNotification(")
+        val guard = card.indexOf("if (offersStop)")
+        assertTrue(
+            guard >= 0 && card.indexOf("addAction(") > guard,
+            "the Stop action is added whatever card is being built:\n$card",
+        )
+        assertTrue(
+            bodyOf("private fun promoteToForeground(").contains("offersStop = false"),
+            "setup's card is built with the Stop action",
+        )
+    }
+
+    @Test
     fun `the running card does not warn about a network the server has`() {
         // The adopted line said the session had no network, which was true while
         // the DNS proxy was bound by the bootstrap: an adopted server is by

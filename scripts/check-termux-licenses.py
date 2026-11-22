@@ -112,9 +112,10 @@ UNSTATED = "custom"
 # The share of the mapped packages upstream has to answer for before the report
 # is worth reading. subjects() counts its own population twice because a
 # narrowed report is the failure mode that reads like a clean one; this is the
-# same floor under the other half. 43 of 44 are read today, so the value leaves
-# room for a handful of subpackages that have no build.sh of their own without
-# leaving room for the package names here to have quietly stopped resolving.
+# same floor under the other half. Nearly all of them are read today, so the
+# value leaves room for a handful of subpackages that have no build.sh of their
+# own without leaving room for the package names here to have quietly stopped
+# resolving.
 MIN_COMPARED_SHARE = 2 / 3
 
 # Binaries a download script renames on the way into jniLibs, and the package
