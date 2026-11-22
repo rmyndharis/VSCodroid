@@ -253,6 +253,26 @@ class WriteBackNoticeWiringTest {
         )
     }
 
+    /**
+     * A save caught as an open put the device's newer copy in place, which could not be kept whole. Unwired, the person
+     * is told at most that a copy was kept, or nothing where none could be made, and the editor shows the device's
+     * version as if the save had never been. Same ceiling and same anchoring as the cases above.
+     */
+    @Test
+    fun `MainActivity asks to be told when a save caught as a folder opened could not be kept whole`() {
+        assertTrue(activity.isFile, "MainActivity.kt is not where this test expects it")
+        val source = activity.readText()
+
+        assertTrue(
+            Regex("""(?m)^\s*safManager\.onHeldSaveIncomplete\s*\{""").containsMatchIn(source),
+            "nothing wires the notice for a save that could not be kept whole, so the editor shows the device's version and says nothing",
+        )
+        assertTrue(
+            Regex("""(?m)^\s*[^/\n]*saf_held_save_incomplete\b""").containsMatchIn(source),
+            "the notice does not name the string that says the save was not kept whole",
+        )
+    }
+
     /** The base strings, read from the file AAPT2 compiles, so a sentence is formatted as it ships. */
     private val strings by lazy {
         DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(File("src/main/res/values/strings.xml"))

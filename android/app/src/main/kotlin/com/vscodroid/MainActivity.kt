@@ -936,6 +936,15 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
             }
         }
 
+        // A save caught as an open put the device's newer copy in its place, which could not be kept whole. Its own
+        // sentence: the kept-copy notice below says a copy was kept, which is not all of what happened, or not true.
+        safManager.onHeldSaveIncomplete { file ->
+            val message = appContext.getString(R.string.saf_held_save_incomplete, file.name)
+            toMainThread.post {
+                AppNotices.showNotice(appContext, message, Toast.LENGTH_LONG, screen.get())
+            }
+        }
+
         // The other direction: documents the device holds that did not reach the editor.
         // Its own wording, because "the only copy is inside VSCodroid" is the opposite of
         // true for these, and would send the user looking for a file that is safe.

@@ -234,6 +234,15 @@ class SafStorageManager(context: Context) {
         syncEngine.onOpenChangesUnsent = announce
     }
 
+    /**
+     * Told when a save caught as an open put the device's newer copy in place could not be kept whole; see
+     * [SafSyncEngine.onHeldSaveIncomplete]. Unthrottled, like [onUploadIncomplete]: each names its own file, and
+     * one collapsed into another's burst is a save nobody is told about.
+     */
+    fun onHeldSaveIncomplete(announce: (File) -> Unit) {
+        syncEngine.onHeldSaveIncomplete = announce
+    }
+
     private val lastFailureAnnouncedAt = AtomicLong(NEVER_ANNOUNCED)
     private val lastKeptAnnouncedAt = AtomicLong(NEVER_ANNOUNCED)
 

@@ -237,6 +237,71 @@ class SafEarlierBuildRecordTest : SafInitialSyncTestBase() {
         assertEquals(emptyList<Pair<Int, String>>(), keptInApp)
     }
 
+    /** More files older than the record than one open sends, in `a/`, all of which the open keeps inside the app. */
+    private fun keptPastTheCap() = File(mirror, "a").apply { mkdirs() }.let { kept ->
+        (0..SafSyncEngine.MAX_UPLOAD_ENTRIES).map { n ->
+            File(kept, "f%04d.txt".format(n)).apply {
+                writeText("file $n")
+                setLastModified(record.lastModified() - 60_000)
+            }
+        }
+    }
+
+    /**
+     * A tar or a `cp -p` into a folder an earlier build last opened leaves thousands of files older than its record,
+     * which the first open after the update keeps inside the app. Each spent one of the files an open sends, though
+     * none is ever sent until it changes, so a file only the app holds that the walk reached after them, here one
+     * made after the record, was never sent, at that open or any later one, and nothing said so.
+     */
+    @Test
+    fun `files kept inside the app do not stop a later file only the app holds from being sent`() {
+        deviceTree(mapOf("root" to listOf(Child("keep.txt", contents = "k"))))
+        sync()
+        recordLeftByEarlierBuild()
+        keptPastTheCap()
+        File(mirror, "z").mkdirs()
+        mirrorOnly("z/new.txt", after = 30_000)
+
+        sync()
+        val sentAtFirstOpen = "new.txt" in names()
+        assertEquals(listOf(SafSyncEngine.MAX_UPLOAD_ENTRIES + 1 to "a/f0000.txt"), keptInApp)
+        if (!sentAtFirstOpen) sync()
+
+        assertTrue("new.txt" in names(), "a file only the app holds, behind the files kept inside the app, was not sent")
+        assertEquals("z/new.txt, only in the app", written["doc-uri:doc:new.txt"]?.toString())
+        assertEquals(emptyList<Int>(), didNotReach, "the files kept inside the app were told of as a folder too large to send")
+        // Nothing stands before it once the kept files spend none of the open's sends, so the open that keeps them sends it.
+        assertTrue(sentAtFirstOpen, "the file was sent only at the second open")
+    }
+
+    /**
+     * The opens after that one: the kept files have rows without a digest, which keep them out of what an open sends
+     * until each changes, and they spent the same files the open could send. A file made after the open that kept
+     * them, behind them in the walk, was never sent.
+     */
+    @Test
+    fun `files an earlier open kept inside the app do not stop a file made since from being sent`() {
+        deviceTree(mapOf("root" to listOf(Child("keep.txt", contents = "k"), Child("z", isDirectory = true)), "doc:z" to emptyList()))
+        sync()
+        recordLeftByEarlierBuild()
+        keptPastTheCap()
+        sync()
+        assertEquals(listOf(SafSyncEngine.MAX_UPLOAD_ENTRIES + 1 to "a/f0000.txt"), keptInApp)
+        assertEquals(emptyList<String>(), names(), "precondition: the first open sent a file it keeps")
+
+        mirrorFile("z/later.txt").writeText("made after the open that kept the others")
+        sync()
+
+        assertEquals(listOf("later.txt"), names(), "a file made since, behind the files kept inside the app, was not sent")
+        assertEquals(emptyList<Int>(), didNotReach)
+        assertEquals(emptyList<Pair<Int, String>>(), keptInApp, "the files kept inside the app were told of again")
+        // Changed, a kept file is the person's work again and is sent, so it counts once more.
+        File(mirror, "a/f0000.txt").writeText("file 0, changed")
+        created.clear()
+        sync()
+        assertEquals(listOf("a", "f0000.txt"), names(), "a kept file that changed was not sent")
+    }
+
     private companion object {
         /** inotify's flag for an event about a directory, which FileObserver passes through. */
         const val IN_ISDIR = 0x40000000

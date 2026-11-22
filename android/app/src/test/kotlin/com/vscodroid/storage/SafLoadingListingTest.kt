@@ -62,6 +62,77 @@ class SafLoadingListingTest : SafInitialSyncTestBase() {
         assertEquals("new work", mirrorFile("fresh.txt").readText())
     }
 
+    /** The folder with `top.txt` and `sub/a.txt`, opened once and its record lost, as a first open killed before it wrote one leaves it. */
+    private fun openedWithoutRecord(): Map<String, List<Child>> {
+        val folder = mapOf(
+            "root" to listOf(Child("top.txt", contents = "t"), Child("sub", isDirectory = true)),
+            "doc:sub" to listOf(Child("a.txt", contents = "a", id = "doc:sub/a.txt")),
+        )
+        deviceTree(folder)
+        sync()
+        assertTrue(mirrorFile("sub/a.txt").isFile)
+        record.delete()
+        sortedMark.delete()
+        return folder
+    }
+
+    /** The device still holds `sub/a.txt`, and its listing of `sub` fails without a row. */
+    private fun subListingFails() = deviceTree(
+        mapOf("root" to listOf(Child("top.txt", contents = "t"), Child("sub", isDirectory = true)), "doc:sub" to emptyList()),
+        errors = setOf("doc:sub"),
+    )
+
+    private fun rowOf(path: String) = record.readLines().drop(1).singleOrNull { SafSyncEngine.unescapeRecordPath(it.substringBefore('\t')) == path }
+
+    /**
+     * With no record to read, a listing that failed under one folder gave every copy under it a row without a digest
+     * and told of it as a file that may have been deleted in the device folder, which still held it. What the listing
+     * could not read stays as it was for an open that can; a file only the app holds where the listing was whole is
+     * still kept and told of.
+     */
+    @Test
+    fun `copies under a folder the listing could not read are neither kept nor told of`() {
+        val folder = openedWithoutRecord()
+        mirrorFile("stray.txt").writeText("only in the app")
+
+        subListingFails()
+        sync()
+
+        assertEquals(listOf(1 to "stray.txt"), keptInApp, "the open did not tell of exactly the file it keeps")
+        assertEquals(null, rowOf("sub/a.txt"), "a copy under the folder the listing could not read was given a row")
+        assertTrue(rowOf("stray.txt")?.let { SafSyncEngine.splitRecordLine(it).second == null } == true)
+        assertEquals("a", mirrorFile("sub/a.txt").readText())
+
+        deviceTree(folder)
+        sync()
+
+        assertEquals(emptyList<Pair<Int, String>>(), keptInApp, "the open that listed the folder told of a file the device holds")
+        assertEquals(emptyList<Pair<String, String>>(), created)
+        assertTrue(rowOf("sub/a.txt")?.let { SafSyncEngine.splitRecordLine(it).second != null } == true, "the listed copy was not vouched for")
+    }
+
+    /**
+     * The other side of leaving them: the device deletes the document before the next open. The open that lists the
+     * folder keeps the copy inside the app and tells of it, and puts nothing back on the device.
+     */
+    @Test
+    fun `a copy under a folder the listing could not read is kept and told of once the device lists the folder without it`() {
+        openedWithoutRecord()
+        subListingFails()
+        sync()
+        assertEquals(emptyList<Pair<Int, String>>(), keptInApp)
+
+        deviceTree(mapOf("root" to listOf(Child("top.txt", contents = "t"), Child("sub", isDirectory = true)), "doc:sub" to emptyList()))
+        sync()
+
+        assertEquals(emptyList<Pair<String, String>>(), created, "a document deleted on the device was put back")
+        assertEquals(listOf(1 to "sub/a.txt"), keptInApp, "the copy kept inside the app was not told of")
+        assertEquals("a", mirrorFile("sub/a.txt").readText())
+        sync()
+        assertEquals(emptyList<Pair<String, String>>(), created)
+        assertEquals(emptyList<Pair<Int, String>>(), keptInApp, "a later open told of the same copy again")
+    }
+
     /**
      * A drive that lists two documents under one name in a folder. The mirror holds one file per
      * path, so an open copied the later row over the earlier, and a mirror newer than the older

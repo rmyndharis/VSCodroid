@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.LinkOption
 
@@ -24,6 +25,9 @@ class SafInstallRaceTest : SafInitialSyncTestBase() {
 
     private val keptNotices = mutableListOf<List<String>>()
 
+    /** The files whose save, caught as the device's copy went in, could not be kept whole, by name. */
+    private val incompleteNotices = mutableListOf<String>()
+
     private fun deviceHolds(name: String, contents: String, modified: Long = DEVICE_TIME) {
         deviceTree(mapOf("root" to listOf(Child(name, contents = contents, modified = modified))))
     }
@@ -33,6 +37,8 @@ class SafInstallRaceTest : SafInitialSyncTestBase() {
         SafSyncEngine(context).also { engine ->
             engine.onWriteBackFailed = { lost += it.name }
             engine.onLocalCopiesPreserved = { files -> keptNotices += files.map { it.name } }
+            engine.onDocumentsNotCopied = { count, _ -> notCopied += count }
+            engine.onHeldSaveIncomplete = { incompleteNotices += it.name }
             engine.exclusiveMove = { directory, _, from, to ->
                 count()
                 val target = File(directory, to)
@@ -78,6 +84,76 @@ class SafInstallRaceTest : SafInitialSyncTestBase() {
         assertEquals("saved while the folder opened", mirrorFile(keptCopies().single()).readText())
         assertEquals(listOf(keptCopies()), keptNotices, "the kept save was not announced once")
         assertTrue(created.any { it.second == keptCopies().single() }, "the kept save did not go to the device folder")
+        assertEquals(emptyList<String>(), incompleteNotices, "a save kept whole was said to be incomplete")
+        assertEquals(emptyList<String>(), leftovers())
+    }
+
+    /** The row the record gives `notes.md`, with whether it carries a digest. */
+    private fun notesRowHasDigest() = record.readLines().drop(1).single { it.startsWith("notes.md\t") }
+        .let { SafSyncEngine.splitRecordLine(it).second != null }
+
+    /**
+     * Once the device's copy has been renamed over the name, the save lives only in the replaced file, held open. A
+     * write into its `.local-` copy that failed, a full disk or an I/O error, threw out of the install: the held file
+     * was closed and freed, nothing said the copy beside the file was a part of the save, and the open counted the
+     * file as not copied though the editor's copy now held the device's version.
+     */
+    @Test
+    fun `a save whose kept copy cannot be written in full is kept as far as it got and said to be incomplete`() {
+        deviceHolds("notes.md", "first")
+        sync()
+        deviceHolds("notes.md", "newer on the device", modified = DEVICE_TIME + 60_000)
+        var saved = false
+        val engine = engineCountingHelpers()
+        engine.replaceName = { dest, rename ->
+            if (dest.name == "notes.md" && !saved) {
+                saved = true
+                dest.writeText("saved while the folder opened")
+            }
+            rename()
+        }
+        // The first copy of the save is written; the disk fills before the second confirms it.
+        engine.heldSaveSettle = { throw IOException("No space left on device") }
+
+        open(engine)
+
+        assertTrue(saved, "the copy was not renamed into place through the seam")
+        assertEquals("newer on the device", mirrorFile("notes.md").readText())
+        assertEquals(1, keptCopies().size, "what was written of the save was not kept: ${mirror.list()!!.toList()}")
+        assertEquals("saved while the folder opened", mirrorFile(keptCopies().single()).readText())
+        assertEquals(listOf(keptCopies()), keptNotices, "the kept copy was not announced")
+        assertEquals(listOf("notes.md"), incompleteNotices, "nothing said the kept copy may be incomplete")
+        assertEquals(0, notCopied, "the device's copy, which went in, was counted as not copied")
+        assertTrue(notesRowHasDigest(), "the device's copy the editor now holds was not recorded")
+        assertEquals(emptyList<String>(), leftovers())
+    }
+
+    /** Where not even the kept copy can be made, nothing of the save is kept, and that is said. */
+    @Test
+    fun `a save whose kept copy cannot be made is said to be lost and the device's copy stays in place`() {
+        deviceHolds("notes.md", "first")
+        sync()
+        deviceHolds("notes.md", "newer on the device", modified = DEVICE_TIME + 60_000)
+        var saved = false
+        val engine = engineCountingHelpers()
+        engine.replaceName = { dest, rename ->
+            if (dest.name == "notes.md" && !saved) {
+                saved = true
+                dest.writeText("saved while the folder opened")
+            }
+            rename()
+        }
+        engine.createKeptSave = { _, _ -> throw IOException("No space left on device") }
+
+        open(engine)
+
+        assertTrue(saved, "the copy was not renamed into place through the seam")
+        assertEquals("newer on the device", mirrorFile("notes.md").readText())
+        assertEquals(emptyList<String>(), keptCopies())
+        assertTrue(keptNotices.isEmpty(), "a kept copy that was never made was announced")
+        assertEquals(listOf("notes.md"), incompleteNotices, "nothing said the save could not be kept")
+        assertEquals(0, notCopied, "the device's copy, which went in, was counted as not copied")
+        assertTrue(notesRowHasDigest(), "the device's copy the editor now holds was not recorded")
         assertEquals(emptyList<String>(), leftovers())
     }
 
