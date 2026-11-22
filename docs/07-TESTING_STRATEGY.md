@@ -36,7 +36,7 @@ flowchart TD
 
 | Component | What is covered | Example classes |
 |-----------|-------------|---------|
-| ProcessManager / NodeService | Server lifecycle, readiness, restart budget, port adoption | `ProcessManagerTest`, `NodeServiceTest`, `ServerReadinessDecisionTest`, `ServerReadinessCallSiteTest`, `AdoptionNoteWireTest` |
+| ProcessManager / NodeService | Server lifecycle, readiness, restart budget, port adoption | `ProcessManagerTest`, `RestartBudgetTest`, `ServerReadinessDecisionTest`, `ServerReadinessCallSiteTest`, `AdoptionNoteWireTest` |
 | Environment | Env variable construction, PATH and shell paths, SAF mirror paths | `EnvironmentTest`, `TerminalShellPathTest`, `EnvironmentSafTest` |
 | PortFinder | The home port reused across restarts; a port taken while home is busy serves one process and never replaces home; the first port bound becomes home | `PortFinderTest`, `HomePortTest` |
 | ExtraKeyRow / KeyInjector | Key mapping, modifier state, trackpad gestures | `KeyMappingTest`, `ExtraKeyToggleStateTest`, `TrackpadGestureTest` |
@@ -44,7 +44,7 @@ flowchart TD
 | ToolchainManager / ToolchainRegistry | Catalog, download and install state, digests, retirement sweep | `ToolchainRegistryTest`, `ToolchainInstallTest`, `ToolchainDigestTest`, `RetiredToolchainTest` |
 | FirstRunSetup | Asset extraction, symlinks, `settings.json` contents, storage preflight | `SettingsPathsTest`, `StoragePreflightTest`, `SymlinkPredicateTest` |
 | SafSyncEngine | Mirror reconciliation, write-back filtering, rename pairing | `SafSyncEngineTest`, `SafWriteBackFilterTest`, `SafRenamePairingTest` |
-| VSCodroidWebViewClient | CDN interception, `vscode-remote` resource serving, downloads | `ResourceInterceptionWiringTest`, `WebviewResourceRootsTest`, `WebviewOriginTrustTest`, `DownloadCoordinatorTest` |
+| VSCodroidWebViewClient | CDN interception, `vscode-remote` resource serving, downloads | `ResourceInterceptionWiringTest`, `WebviewResourceResolutionTest`, `WebviewOriginTrustTest`, `DownloadCoordinatorTest` |
 
 Use a fresh run to determine the suite result and size. Both
 figures, tests and classes, come from the XML a run writes under

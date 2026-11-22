@@ -355,8 +355,9 @@
           <p>
             Android refuses to execute files in an app's private storage.
             Ruby and Java commands use launchers on PATH, including extension
-            spawns and process tasks. C/C++ requires a terminal or shell task;
-            direct compiler spawns are unsupported. <code>npm</code> and
+            spawns and process tasks. C/C++ works in a terminal or a shell task,
+            and from an extension only when it starts the compiler by its full
+            path without a shell. <code>npm</code> and
             <code>npx</code> have shell functions and PATH launchers. For pip
             outside a shell, use <code>python3 -m pip</code>.
           </p>
