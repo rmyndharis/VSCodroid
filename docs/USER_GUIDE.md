@@ -822,6 +822,10 @@ and print `Failed to add the host to the list of known hosts`. A `-F` you type y
 over, and `command ssh` runs the bare program. In a config, name any other key by its absolute
 path: run `echo ~/.ssh/work_key` and use what it prints.
 
+git reads the same file. When `~/.ssh/config` cannot be read, for example because it is a link
+into a folder that is gone, git gives ssh the defaults above instead, so a clone, fetch or push
+with the default key still works.
+
 ### Connecting to a Server
 
 Any server you can reach over the network is one command away:
@@ -1838,7 +1842,7 @@ If `node`, `python3`, `git`, or other tools show "command not found":
 2. Verify the tool exists: `ls -la $(which node)` (should point to the bundled binary).
 3. If the issue persists, close the app completely and reopen.
 
-When `~/.bashrc` is a link to a file that does not exist, in a folder that does, VSCodroid creates that file with its own setup at the next launch; make the file exist with your own text to keep it.
+When `~/.bashrc`, `~/.bash_profile`, `~/.tmux.conf` or `~/.ssh/config` is a link to a file that does not exist, in a folder that does, VSCodroid creates that file with its own setup at the next launch; make the file exist with your own text to keep it.
 
 ### Permission Denied on a File in Downloads
 

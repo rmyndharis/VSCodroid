@@ -201,7 +201,20 @@ object Environment {
             "GIT_EXEC_PATH" to "$filesDir/usr/lib/git-core",
             "GIT_TEMPLATE_DIR" to "$filesDir/usr/share/git-core/templates",
             "GIT_CONFIG_SYSTEM" to "$filesDir/usr/etc/gitconfig",
-            "GIT_SSH_COMMAND" to "$nativeLibDir/libssh.so -F $homeDir/.ssh/config",
+            // The config is chosen when ssh runs, not here: this map is built once when the
+            // server starts and every terminal and task inherits it, while ~/.ssh/config can
+            // be deleted, or be a link into a dotfiles folder that goes away and comes back.
+            // ssh refuses a -F it cannot open ("Can't open user config file", exit 255), and
+            // naming the file unconditionally failed every clone, fetch and push over ssh
+            // for as long as it could not be read. Without it ssh gets that config's own
+            // settings ([sshDefaults]); run bare it would find no key. git runs the value
+            // with `sh -c` and appends its arguments, so the choice is a substitution that
+            // prints the options, and the value only works through a shell. Word splitting
+            // keeps the paths whole because this app's data paths hold no blank and no glob
+            // character, which the fixed -F path before this relied on as well.
+            "GIT_SSH_COMMAND" to "$nativeLibDir/libssh.so \$(if [ -r $homeDir/.ssh/config ]; " +
+                "then echo -F $homeDir/.ssh/config; " +
+                "else echo ${sshDefaults(homeDir).joinToString(" ") { (key, value) -> "-o $key=$value" }}; fi)",
             // Directory lookup must not restore roots excluded from the bundle.
             "GIT_SSL_CAPATH" to "$filesDir/usr/etc/tls",
             // The bundle file curl actually reads. Its Termux build looks for
@@ -455,6 +468,21 @@ object Environment {
      */
     fun getSshDir(context: Context): String =
         "${getHomeDir(context)}/.ssh"
+
+    /**
+     * The settings of the `~/.ssh/config` this app writes, as keyword and value, every path absolute.
+     *
+     * The bundled OpenSSH is Termux's and finds `~` at the home its build compiled in, not at [homeDir], so
+     * run without them it looks for the key where none is and cannot save `known_hosts`. One list for the
+     * file setup writes and for the options `GIT_SSH_COMMAND` gives ssh when that file cannot be read, so
+     * the two say the same.
+     */
+    fun sshDefaults(homeDir: String): List<Pair<String, String>> = listOf(
+        "StrictHostKeyChecking" to "accept-new",
+        "IdentityFile" to "$homeDir/.ssh/id_ed25519",
+        "ServerAliveInterval" to "60",
+        "UserKnownHostsFile" to "$homeDir/.ssh/known_hosts",
+    )
 
     fun getUserDataDir(context: Context): String =
         "${context.filesDir}/home/.vscodroid"

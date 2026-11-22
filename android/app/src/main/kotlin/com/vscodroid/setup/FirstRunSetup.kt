@@ -1916,8 +1916,9 @@ class FirstRunSetup(
      * Creates default SSH configuration for git operations.
      *
      * Sets up ~/.ssh/ directory, default ssh_config (auto-accept first connection,
-     * ed25519 key, keepalive), and correct file permissions. Only runs on first setup
-     * and does not overwrite existing user SSH config.
+     * ed25519 key, keepalive), and correct file permissions. Runs from setup and does
+     * not overwrite existing user SSH config; a link whose file has gone is also
+     * written through at launch ([repairTruncatedSetupFiles]).
      */
     private fun setupSshDefaults() {
         val homeDir = context.filesDir.absolutePath + "/home"
@@ -1931,45 +1932,51 @@ class FirstRunSetup(
             Logger.d(tag, "Failed to chmod .ssh: ${e.message}")
         }
 
-        // Create default ssh_config if it doesn't exist.
-        // Uses absolute paths because Termux openssh resolves ~ to its
-        // compiled-in prefix (/data/data/com.termux/...), not $HOME.
         val sshConfig = File(sshDir, "config")
         if (!sshConfig.exists()) {
-            val content = """
-                Host *
-                    StrictHostKeyChecking accept-new
-                    IdentityFile $homeDir/.ssh/id_ed25519
-                    ServerAliveInterval 60
-                    UserKnownHostsFile $homeDir/.ssh/known_hosts
-            """.trimIndent() + "\n"
             // Atomic and loud, the pair createBashProfile is, and this was the
             // last exists()-guarded writer in the file still using writeText.
             // writeText creates and truncates before writing a byte, so a kill or
             // a full disk here left an empty config that satisfies the guard
             // above for ever, on a writer runSetupLocked reaches only when the
             // version moves and that repairTruncatedSetupFiles does not cover.
-            // What that costs is every clone, fetch and push over ssh: the config
-            // is what GIT_SSH_COMMAND passes with -F, and without its absolute
-            // IdentityFile and UserKnownHostsFile the Termux ssh resolves ~ to
-            // its own compiled-in prefix, which is not a path this app can read.
+            // What that costs is every clone, fetch and push over ssh: an empty
+            // config is still readable, so GIT_SSH_COMMAND passes it with -F, and
+            // without its absolute IdentityFile and UserKnownHostsFile the Termux
+            // ssh resolves ~ to its own compiled-in prefix, which is not a path
+            // this app can read.
             // Through a link, as createBashrc writes: a config kept in a dotfiles
             // folder and linked here was replaced by a copy, which ssh then read
             // while the person's own file came back beside it unread.
-            if (!writeAtomically(sshConfig, throughLink = true) { it.write(content.toByteArray()) }) {
+            if (!writeSshConfig()) {
                 // Not thrown for a link into a folder that has gone, for the reason createBashrc gives.
                 if (!Files.isSymbolicLink(sshConfig.toPath())) throw IOException("could not write $sshConfig")
                 Logger.w(tag, linkedFileUnwritten(sshConfig))
                 return
             }
-            try {
-                Os.chmod(sshConfig.absolutePath, 384) // 0600
-            } catch (e: Exception) {
-                Logger.d(tag, "Failed to chmod ssh config: ${e.message}")
-            }
         }
 
         Logger.i(tag, "SSH defaults configured")
+    }
+
+    /**
+     * Writes the ssh config this app owns, through a link at the path, and makes it the owner's alone.
+     * The guardless half of [setupSshDefaults], as [writeBashrc] is of [createBashrc].
+     *
+     * Absolute paths, from [Environment.sshDefaults], because Termux openssh resolves ~ to its compiled-in
+     * prefix (/data/data/com.termux/...), not $HOME.
+     */
+    private fun writeSshConfig(): Boolean {
+        val sshConfig = File(context.filesDir, "home/.ssh/config")
+        val content = "Host *\n" + Environment.sshDefaults(context.filesDir.absolutePath + "/home")
+            .joinToString("") { (key, value) -> "    $key $value\n" }
+        if (!writeAtomically(sshConfig, throughLink = true) { it.write(content.toByteArray()) }) return false
+        try {
+            Os.chmod(sshConfig.absolutePath, 384) // 0600, of the file a link names when it is one
+        } catch (e: Exception) {
+            Logger.d(tag, "Failed to chmod ssh config: ${e.message}")
+        }
+        return true
     }
 
     /**
@@ -2240,8 +2247,11 @@ class FirstRunSetup(
      *    replacing our file writes their own; someone editing it does not
      *    usually keep our first line and delete our third. Text after the
      *    header is kept aside first. When `.bashrc` is a link, the file it
-     *    names is kept elsewhere and may be read by other machines, so it is
-     *    rewritten only when it is the header alone.
+     *    names is kept elsewhere and may be read by other machines, so a header
+     *    with text after it is left as it is there. The header alone is still
+     *    rewritten through the link, and so is a linked file that is empty or
+     *    NUL bytes (the first case): both are what a cut-short write leaves,
+     *    with nothing of the person's in them.
      *
      * A partial file that is neither -- one that got far enough to look
      * plausible -- is left alone, and that is deliberate. It cannot be told
@@ -2255,12 +2265,13 @@ class FirstRunSetup(
      * `if (bashrc.exists())`. Deleting the file would have turned a truncated
      * one into no file at all, with nothing to write it again.
      *
-     * Which is why nothing here deletes. It does now CREATE, in the two cases
+     * Which is why nothing here deletes. It does now CREATE, in the cases
      * where there is nothing of the user's to protect: a `.bashrc` that is gone
      * rather than short, and only once `home/` itself is there, because before
      * the first extraction has made it the write cannot do anything but fail;
-     * and the file a settings.json link names when that file has gone (a plain
-     * settings.json that is gone is not made again here).
+     * and the file a link at settings.json, `~/.ssh/config`, `~/.bash_profile`
+     * or `~/.tmux.conf` names when that file has gone from a folder that is
+     * there (a plain one of those that is gone is not made again here).
      * That was the same dead end from the other direction: every writer keyed on
      * the file being there, so `rm ~/.bashrc` was permanent until the next app
      * update, and it is why this method reads `isFile` and `exists()` separately
@@ -2462,6 +2473,28 @@ class FirstRunSetup(
                 Logger.i(tag, "Wrote the file a settings.json link names, which had gone")
             } else {
                 Logger.w(tag, LINKED_SETTINGS_UNWRITTEN)
+            }
+        }
+
+        // The three other files setup writes through a link, met the same way and for the same
+        // reason. Setup leaves such a link as it is while the folder it points into has gone, and
+        // writes them only when the app updates, so a folder that came back without the file left
+        // tmux windows without .bashrc and the terminal's ssh without its config (it runs bare when
+        // the config cannot be read) until the next update. A plain file that is gone is the
+        // person's deletion and is left to setup, as a plain settings.json is.
+        for ((file, write) in listOf(
+            File(context.filesDir, "home/.ssh/config") to ::writeSshConfig,
+            File(context.filesDir, "home/.bash_profile") to ::writeBashProfile,
+            File(context.filesDir, "home/.tmux.conf") to ::writeTmuxConf,
+        )) {
+            if (!Files.isSymbolicLink(file.toPath()) || file.exists()) continue
+            val written = runCatching { write() }
+                .onFailure { Logger.e(tag, "Writing the file a ${file.name} link names threw", it as? Exception) }
+                .getOrDefault(false)
+            if (written) {
+                Logger.i(tag, "Wrote the file a ${file.name} link names, which had gone")
+            } else {
+                Logger.w(tag, linkedFileUnwritten(file))
             }
         }
     }
@@ -3044,14 +3077,15 @@ __vscodroid_pip_explain() {
      * where no key is, so key authentication is never tried; and it cannot save
      * `known_hosts`, so every connection is the first one and the warning prints
      * every time. That config names every path absolutely, and git already reads it
-     * through `GIT_SSH_COMMAND -F`; this gives the shell the same, which is what the
-     * user guide describes `ssh myserver` doing.
+     * through `GIT_SSH_COMMAND -F` whenever it can be read; this gives the shell the
+     * same, which is what the user guide describes `ssh myserver` doing.
      *
      * A function, for the reason npm is one: nothing under `filesDir` can be
      * executed as a wrapper script. Without a readable config the bare command runs,
      * because `-F` naming a missing file is a fatal error and a user who deleted the
-     * file should still get an ssh. A `-F` typed after this one wins, since ssh keeps
-     * the last.
+     * file should still get an ssh. That ssh has none of the config's settings, where
+     * `GIT_SSH_COMMAND` passes them as options instead ([Environment.sshDefaults]).
+     * A `-F` typed after this one wins, since ssh keeps the last.
      */
     private fun sshBashFunction(): String = """
 
@@ -3454,9 +3488,9 @@ claude() {
             // markSetupComplete() is the last statement of the same try block --
             // so swallowing the failure certifies an install that has no
             // .bashrc, and isFirstRun() is keyed on versionName, versionCode and package update time,
-            // so nothing writes one until the app updates. The every-launch repairs cannot
-            // cover it either: createNpmWrappers, ensureToolchainEnvSourcing
-            // and ensurePromptFix all open with `if (bashrc.exists())`.
+            // so setup does not run again until the app updates. Of the every-launch repairs only
+            // repairTruncatedSetupFiles would make the file, a launch later; createNpmWrappers,
+            // ensureToolchainEnvSourcing and ensurePromptFix all open with `if (bashrc.exists())`.
             //
             // The throw and the atomic write are worth exactly nothing apart.
             // The throw alone is what main did, and main's retry then skipped
@@ -3521,18 +3555,13 @@ claude() {
     private fun createBashProfile() {
         val bashProfile = File(context.filesDir, "home/.bash_profile")
         if (!bashProfile.exists()) {
-            val content = """
-                # Source .bashrc for login shells (e.g. tmux sessions)
-                if [ -f "${'$'}HOME/.bashrc" ]; then
-                    . "${'$'}HOME/.bashrc"
-                fi
-            """.trimIndent() + "\n"
             // Atomic and loud, the same pair createBashrc is, and for the same
             // pair of reasons. `writeText` creates and truncates before writing
             // a byte, so a write that failed left a file the guard above
             // accepts for ever, and this writer is reached only from
             // runSetupLocked, which isFirstRun() gates on versionName,
-            // versionCode and package update time: no per-launch repair reads this path at all. What
+            // versionCode and package update time: the per-launch repair writes
+            // this path only through a link whose file has gone. What
             // that costs is confined to INTERACTIVE LOGIN shells, which is what
             // a tmux window is. Those read .bash_profile and never .bashrc or
             // BASH_ENV, so they come up with no prompt, no aliases and no
@@ -3542,24 +3571,29 @@ claude() {
             // an absent file rather than a truncated one. Through a link, as
             // createBashrc writes, and not thrown for one into a folder that has
             // gone, for the reason it gives.
-            if (!writeAtomically(bashProfile, throughLink = true) { it.write(content.toByteArray()) }) {
+            if (!writeBashProfile()) {
                 if (!Files.isSymbolicLink(bashProfile.toPath())) throw IOException("could not write $bashProfile")
                 Logger.w(tag, linkedFileUnwritten(bashProfile))
             }
         }
     }
 
+    /** The guardless half of [createBashProfile], through a link at the path. */
+    private fun writeBashProfile(): Boolean {
+        val content = """
+            # Source .bashrc for login shells (e.g. tmux sessions)
+            if [ -f "${'$'}HOME/.bashrc" ]; then
+                . "${'$'}HOME/.bashrc"
+            fi
+        """.trimIndent() + "\n"
+        return writeAtomically(File(context.filesDir, "home/.bash_profile"), throughLink = true) {
+            it.write(content.toByteArray())
+        }
+    }
+
     private fun createTmuxConf() {
         val tmuxConf = File(context.filesDir, "home/.tmux.conf")
         if (!tmuxConf.exists()) {
-            val content = """
-                # VSCodroid tmux configuration
-                set -g mouse on
-                set -g default-terminal "xterm-256color"
-                set -g history-limit 10000
-                set -g escape-time 10
-                set -g status off
-            """.trimIndent() + "\n"
             // Atomic like its neighbours, so a failed write leaves nothing
             // rather than a truncated file that answers the guard above for
             // ever. Logged rather than thrown, which is where it parts from
@@ -3568,9 +3602,24 @@ claude() {
             // so failing the whole unpack over five options would cost the user
             // more than the options are worth. Through a link, as createBashrc
             // writes, so one to a file kept elsewhere stays a link.
-            if (!writeAtomically(tmuxConf, throughLink = true) { it.write(content.toByteArray()) }) {
+            if (!writeTmuxConf()) {
                 Logger.w(tag, "Could not write $tmuxConf; tmux will run with its own defaults")
             }
+        }
+    }
+
+    /** The guardless half of [createTmuxConf], through a link at the path. */
+    private fun writeTmuxConf(): Boolean {
+        val content = """
+            # VSCodroid tmux configuration
+            set -g mouse on
+            set -g default-terminal "xterm-256color"
+            set -g history-limit 10000
+            set -g escape-time 10
+            set -g status off
+        """.trimIndent() + "\n"
+        return writeAtomically(File(context.filesDir, "home/.tmux.conf"), throughLink = true) {
+            it.write(content.toByteArray())
         }
     }
 

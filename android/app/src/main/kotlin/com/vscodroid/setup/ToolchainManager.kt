@@ -871,8 +871,21 @@ class ToolchainManager(private val context: Context) {
         (playRequests[packName] === request).also { if (it) playRequests.remove(packName) }
     }
 
-    fun cancel(packName: String) {
-        val info = ToolchainRegistry.find(packName) ?: return
+    /**
+     * Stops [packName]'s download, and returns whether the end of the download it stopped is still to be
+     * reported.
+     *
+     * The toolchain screen offers no Install until that end, because both ends interfere with one made
+     * before them: Play's CANCELED ends this manager's request for the pack by name ([report]), and a
+     * cancelled HTTP transfer holds the pack until it stops, so an Install refuses ([downloadViaHttp]).
+     * True for an HTTP transfer this flagged while it still held the pack: its `finally` gives the pack
+     * back and only then reads the flag, so it reports CANCELED on every way out, to the manager that
+     * began it. On a Play install, true when Play's cancel answers CANCELED for the pack: it returns the
+     * state it leaves each pack in, CANCELED only for a download it stopped. False when nothing was
+     * running, as for a sideload with no transfer.
+     */
+    fun cancel(packName: String): Boolean {
+        val info = ToolchainRegistry.find(packName) ?: return false
         // Signals only this pack's download to stop (checked every 8KB in the
         // download loop). A pack with nothing outstanding has no token, and
         // cancelling it must not reach a download that is running for another.
@@ -882,12 +895,19 @@ class ToolchainManager(private val context: Context) {
         // rebuilds the screen with a second manager while the first one's
         // download carries on, and a token only the destroyed manager could see
         // made the transfer uncancellable from anywhere.
-        httpDownloads[info.packName]?.cancelled = true
+        val transfer = httpDownloads[info.packName]
+        // Under the token's monitor, which the transfer's finally holds while it gives the pack back and
+        // before it reads the flag: a token still here once the flag is set means the finally will see the
+        // flag, and report CANCELED.
+        val transferReportsItsEnd = transfer != null && synchronized(transfer) {
+            transfer.cancelled = true
+            httpDownloads[info.packName] === transfer
+        }
         // This manager's Play request ends here, and not only when Play reports CANCELED: Play cancels only a
         // download that is running, so a pack waiting on its cellular-data question, or already delivered, sends
         // nothing back, and the request left standing made every later Install of the pack return without a fetch.
         synchronized(this) { playRequests.remove(info.packName) }
-        assetPackManager.cancel(listOf(info.packName))
+        val answer = assetPackManager.cancel(listOf(info.packName))
         // Play's cancel is a request to the download service and does nothing to a
         // pack it has already finished delivering, so without this a cancel could
         // leave a complete pack sitting in `filesDir/assetpacks`. That was merely
@@ -903,10 +923,13 @@ class ToolchainManager(private val context: Context) {
         // Only on a Play install. A sideload has no delivered copy, and the removal it
         // posted anyway is a Play Core call that can fail on every cancel, logging a
         // pack that "stays on disk" when there is none.
-        if (!shouldUseHttpFallback()) {
+        val viaPlay = !shouldUseHttpFallback()
+        if (viaPlay) {
             ioExecutor.execute { releasePack(info.packName) }
         }
         Logger.i(tag, "Cancelled download of ${info.packName}")
+        return transferReportsItsEnd ||
+            (viaPlay && answer?.packStates()?.get(info.packName)?.status() == AssetPackStatus.CANCELED)
     }
 
     /**
@@ -2560,8 +2583,10 @@ class ToolchainManager(private val context: Context) {
                 Logger.e(tag, "Unexpected error downloading $packName", e)
                 fail(packName, ToolchainFailure.INTERNAL, download.transferId)
             } finally {
-                // Remove only this task's token before publishing its cancellation.
-                val heldThePack = httpDownloads.remove(packName, download)
+                // Remove only this task's token before publishing its cancellation. Under the token's
+                // monitor, so a cancel either finds the token and sets the flag before this, and is
+                // reported below, or finds it gone ([cancel] says which to the screen).
+                val heldThePack = synchronized(download) { httpDownloads.remove(packName, download) }
                 // Clean up temp files
                 StorageManager.deleteRecursive(tempDir, context.filesDir.parentFile)
                 // The cancellation, said out loud. Every `return@execute` on the

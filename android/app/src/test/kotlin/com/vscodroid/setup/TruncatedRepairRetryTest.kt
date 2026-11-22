@@ -592,4 +592,72 @@ class TruncatedRepairRetryTest {
             "the file the settings link names was not written once its folder was back",
         )
     }
+
+    /** The other three files setup writes through a link, each with the name its file has in a dotfiles folder. */
+    private val loginFiles = mapOf(".ssh/config" to "ssh_config", ".bash_profile" to "bash_profile", ".tmux.conf" to "tmux.conf")
+
+    /**
+     * `~/.ssh/config`, `~/.bash_profile` and `~/.tmux.conf` were written by setup only, which runs when the app
+     * updates. A link to one of them whose file has gone, in a dotfiles folder that is still there, was written by
+     * nothing until then: git over ssh failed on every clone, fetch and push while it passed the config with `-F`,
+     * the terminal's ssh ran without the config, and tmux windows came up without `.bashrc`. A launch writes each file
+     * where its link points, and the link stays.
+     */
+    @Test
+    fun `a launch writes the file a dotfile link names when it has gone from a folder that is there`() {
+        val dots = File(filesDir, "projects/dotfiles").apply { mkdirs() }
+        File(filesDir, "home/.ssh").mkdirs()
+        for ((name, target) in loginFiles) {
+            Files.createSymbolicLink(File(filesDir, "home/$name").toPath(), File(dots, target).toPath())
+        }
+
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        for ((name, target) in loginFiles) {
+            assertTrue(Files.isSymbolicLink(File(filesDir, "home/$name").toPath()), "$name was replaced by a copy")
+            assertTrue(File(dots, target).isFile, "the file the $name link names was not written")
+        }
+        assertTrue(
+            File(dots, "ssh_config").readText().contains("IdentityFile ${filesDir.absolutePath}/home/.ssh/id_ed25519"),
+            "the file the ssh config link names was not written",
+        )
+        assertTrue(File(dots, "bash_profile").readText().contains(". \"\$HOME/.bashrc\""), "the profile was not written")
+        assertTrue(File(dots, "tmux.conf").readText().contains("set -g mouse on"), "the tmux file was not written")
+    }
+
+    /**
+     * The same links while the folder they point into has gone: nothing is made and nothing is said at error level,
+     * because the folder is the person's to bring back. The first launch after it is back writes the files.
+     */
+    @Test
+    fun `a launch writes dotfile links whose folder has gone once the folder is back`() {
+        val dots = File(filesDir, "projects/dotfiles")
+        File(filesDir, "home/.ssh").mkdirs()
+        for ((name, target) in loginFiles) {
+            Files.createSymbolicLink(File(filesDir, "home/$name").toPath(), File(dots, target).toPath())
+        }
+
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        assertFalse(dots.exists(), "a launch made the folder the person moved again")
+        verify(exactly = 0) { Logger.e(any(), any(), any()) }
+
+        dots.mkdirs()
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        for ((name, target) in loginFiles) {
+            assertTrue(Files.isSymbolicLink(File(filesDir, "home/$name").toPath()), "$name was replaced by a copy")
+            assertTrue(File(dots, target).isFile, "the file the $name link names was not written once its folder was back")
+        }
+    }
+
+    /** A plain file the person deleted is theirs to have deleted; only setup writes it again, as before. */
+    @Test
+    fun `a launch does not make a dotfile that is not a link`() {
+        File(filesDir, "home/.ssh").mkdirs()
+
+        FirstRunSetup(context).repairTruncatedSetupFiles()
+
+        for (name in loginFiles.keys) assertFalse(File(filesDir, "home/$name").exists(), "a launch made $name")
+    }
 }

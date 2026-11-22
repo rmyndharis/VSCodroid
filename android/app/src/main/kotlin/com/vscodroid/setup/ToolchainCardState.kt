@@ -112,6 +112,25 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
      */
     private val removing = mutableSetOf<String>()
 
+    /**
+     * Downloads the user cancelled whose end is still to be reported, by pack name: the HTTP transfer's
+     * id, or null for a Play download.
+     *
+     * Install offered at the tap was answered wrongly on both paths. On Play, the CANCELED that arrives
+     * later ends the manager's request for the pack by name, so an Install tapped before it had its own
+     * request ended: the screen took the pack off its outstanding list and could hand the Play listener
+     * back while the new download ran, and the toolchain was installed only at the next launch's
+     * reconcile. Over HTTP the cancelled transfer holds the pack until it stops, so an Install tapped
+     * before that was refused and the screen said the toolchain was already being installed. The card
+     * offers nothing until then.
+     *
+     * Ended by a report about the pack that is not a download still running, by an HTTP transfer leaving
+     * the process's snapshot ([setDownloading]), which covers one another manager began and reports to,
+     * and by [endCancelWaits] when the screen next starts, so a report this screen did not hear holds
+     * the card for no longer than that.
+     */
+    private val cancelling = mutableMapOf<String, Long?>()
+
     /** Position of [packName] among [items], or -1 when no card shows it. */
     fun positionOf(packName: String): Int = items.indexOfFirst { it.packName == packName }
 
@@ -162,6 +181,10 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
      * either.
      */
     fun setDownloading(percentByPack: Map<String, ToolchainDownloadProgress>) {
+        // A cancelled transfer no longer in the snapshot has stopped and given the pack back.
+        cancelling.entries.removeAll { (packName, transferId) ->
+            transferId != null && percentByPack[packName]?.transferId != transferId
+        }
         seededDownloads.clear()
         for ((packName, progress) in percentByPack) {
             val latest = latestHttpTransfer[packName] ?: 0
@@ -185,10 +208,16 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
      * [setInstalled].
      */
     fun updateState(packName: String, status: Int, percent: Int, transferId: Long? = null): Int {
+        // Before the returns below, which skip what they cannot draw: the end of a cancelled download
+        // ends the card's wait whatever else this report is. A report that it is still running is the
+        // progress queued before the cancel took, and leaves the wait.
+        val waitEnded = status !in IN_FLIGHT && cancelling.keys.remove(packName)
         if (transferId == null && packName in seededDownloads) {
-            return if (removing.remove(packName)) positionOf(packName) else -1
+            return if (removing.remove(packName) || waitEnded) positionOf(packName) else -1
         }
-        if (transferId != null && transferId < (latestHttpTransfer[packName] ?: 0)) return -1
+        if (transferId != null && transferId < (latestHttpTransfer[packName] ?: 0)) {
+            return if (waitEnded) positionOf(packName) else -1
+        }
         downloadStatus[packName] = status
         downloadPercent[packName] = percent
         if (transferId != null) {
@@ -246,6 +275,30 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
      */
     fun setRemoving(packName: String) {
         removing.add(packName)
+    }
+
+    /**
+     * MANAGER: records that the manager said the end of [packName]'s cancelled download is still to be
+     * reported, and returns whether the card now waits for it. See [cancelling].
+     *
+     * [transferId] names the HTTP transfer, whose end the manager reports on every way out of it, and the
+     * card always waits for that. A Play download (null) is waited for only while its last report is
+     * DOWNLOADING or PENDING. For any other state, or none, nothing here shows that Play reports after its
+     * cancel, and a card without a button would be worse than the old race, so the caller draws the pack
+     * as cancelled at once, as before.
+     */
+    fun setCancelling(packName: String, transferId: Long? = null): Boolean {
+        if (transferId == null && downloadStatus[packName] !in PLAY_REPORTS_ITS_CANCEL) return false
+        cancelling[packName] = transferId
+        return true
+    }
+
+    /**
+     * MANAGER: ends every wait for a cancel's report, for the screen's start, which asks Play and the
+     * process again what is running. See [cancelling].
+     */
+    fun endCancelWaits() {
+        cancelling.clear()
     }
 
     /** PICKER: ticks [packName] if it is not ticked, unticks it if it is. */
@@ -321,6 +374,11 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
             status == null || it.transferId != downloadTransfer[packName]
         }
         return when {
+            // Above the two running branches, whose report or snapshot the cancel has not replaced:
+            // the download is stopping, and an Install now would be ended or refused by it.
+            packName in cancelling -> ToolchainCard(
+                badge = if (packName in installed) ToolchainBadge.INSTALLED else ToolchainBadge.NONE,
+            )
             seeded != null -> ToolchainCard(
                 progressPercent = seeded.percent,
                 action = ToolchainAction.CANCEL,
@@ -368,5 +426,8 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
             AssetPackStatus.TRANSFERRING,
             AssetPackStatus.REQUIRES_USER_CONFIRMATION,
         )
+
+        /** The Play states a card waits in for the CANCELED its cancel is to be answered with ([setCancelling]). */
+        val PLAY_REPORTS_ITS_CANCEL = listOf(AssetPackStatus.DOWNLOADING, AssetPackStatus.PENDING)
     }
 }

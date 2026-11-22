@@ -192,7 +192,8 @@ class SplashActivity : AppCompatActivity() {
             // truncated one, and every writer skipped it because it was there;
             // this clears and rewrites it so the appenders have something whole
             // to append to. It is confined to evidence that cannot be a user's
-            // own edit, see the method for where that line is drawn.
+            // own edit, see the method for where that line is drawn. It also
+            // writes the file a dotfile link names when that file has gone.
             repair("the truncated-file repair") { setup.repairTruncatedSetupFiles() }
             repair("the npm wrappers") { setup.createNpmWrappers() }
             repair("the toolchain env sourcing") { setup.ensureToolchainEnvSourcing() }
