@@ -1654,6 +1654,38 @@ class ToolchainExecTableTest {
         )
     }
 
+    /**
+     * A JDK launcher row is held to the trampoline's limit as a launcher row is. `java` carries two options of its
+     * own after the manifest's flags, so seven flags made nine arguments, and the trampoline refused the whole row
+     * every time `java` ran from a recipe or a program. The row is declined where it is written, and a tool whose
+     * options still fit keeps its row.
+     */
+    @Test
+    fun `a JDK launcher row the table cannot carry is not written, and one at the limit is`() {
+        every { context.cacheDir } returns File(filesDir, "cache")
+        jdkElfs()
+        fun flags(count: Int) = (1..count).joinToString(",", "\"jvmFlags\":[", "],") { "\"-XX:Flag$it=1\"" }
+        // What `java` adds after the manifest's flags: its home and its temporary directory.
+        val ownOptions = 2
+        stateFile.writeText(jdkRecord(flags(ToolchainManager.MAX_ROW_ARGS - ownOptions + 1)))
+
+        regenerate()
+
+        val rows = toolchainLines().filter { !it.startsWith("\t") }
+        val table = execTable.readText()
+        assertFalse(rows.any { it.startsWith("java\t") }, "a row the trampoline refuses was written:\n$table")
+        assertFalse(rows.any { it.startsWith("jshell\t") }, "a row the trampoline refuses was written:\n$table")
+        assertTrue(rows.any { it.startsWith("javac\t") }, "a tool whose options fit lost its row:\n$table")
+
+        stateFile.writeText(jdkRecord(flags(ToolchainManager.MAX_ROW_ARGS - ownOptions)))
+        regenerate()
+
+        assertEquals(
+            ToolchainManager.MAX_ROW_ARGS + 2, tableLines().single { it.startsWith("java\t") }.split('\t').size,
+            "the control: a row at the limit is written whole",
+        )
+    }
+
     @Test
     fun `a launcher kept in lib is not a command`() {
         every { context.cacheDir } returns File(filesDir, "cache")

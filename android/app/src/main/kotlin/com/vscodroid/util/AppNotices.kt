@@ -11,10 +11,11 @@ import androidx.lifecycle.LifecycleOwner
 import java.lang.ref.WeakReference
 import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.ceil
 
 /**
- * Width model matched against `ToastLengthTest` (Android 12+ two-line pill
- * capacity at default font scale = 75 narrow units; wide CJK glyphs count 2).
+ * Width model pinned by `AppNoticesTest` (Android 12+ two-line pill capacity at
+ * default font scale = 75 narrow units, half of it a line; wide CJK glyphs count 2).
  */
 internal const val TOAST_MAX_DISPLAY_WIDTH = 75
 
@@ -60,6 +61,11 @@ internal fun toastDisplayWidth(text: CharSequence): Int {
  * Reports whether [text] fits inside Android's two-line text toast pill at the
  * active [fontScale] on OS level [sdkInt].
  *
+ * Measured line by line, because a line break starts a new line of the pill
+ * whatever room the one before it had left: two short notices joined by a blank
+ * line are three lines, and a toast shows two. Counted as one narrow unit, the
+ * break let such a join pass for a short line.
+ *
  * Below Android 12 (API 31), text toasts wrap instead of clipping at two lines,
  * so every notice fits a toast there.
  */
@@ -70,7 +76,11 @@ internal fun fitsInToast(
 ): Boolean {
     if (sdkInt < Build.VERSION_CODES.S) return true
     val scale = if (fontScale.isFinite() && fontScale > 0f) fontScale else 1f
-    return toastDisplayWidth(text).toDouble() * scale <= TOAST_MAX_DISPLAY_WIDTH.toDouble()
+    val lineWidth = TOAST_MAX_DISPLAY_WIDTH / 2.0
+    val lines = text.split('\n').sumOf { line ->
+        maxOf(1, ceil(toastDisplayWidth(line) * scale / lineWidth).toInt())
+    }
+    return lines <= 2
 }
 
 internal interface NoticeWindow {
@@ -140,6 +150,7 @@ internal class NoticeDialogCoordinator(
     private var pushedOut = 0
     private var openWindow: NoticeWindow? = null
     private var waitingForBlocker = false
+    private var afterClose: (() -> Unit)? = null
 
     val entryCount: Int get() = entries.size
     val currentText: String?
@@ -191,9 +202,20 @@ internal class NoticeDialogCoordinator(
             openWindow = null
             pushedOut = 0
             window.dismiss()
+            runAfterClose()
         } else {
             window.setMessage(combinedMessage())
         }
+    }
+
+    // Runs [action] once the dialog on screen is closed, and says whether one is open to wait for. A
+    // screen that is about to finish asks, because its finish takes the dialog down unread. Closed by
+    // the person or by this coordinator (a retraction, a spent once key), the action runs; a screen
+    // going away ends it unrun, as it ends the dialog. One action waits at a time, the latest.
+    fun afterDialog(action: () -> Unit): Boolean {
+        if (openWindow?.isShowing != true) return false
+        afterClose = action
+        return true
     }
 
     fun flush(host: NoticeHostState) {
@@ -209,6 +231,7 @@ internal class NoticeDialogCoordinator(
                     openWindow = null
                     pushedOut = 0
                     open.dismiss()
+                    runAfterClose()
                     return
                 }
                 open.setMessage(combinedMessage())
@@ -245,6 +268,7 @@ internal class NoticeDialogCoordinator(
         val count = pushedOut
         entries.clear()
         pushedOut = 0
+        afterClose = null
         if (waitingForBlocker) {
             waitingForBlocker = false
             host.clearBlockingWaiter()
@@ -254,6 +278,12 @@ internal class NoticeDialogCoordinator(
         win?.dismiss()
         if (untold.isNotEmpty()) host.showToast(noticesToast(untold, count, host::toastFits))
         return if (held.isEmpty()) null else HeldNotices(held, count, heldKeys, heldTopics)
+    }
+
+    private fun runAfterClose() {
+        val action = afterClose ?: return
+        afterClose = null
+        action()
     }
 
     private fun combinedMessage(): String {
@@ -315,6 +345,7 @@ internal class NoticeDialogCoordinator(
                 openWindow = null
                 entries.clear()
                 pushedOut = 0
+                runAfterClose()
             }
         }
         openWindow = created
@@ -457,6 +488,11 @@ internal object AppNotices {
         val left = held.withoutTopic(topic)
         if (left == null) heldForNextScreen.remove(activity.javaClass) else heldForNextScreen[activity.javaClass] = left
     }
+
+    // Runs [action] once the notice dialog on [activity] is closed, and says whether there is one to
+    // wait for. A screen asks before it finishes, which would take the dialog down unread.
+    fun afterDialog(activity: Activity, action: () -> Unit): Boolean =
+        coordinators[activity]?.afterDialog(action) == true
 
     // carry: the call comes from onDestroy. What a screen that is not finishing still held is kept
     // for the one the system makes in its place (a font size change, a turn of a screen that does

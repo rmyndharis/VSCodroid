@@ -25,15 +25,20 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeFalse
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.io.TempDir
 import java.io.ByteArrayOutputStream
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.OutputStream
+import java.lang.management.ManagementFactory
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.attribute.BasicFileAttributes
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 
 /**
  * What the device folder ends up holding when changes are queued behind one another.
@@ -82,6 +87,9 @@ class SafQueuedWriteBackTest {
 
     /** Run as a rename reaches the device folder, before it lands there. */
     private var onRenameCall: (() -> Unit)? = null
+
+    /** How many queries the device folder has answered. */
+    private var queries = 0
 
     private fun docId(path: String) = if (path.isEmpty()) "root" else "doc:$path"
 
@@ -157,6 +165,7 @@ class SafQueuedWriteBackTest {
         resolver = mockk(relaxed = true)
         every { resolver.query(any(), any(), any(), any(), any()) } answers {
             onProviderCall?.invoke()
+            queries++
             val target = firstArg<Uri>().toString()
             val rows = if (target.startsWith("children:")) {
                 val parent = pathOf(target.removePrefix("children:"))
@@ -871,6 +880,9 @@ class SafQueuedWriteBackTest {
         /** Whose watches are being made: the open's, or the watcher's once it starts. */
         var owner = "open"
 
+        /** Run as any watch is stopped, before the stop reaches the kernel. */
+        var onStop: (() -> Unit)? = null
+
         private fun name(dir: File) = dir.relativeTo(mirror).path.ifEmpty { "." }
 
         private fun identity(dir: File): Any? = runCatching { identityOf(dir) }.getOrNull()
@@ -891,6 +903,7 @@ class SafQueuedWriteBackTest {
                     }
 
                     override fun stop() {
+                        onStop?.invoke()
                         synchronized(this@KernelWatches) {
                             log += "stop:$whose:${name(dir)}"
                             val (key, descriptor) = watched ?: return
@@ -2327,5 +2340,525 @@ class SafQueuedWriteBackTest {
         assertEquals("x-ray", text("b/sub2/x.txt"), "the folder's files did not reach the folder holding its new name")
         assertFalse(device.keys.any { it.startsWith("b/sub2 (") }, "a third name was made up: ${device.keys}")
         assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /**
+     * A folder moved out of the copy while its folder opens, as the Explorer's Delete moves it to the workbench's own
+     * temporary folder, and a new folder made at its name. The departure is sent after the watcher has started and put
+     * its own watch on the new folder, and the watch at that name was stopped for it: nothing in the new folder was
+     * heard for the rest of the session, and every save in it stayed in the app with nothing said.
+     */
+    @Test
+    fun `a folder moved away and made again while its folder opens is heard once the watcher starts`() {
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } returns 0L
+        onDevice("0.txt", "zero")
+        onDevice("src")
+        onDevice("src/a.txt", "alpha")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val kernel = KernelWatches().also { it.install() }
+        openRecording { _, _ -> }
+        assertTrue(File(mirror, "src").renameTo(File(filesDir, "elsewhere")))
+        kernel.fire(FileObserver.MOVED_FROM or isDirFlag, "src")
+        assertTrue(File(mirror, "src").mkdir())
+        kernel.fire(FileObserver.CREATE or isDirFlag, "src")
+        kernel.owner = "watcher"
+
+        engine.startWatching(mirror, treeUri)
+        try {
+            // Held behind the replay until it has run, so once this save is on the device the replay is over.
+            inMirror("0.txt", "saved once the watcher started")
+            kernel.fire(FileObserver.MODIFY, "0.txt")
+            waitFor { text("0.txt") == "saved once the watcher started" }
+            assertEquals("saved once the watcher started", text("0.txt"), "precondition: the replay ended")
+            assertTrue(kernel.watched("src"), "the folder made at the old name went unwatched: ${kernel.log}")
+            inMirror("src/new.txt", "made in the new folder")
+            kernel.fire(FileObserver.CREATE, "src/new.txt")
+            waitFor { text("src/new.txt") == "made in the new folder" }
+        } finally {
+            engine.shutdown()
+        }
+        assertEquals("made in the new folder", text("src/new.txt"), "a file made in the new folder never reached the device")
+        assertEquals(emptyList<String>(), lost + refused)
+        // The folder moved out stays on the device, and the next open brings what it held back into the new one.
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        assertEquals("alpha", File(mirror, "src/a.txt").readText())
+    }
+
+    /**
+     * `mv src lib && rm -r lib` while the folder opens. Nothing stands under the new name when the watcher starts, so
+     * the folder's arrival there was not sent, nor were the deletes under that name, which the device does not have:
+     * the departure stayed held for a rename that never came, the device kept the folder, and the next open copied it
+     * back. The same commands seen live are carried out.
+     */
+    @Test
+    fun `a folder renamed and then removed with what it holds while its folder opens is removed on the device`() {
+        onDevice("0.txt", "zero")
+        onDevice("src")
+        onDevice("src/a.txt", "alpha")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val kernel = KernelWatches().also { it.install() }
+        openRecording { _, _ -> }
+        renameWatched(kernel, "src", "lib")
+        val moved = identityOf(File(mirror, "lib"))
+        assertTrue(File(mirror, "lib/a.txt").delete())
+        kernel.fire(FileObserver.DELETE, "lib/a.txt")
+        assertTrue(File(mirror, "lib").delete())
+        kernel.unlinked(moved)
+        kernel.fire(FileObserver.DELETE or isDirFlag, "lib")
+
+        replayWhatTheOpenRecorded()
+        drain()
+
+        assertEquals(setOf("0.txt"), device.keys, "the folder renamed and removed while it opened is still on the device")
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /**
+     * A folder renamed before its open reached it, so every file in it is sent again. Each was looked up on the
+     * device under the folder's new name, which the device does not have until the rename runs: two provider walks a
+     * file, misses that are not remembered, on the write-back thread while every live save waited behind them.
+     */
+    @Test
+    fun `a folder renamed before its open reaches it is replayed without a provider lookup per file`() {
+        val count = 40
+        onDevice("0.txt", "zero")
+        onDevice("src")
+        for (i in 1..count) onDevice("src/f$i.txt", "file $i")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val watches = OpenWatches().also { it.install() }
+        var renamed = false
+        openRecording { done, _ ->
+            if (done == 1 && !renamed) {
+                renamed = true
+                assertTrue(File(mirror, "src").renameTo(File(mirror, "lib")))
+                watches.fire(FileObserver.MOVED_FROM or isDirFlag, "src")
+                watches.fire(FileObserver.MOVED_TO or isDirFlag, "lib")
+            }
+        }
+        assertTrue(renamed, "precondition: the folder was renamed before the open reached it")
+
+        val before = queries
+        replayWhatTheOpenRecorded()
+        val replaying = queries - before
+        drain()
+        val total = queries - before
+
+        assertEquals((1..count).map { "file $it" }.toSet(), (1..count).map { text("lib/f$it.txt") }.toSet())
+        assertEquals(setOf("0.txt", "lib") + (1..count).map { "lib/f$it.txt" }, device.keys)
+        // A constant for the replay, whatever the folder holds; then what sending each file costs once the rename has
+        // run, which the replay used to more than double.
+        assertTrue(replaying <= 10, "the replay asked the device folder $replaying times for $count files")
+        assertTrue(total <= 3 * count + 20, "sending $count files asked the device folder $total times, $replaying of them while replaying")
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /**
+     * A folder that left while its folder opened, and one that arrived a minute later with the identity it had. The
+     * kernel gives a removed folder's inode to the next folder made, so after the Explorer deletes a folder and the
+     * trash is emptied, a new folder moved in can carry the old one's identity; the same folder moved back stands in for
+     * it here. The replay paired the two however far apart they came and renamed the departed folder on the device onto
+     * the new one's name. The watcher pairs halves at most a second apart, and the replay now does too.
+     */
+    @Test
+    fun `a folder arriving long after one left with its identity while its folder opens is not taken for its rename`() {
+        onDevice("0.txt", "zero")
+        onDevice("src")
+        onDevice("src/a.txt", "alpha")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        var clock = 1_000_000L
+        engine.openEventClock = { clock }
+        val kernel = KernelWatches().also { it.install() }
+        openRecording { _, _ -> }
+        val away = File(filesDir, "elsewhere")
+        assertTrue(File(mirror, "src").renameTo(away))
+        kernel.fire(FileObserver.MOVED_FROM or isDirFlag, "src")
+        clock += 60_000
+        File(away, "b.txt").writeText("made in the folder that arrived")
+        assertTrue(away.renameTo(File(mirror, "build")))
+        kernel.fire(FileObserver.MOVED_TO or isDirFlag, "build")
+
+        replayWhatTheOpenRecorded()
+        drain()
+
+        assertEquals("alpha", text("src/a.txt"), "the folder that left was renamed onto one that arrived a minute later")
+        assertEquals("made in the folder that arrived", text("build/b.txt"))
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /**
+     * A stop, a folder switch or a shutdown while the watcher is still sending what changed during the open. The replay
+     * went on with the folder closed: each change it had not reached was announced as a save kept in the app, though
+     * nothing had tried to send it. What it had not reached is left as a change made while the folder was closed.
+     */
+    @Test
+    fun `a stop while the replay runs ends it without notices for what it never reached`() {
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } returns 0L
+        onDevice("a.txt", "alpha")
+        onDevice("b.txt", "bravo")
+        onDevice("c.txt", "charlie")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val kept = mutableListOf<String>()
+        engine.onFilesKeptInApp = { _, _, first -> kept += first }
+        val kernel = KernelWatches().also { it.install() }
+        openRecording { _, _ -> }
+        inMirror("b.txt", "saved while it opened")
+        kernel.fire(FileObserver.MODIFY, "b.txt")
+        assertTrue(File(mirror, "a.txt").delete())
+        kernel.fire(FileObserver.DELETE, "a.txt")
+        inMirror("c.txt", "saved while it opened")
+        kernel.fire(FileObserver.MODIFY, "c.txt")
+        kernel.owner = "watcher"
+        var stopper: Thread? = null
+        onProviderCall = {
+            if (stopper == null && Thread.currentThread().name == "saf-writeback") {
+                val opening = engine.session
+                stopper = thread { engine.stopWatching() }
+                waitFor { engine.session !== opening }
+            }
+        }
+
+        engine.startWatching(mirror, treeUri)
+        try {
+            waitFor { stopper != null }
+            checkNotNull(stopper) { "precondition: the replay never reached the device folder" }.join(10_000)
+        } finally {
+            onProviderCall = null
+            engine.shutdown()
+        }
+        assertEquals("saved while it opened", text("b.txt"), "precondition: the change the replay was on when the stop came was sent")
+        assertEquals(emptyList<String>(), lost, "a change the stopped replay never reached was announced as kept in the app")
+        assertEquals(emptyList<String>(), kept)
+        assertEquals("charlie", text("c.txt"), "the replay went on sending after the stop")
+        assertEquals("alpha", text("a.txt"), "the replay went on sending after the stop")
+
+        // What it never reached is a change made while the folder was closed: the save goes at the next open, and the
+        // file deleted comes back.
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        assertEquals("saved while it opened", text("c.txt"))
+        assertEquals("alpha", File(mirror, "a.txt").readText())
+    }
+
+    /**
+     * A stop that takes the watcher's lock while the replay is between its check of the session and the watch a removal
+     * changes. The replay then waited for that lock while the stop, holding it, waited for the replay's thread: every
+     * such stop waited out its whole grace, and a folder switch took two seconds longer.
+     */
+    @Test
+    fun `a stop while the replay removes a watch does not wait out its grace for the replay`() {
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } returns 0L
+        onDevice("a.txt", "alpha")
+        onDevice("b.txt", "bravo")
+        onDevice("c.txt", "charlie")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val kernel = KernelWatches().also { it.install() }
+        openRecording { _, _ -> }
+        for (name in listOf("a.txt", "b.txt", "c.txt")) {
+            assertTrue(File(mirror, name).delete())
+            kernel.fire(FileObserver.DELETE, name)
+        }
+        kernel.owner = "watcher"
+        val waitedOut = mutableListOf<String>()
+        every { Logger.w(any(), any()) } answers {
+            if ("still draining" in secondArg<String>()) waitedOut += secondArg<String>()
+        }
+        var replay: Thread? = null
+        var stopper: Thread? = null
+        val stopping = CountDownLatch(1)
+        var held = false
+        val threads = ManagementFactory.getThreadMXBean()
+        // Inside the stop, which holds the watcher's locks here: let the replay run on until it waits for one of them.
+        kernel.onStop = {
+            val worker = replay
+            if (!held && worker != null && Thread.currentThread() === stopper) {
+                held = true
+                stopping.countDown()
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                while (threads.getThreadInfo(worker.id)?.lockOwnerId != Thread.currentThread().id &&
+                    System.nanoTime() < deadline
+                ) Thread.sleep(1)
+            }
+        }
+        onProviderCall = {
+            if (replay == null && Thread.currentThread().name == "saf-writeback") {
+                replay = Thread.currentThread()
+                stopper = thread { engine.stopWatching() }
+                stopping.await(5, TimeUnit.SECONDS)
+            }
+        }
+
+        engine.startWatching(mirror, treeUri)
+        try {
+            waitFor { stopper != null }
+            checkNotNull(stopper) { "precondition: the replay never reached the device folder" }.join(10_000)
+        } finally {
+            onProviderCall = null
+            kernel.onStop = null
+            engine.shutdown()
+        }
+        assertTrue(held, "precondition: the stop never ran while the replay did")
+        assertEquals(emptyList<String>(), waitedOut, "the stop waited out its grace for the replay")
+    }
+
+    /**
+     * Saves delivered over a record that cannot be read wait in memory for the next write of the record, and the next
+     * open writes them into the record before it reads it. Where that write failed, as on a full disk, the open took
+     * them out of memory and read the record without them: with the file edited again since, it read this app's own
+     * delivered save as another app's edit and kept it beside the file, and the record it wrote once there was room
+     * again did not hold them either.
+     */
+    @Test
+    fun `a save delivered over an unreadable record and edited again is not kept as a device edit when the next open's first write fails`() {
+        onDevice("notes.txt", "baseline")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        inMirror("notes.txt", "edited while closed")
+        val record = File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+        assertTrue(record.setReadable(false, false))
+        try {
+            assumeFalse(Files.isReadable(record.toPath()), "This account bypasses file read permissions")
+            runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        } finally {
+            record.setReadable(true, true)
+        }
+        assertEquals("edited while closed", text("notes.txt"), "precondition: the open sent the save")
+        val keptBefore = deviceCopies()
+        inMirror("notes.txt", "edited again, never sent")
+        val staging = File(record.path + SafSyncEngine.PARTIAL_SUFFIX).apply { assertTrue(mkdir()) }
+
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> staging.delete() } }
+
+        assertFalse(staging.exists(), "precondition: the open's own record could be written")
+        assertEquals(keptBefore, deviceCopies(), "the open kept this app's own delivered save as if another app had written it")
+        assertEquals("edited again, never sent", text("notes.txt"))
+    }
+
+    /**
+     * An open that fails partway, after it had taken the saves still waiting for the record out of memory, as it does
+     * over a record it cannot read. They were put back only by an open that got as far as its own record, so the next
+     * open read this app's own delivered save as another app's edit.
+     */
+    @Test
+    fun `a save delivered over an unreadable record is not kept as a device edit after an open that fails`() {
+        // Listed first, so the open that fails does so before it reaches notes.txt, which it would send again.
+        onDevice("a.txt", "alpha")
+        onDevice("notes.txt", "baseline")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        inMirror("notes.txt", "edited while closed")
+        val record = File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+        assertTrue(record.setReadable(false, false))
+        try {
+            assumeFalse(Files.isReadable(record.toPath()), "This account bypasses file read permissions")
+            runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+            assertEquals("edited while closed", text("notes.txt"), "precondition: the open sent the save")
+            assertThrows<IllegalStateException> {
+                runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> throw IllegalStateException("the progress report failed") } }
+            }
+        } finally {
+            record.setReadable(true, true)
+        }
+        val keptBefore = deviceCopies()
+        inMirror("notes.txt", "edited again, never sent")
+
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        assertEquals(keptBefore, deviceCopies(), "the open kept this app's own delivered save as if another app had written it")
+        assertEquals("edited again, never sent", text("notes.txt"))
+    }
+
+    /**
+     * The first open after an update from a build that could drop the row of a copy whose document the device deleted,
+     * while a terminal renames the folder holding that copy. The open keeps such a copy inside the app and says so;
+     * moved with the folder, the copy was left to the replay instead, which sent every file the record did not vouch for
+     * under the folder's old name, and the deleted document came back on the device under the new one. A file the
+     * device still holds is judged under its old name too, so the rename alone keeps nothing inside the app.
+     */
+    @Test
+    fun `a copy an earlier build dropped the row of, in a folder renamed while its folder opens, stays inside the app`() {
+        onDevice("0.txt", "zero")
+        onDevice("docs")
+        onDevice("docs/kept.txt", "kilo")
+        onDevice("docs/stale.txt", "sierra")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val record = File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+        // The device deleted stale.txt, and the earlier build dropped its row and kept the copy.
+        device.remove("docs/stale.txt")
+        record.writeText(record.readLines().filterNot { it.startsWith("docs/stale.txt\t") }.joinToString("\n"))
+        File(mirror.path + SafSyncEngine.SORTED_RECORD_SUFFIX).delete()
+        for (name in listOf("docs/kept.txt", "docs/stale.txt")) {
+            assertTrue(File(mirror, name).setLastModified(record.lastModified() - 60_000))
+        }
+        val kept = mutableListOf<Pair<Int, String>>()
+        engine.onFilesKeptInApp = { _, count, first -> kept += count to first }
+        val watches = OpenWatches().also { it.install() }
+        var renamed = false
+        openRecording { done, _ ->
+            if (done == 1 && !renamed) {
+                renamed = true
+                assertTrue(File(mirror, "docs").renameTo(File(mirror, "docs2")))
+                watches.fire(FileObserver.MOVED_FROM or isDirFlag, "docs")
+                watches.fire(FileObserver.MOVED_TO or isDirFlag, "docs2")
+            }
+        }
+        assertTrue(renamed, "precondition: the folder was renamed while it opened")
+
+        replayWhatTheOpenRecorded()
+        drain()
+
+        assertEquals(setOf("0.txt", "docs2", "docs2/kept.txt"), device.keys, "a copy of a document the device deleted came back")
+        assertEquals("kilo", text("docs2/kept.txt"))
+        assertEquals(listOf(1 to "docs2/stale.txt"), kept, "the copy kept inside the app was not told of, or another was kept")
+        assertEquals("sierra", File(mirror, "docs2/stale.txt").readText())
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /**
+     * A folder that was empty on the device when first opened and is empty still, whose copy holds a file older than
+     * its record, as an archive unpacked with its times keeps them, while a terminal renames the folder holding that
+     * file. The open keeps such a file inside the app and says so, but the device has no folder of either name, so the
+     * watcher makes the renamed folder whole once it starts and sent the file the open had said stays only in the app.
+     */
+    @Test
+    fun `a file in a folder renamed while an empty device folder opens is not said to stay in the app when it is sent`() {
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val record = File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+        assertEquals(listOf(SafSyncEngine.RECORD_HEADER), record.readLines(), "precondition: the first open left a record with no rows")
+        inMirror("docs/old.txt", "unpacked")
+        assertTrue(File(mirror, "docs/old.txt").setLastModified(record.lastModified() - 60_000))
+        val kept = mutableListOf<String>()
+        engine.onFilesKeptInApp = { _, _, first -> kept += first }
+        val watches = OpenWatches().also { it.install() }
+        var renamed = false
+        onProviderCall = {
+            if (!renamed && watches.watching.isNotEmpty()) {
+                renamed = true
+                assertTrue(File(mirror, "docs").renameTo(File(mirror, "docs2")))
+                watches.fire(FileObserver.MOVED_FROM or isDirFlag, "docs")
+                watches.fire(FileObserver.MOVED_TO or isDirFlag, "docs2")
+            }
+        }
+        try {
+            openRecording { _, _ -> }
+        } finally {
+            onProviderCall = null
+        }
+        assertTrue(renamed, "precondition: the folder was renamed while it opened")
+
+        replayWhatTheOpenRecorded()
+        drain()
+
+        assertEquals("unpacked", text("docs2/old.txt"), "precondition: the watcher sent the renamed folder")
+        assertEquals(emptyList<String>(), kept, "a file the watcher sent was said to stay only in the app")
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /**
+     * The same rename made once the open has read the folder's other file: the open's record then names that file
+     * under the folder's old name, and the rename moved those rows to the new name and dropped every row already
+     * standing there, the row of the copy kept inside the app with them, so the copy was sent after the rename.
+     */
+    @Test
+    fun `a copy an earlier build dropped the row of, in a folder renamed after the open read it, stays inside the app`() {
+        onDevice("0.txt", "zero")
+        onDevice("docs")
+        onDevice("docs/kept.txt", "kilo")
+        onDevice("docs/stale.txt", "sierra")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val record = File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+        device.remove("docs/stale.txt")
+        record.writeText(record.readLines().filterNot { it.startsWith("docs/stale.txt\t") }.joinToString("\n"))
+        File(mirror.path + SafSyncEngine.SORTED_RECORD_SUFFIX).delete()
+        assertTrue(File(mirror, "docs/stale.txt").setLastModified(record.lastModified() - 60_000))
+        val kept = mutableListOf<Pair<Int, String>>()
+        engine.onFilesKeptInApp = { _, count, first -> kept += count to first }
+        val watches = OpenWatches().also { it.install() }
+        var renamed = false
+        openRecording { done, _ ->
+            if (done == 2 && !renamed) {
+                renamed = true
+                assertTrue(File(mirror, "docs").renameTo(File(mirror, "docs2")))
+                watches.fire(FileObserver.MOVED_FROM or isDirFlag, "docs")
+                watches.fire(FileObserver.MOVED_TO or isDirFlag, "docs2")
+            }
+        }
+        assertTrue(renamed, "precondition: the folder was renamed while it opened")
+        assertTrue(record.readLines().any { it.startsWith("docs/kept.txt\t") }, "precondition: the open read the folder before the rename")
+
+        replayWhatTheOpenRecorded()
+        drain()
+
+        assertEquals(setOf("0.txt", "docs2", "docs2/kept.txt"), device.keys, "a copy of a document the device deleted came back")
+        assertEquals(listOf(1 to "docs2/stale.txt"), kept, "the copy kept inside the app was not told of, or another was kept")
+        assertTrue(record.readLines().any { it.startsWith("docs2/stale.txt\t") }, "the rename dropped the row of the copy kept inside the app")
+        assertEquals("sierra", File(mirror, "docs2/stale.txt").readText())
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /**
+     * The same rename made once the open has finished and kept the copy under the folder's old name. The renamed
+     * folder is followed by each file whose copy the record does not name under that name, and a copy kept inside the
+     * app is named only by a row without a digest, which that check did not count: the copy was sent after the rename.
+     */
+    @Test
+    fun `a copy an earlier build dropped the row of, in a folder renamed once the open has finished, stays inside the app`() {
+        onDevice("0.txt", "zero")
+        onDevice("docs")
+        onDevice("docs/kept.txt", "kilo")
+        onDevice("docs/stale.txt", "sierra")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val record = File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+        device.remove("docs/stale.txt")
+        record.writeText(record.readLines().filterNot { it.startsWith("docs/stale.txt\t") }.joinToString("\n"))
+        File(mirror.path + SafSyncEngine.SORTED_RECORD_SUFFIX).delete()
+        assertTrue(File(mirror, "docs/stale.txt").setLastModified(record.lastModified() - 60_000))
+        val kept = mutableListOf<Pair<Int, String>>()
+        engine.onFilesKeptInApp = { _, count, first -> kept += count to first }
+        val watches = OpenWatches().also { it.install() }
+        openRecording { _, _ -> }
+        assertEquals(listOf(1 to "docs/stale.txt"), kept, "precondition: the open kept the copy inside the app")
+        assertTrue(File(mirror, "docs").renameTo(File(mirror, "docs2")))
+        watches.fire(FileObserver.MOVED_FROM or isDirFlag, "docs")
+        watches.fire(FileObserver.MOVED_TO or isDirFlag, "docs2")
+
+        replayWhatTheOpenRecorded()
+        drain()
+
+        assertEquals(setOf("0.txt", "docs2", "docs2/kept.txt"), device.keys, "a copy of a document the device deleted came back")
+        assertTrue(record.readLines().any { it.startsWith("docs2/stale.txt\t") }, "the copy kept inside the app lost its row")
+        assertEquals("sierra", File(mirror, "docs2/stale.txt").readText())
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    /**
+     * The same failed first write, where the device has since deleted the file this app had delivered. Read without
+     * the save's receipt, the open found the copy changed from its row and kept it as work the device never got; the
+     * row went, and the next open sent the file back to the device that had deleted it.
+     */
+    @Test
+    fun `a save delivered over an unreadable record follows its deletion on the device when the next open's first write fails`() {
+        onDevice("a.txt", "alpha")
+        onDevice("notes.txt", "baseline")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        inMirror("notes.txt", "edited while closed")
+        val record = File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+        assertTrue(record.setReadable(false, false))
+        try {
+            assumeFalse(Files.isReadable(record.toPath()), "This account bypasses file read permissions")
+            runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        } finally {
+            record.setReadable(true, true)
+        }
+        assertEquals("edited while closed", text("notes.txt"), "precondition: the open sent the save")
+        device.remove("notes.txt")
+        val staging = File(record.path + SafSyncEngine.PARTIAL_SUFFIX).apply { assertTrue(mkdir()) }
+
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> staging.delete() } }
+
+        assertFalse(staging.exists(), "precondition: the open's own record could be written")
+        assertFalse(File(mirror, "notes.txt").exists(), "the copy of a file the device deleted was kept as work")
+        assertTrue(record.readLines().none { it.startsWith("notes.txt\t") }, "a row was left for a file that is gone")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        assertFalse("notes.txt" in device.keys, "the next open sent the deleted file back")
     }
 }

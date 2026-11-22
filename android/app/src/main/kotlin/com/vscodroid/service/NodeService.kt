@@ -373,12 +373,14 @@ class NodeService : Service() {
      * bind then finds a service that is not ready and waits, with nothing said.
      *
      * Read on the main thread by a newly bound client and written on the main
-     * thread by [launchServer], [awaitLateReadiness], [enterTerminalState] and
-     * the STAND_DOWN arm of [onStartCommand], so it needs no synchronisation of
-     * its own: the same confinement [restartCount] and [launchJob] rely on.
+     * thread by [launchServer], [awaitLateReadiness], [enterTerminalState],
+     * [shutdown] and the STAND_DOWN arm of [onStartCommand], so it needs no
+     * synchronisation of its own: the same confinement [restartCount] and
+     * [launchJob] rely on.
      *
-     * Cleared whenever a start begins and whenever one succeeds, so a reader
-     * that finds something here is looking at the current attempt.
+     * Cleared whenever a start begins, whenever one succeeds and when Stop ends
+     * the run, so a reader that finds something here is looking at the current
+     * attempt.
      */
     fun lastStartupNotice(): StartupNotice? = startupNotice
 
@@ -478,10 +480,13 @@ class NodeService : Service() {
             if (forSetup) {
                 // Its own face, because the server one says a server is running
                 // and none is. Same id, so the card the server puts up later
-                // replaces this one rather than arriving beside it.
+                // replaces this one rather than arriving beside it. No Stop on it:
+                // there is no server to stop, and the stop took the service out of
+                // the foreground and ended it, with setup still writing.
                 createNotification(
                     title = getString(R.string.notification_title_setup),
                     text = getString(R.string.notification_text_setup),
+                    offersStop = false,
                 )
             } else {
                 createNotification()
@@ -513,8 +518,9 @@ class NodeService : Service() {
      *
      * [ProcessManager.stopServer] is idempotent (it clears its own process
      * reference), so the call [onDestroy] makes once the activity unbinds costs a
-     * log line and nothing else. That second stop is not merely tolerated: it is
-     * what reaps a process spawned inside the window below.
+     * log line and nothing else. A process that a start spawned while this stop ran
+     * is not left to that second call: [ProcessManager.startServer] looks for a stop
+     * after its spawn and ends the process itself.
      *
      * Ending the processes runs on a thread of its own ([stopOffMainThread]), and
      * the rest in [stopEnded], on the main thread, once that has returned. It can
@@ -545,16 +551,24 @@ class NodeService : Service() {
         // Without this, stopping during a crash loop and starting again gave
         // whatever was left of the previous run's allowance.
         endFailureEpisode()
+        // And without the last run's startup notice. Only a launch cleared it, and a start that
+        // arrives while this stop runs is launched when the stop ends: a screen that bound meanwhile
+        // read the stopped run's failure or slow start ([lastStartupNotice]) and showed it.
+        startupNotice = null
         // A second Stop while the first is still ending the server: that one finishes the job.
         if (stopInFlight) return
         stopInFlight = true
         val processes = processManager
         stopOffMainThread(
             stop = {
-                processes.stopServer()
-                // A temporary origin, taken because home was busy, goes with the stop: the
-                // process outlives the service, and opening the editor again must try home.
-                processes.releaseAwayOrigin()
+                try {
+                    processes.stopServer()
+                } finally {
+                    // A temporary origin, taken because home was busy, goes with the stop, also
+                    // one that threw: the process outlives the service, and opening the editor
+                    // again must try home.
+                    processes.releaseAwayOrigin()
+                }
             },
             onMain = mainExecutor,
             ended = ::stopEnded,
@@ -1313,14 +1327,14 @@ class NodeService : Service() {
     }
 
     /**
-     * Builds the notification shown while the server is running, and (with
+     * Builds the notification shown while the server is running, (with
      * [serverRunning] cleared and its own wording) the one left behind after it
-     * has stopped for good.
+     * has stopped for good, and (with [offersStop] cleared) setup's.
      *
-     * Always tapping through to [MainActivity], and always carrying the Stop
-     * action. [serverRunning] governs only whether the notification is ongoing,
-     * one the user cannot dismiss, which is only fair while something is still
-     * running behind it.
+     * Always tapping through to [MainActivity], and carrying the Stop action on
+     * every card but setup's, which has no server behind it. [serverRunning]
+     * governs only whether the notification is ongoing, one the user cannot
+     * dismiss, which is only fair while something is still running behind it.
      *
      * The action used to be withheld from the stopped card, on the reasoning that
      * it is a `PendingIntent.getService` and sending one at a service whose
@@ -1349,6 +1363,7 @@ class NodeService : Service() {
         title: String = getString(R.string.notification_title),
         text: String = degradableNotificationText(),
         serverRunning: Boolean = true,
+        offersStop: Boolean = true,
     ): Notification {
         val openIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -1391,16 +1406,18 @@ class NodeService : Service() {
             // a sound, this governs whether it waits.
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
 
-        // On both cards. On the stopped one it is the only route back: see the
-        // KDoc above for what was measured about sending it at a reclaimed
-        // process, and why withholding it left no way out at all.
-        val stopIntent = Intent(this, NodeService::class.java).apply {
-            action = ACTION_STOP
+        // On both of the server's cards. On the stopped one it is the only route
+        // back: see the KDoc above for what was measured about sending it at a
+        // reclaimed process, and why withholding it left no way out at all.
+        if (offersStop) {
+            val stopIntent = Intent(this, NodeService::class.java).apply {
+                action = ACTION_STOP
+            }
+            val pendingStop = PendingIntent.getService(
+                this, 0, stopIntent, PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.addAction(0, getString(R.string.action_stop), pendingStop)
         }
-        val pendingStop = PendingIntent.getService(
-            this, 0, stopIntent, PendingIntent.FLAG_IMMUTABLE
-        )
-        builder.addAction(0, getString(R.string.action_stop), pendingStop)
 
         return builder.build()
     }
@@ -1708,15 +1725,16 @@ internal fun startCommand(
 
 /**
  * Runs [stop] on a thread of its own and then [ended] through [onMain], also when
- * [stop] throws: the service is still to be stopped, and a throw left on that
- * thread would end the process. [NodeService.shutdown] says why the stop leaves
- * the main thread.
+ * [stop] throws, an error as much as an exception: the service is still to be
+ * stopped, and a throw left on that thread would end the process, turning the
+ * person's Stop into a crash. [NodeService.shutdown] says why the stop leaves the
+ * main thread.
  */
 internal fun stopOffMainThread(stop: () -> Unit, onMain: Executor, ended: () -> Unit) {
     Thread({
         try {
             stop()
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Logger.e("NodeService", "Stopping the server failed", e)
         } finally {
             onMain.execute(ended)

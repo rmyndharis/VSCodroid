@@ -242,4 +242,9 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(self_test() if sys.argv[1:] == ["--self-test"] else main())
+    # Anything but no argument or exactly --self-test is refused: a mistyped flag that
+    # fell through to main() skipped the self-test and still exited 0.
+    if sys.argv[1:] not in ([], ["--self-test"]):
+        print("usage: check-markdown-tables.py [--self-test]", file=sys.stderr)
+        sys.exit(2)
+    sys.exit(self_test() if sys.argv[1:] else main())

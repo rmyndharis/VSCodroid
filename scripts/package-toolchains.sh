@@ -122,22 +122,22 @@ echo ""
 mkdir -p "$OUTPUT_DIR"
 
 # A full run owns the names it no longer knows. The loop below removes only the
-# ZIP it is about to rebuild, which leaves behind the ZIP of a toolchain this
-# build no longer has: measured in a working tree, a 53 MB toolchain_go.zip from
-# February sitting beside ruby and java, months after Go was withdrawn.
+# ZIPs of the toolchains it is asked for, which leaves behind the ZIP of a
+# toolchain this build no longer has: measured in a working tree, a 53 MB
+# toolchain_go.zip from February sitting beside ruby and java, months after Go
+# was withdrawn.
 # release.yml globs toolchain-zips/*.zip into the digest manifest and into what
 # it attaches to the release, so a leftover is published and vouched for as part
 # of it. Nothing in CI has shipped one only because the directory is gitignored
 # and runners check out clean, which is the runner's property rather than this
 # script's.
 #
-# Withdrawn names only. Removing every ZIP up front also took the one belonging
-# to a toolchain the same run then SKIPped for a missing asset tree, and said so
-# with an exit status of 0: measured with ruby's tree present and java's absent,
-# a 55 MB toolchain_java.zip was deleted under "Packaged: 1, Skipped: 1". That is
-# the one artifact such a run cannot rebuild, because the tree it would be built
-# from is exactly what is missing. A known toolchain's ZIP is removed by the loop
-# below, one line before it is written again.
+# Withdrawn names only. A known toolchain's ZIP is the loop's business, and the
+# loop removes it as its first step for that toolchain, before any gate: a run
+# that SKIPs the toolchain for a missing asset tree, or refuses its tree or its
+# ZIP, leaves no ZIP for it, and the summary says so. A ZIP from an earlier run
+# was held to no figure this run read, so attaching it by hand would publish
+# what no gate saw; the tree is rebuilt by its download script.
 #
 # Only on a full run: `package-toolchains.sh ruby` is a maintainer rebuilding one
 # pack, and taking the other one's ZIP away would be a surprise.
@@ -306,8 +306,8 @@ fi
 if [ "$FAILED" -gt 0 ]; then
     echo ""
     echo "  Skipped: $FAILED toolchain(s) (missing assets, run download scripts)"
-    echo "  A ZIP already in toolchain-zips/ for a skipped toolchain is left as it was,"
-    echo "  so check its date before attaching it to a release."
+    echo "  A skipped toolchain has no ZIP in toolchain-zips/: any from an earlier run"
+    echo "  is removed, because nothing in this run checked it."
 fi
 
 if [ "$PACKAGED" -eq 0 ]; then

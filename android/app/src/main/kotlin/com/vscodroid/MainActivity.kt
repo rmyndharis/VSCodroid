@@ -384,13 +384,14 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
     private val deviceFolderOpens = Mutex()
 
     /**
-     * The directories this app publishes into the WebView, resolved once.
+     * The directories this app publishes into the WebView and the locations the
+     * interceptor must refuse to serve: resolved first in [initBridge], then again by
+     * the client at every main-frame navigation (see [com.vscodroid.webview.ResourceRules]).
      *
      * Resolved on the main thread, deliberately. [publishedResourceRoots] stats
-     * external storage and canonicalises four paths (and [sensitivePaths], which it
-     * leaves out of them), so it is disk I/O, and
-     * [MainThreadWatch] makes a debug build say so: it is the first violation
-     * logged on every launch, and it is expected. It is also the allowlist that
+     * external storage and canonicalises four paths (and [sensitiveLocations], which it
+     * leaves out of them), so it is disk I/O, and [MainThreadWatch] makes a debug build
+     * say so, as expected. It is also the allowlist that
      * `shouldInterceptRequest` compares every resource request against, and
      * [initBridge] installs the client immediately before [navigateToFolder]
      * starts the page loading, so resolved on another thread, the first requests
@@ -399,14 +400,11 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * blank is a far worse trade than a few milliseconds spent after a server
      * start that already took seconds.
      *
-     * Lazy so the cost is paid once per Activity rather than once per WebView:
-     * [recreateWebView] clears `bridgeInitialized`, so a plain call would re-stat
-     * all four on every renderer crash, the moment the app can least afford it.
+     * One holder per Activity rather than per WebView: [recreateWebView] clears
+     * `bridgeInitialized`, and the client built after a renderer crash takes the
+     * rules as they are and resolves them again at its first navigation.
      */
-    private val resourceRoots: List<String> by lazy { publishedResourceRoots(this, sensitivePaths) }
-
-    /** Directories the interceptor must refuse to serve, resolved once, as above. */
-    private val sensitivePaths: List<String> by lazy { sensitiveLocations(this) }
+    private val resourceRules by lazy { com.vscodroid.webview.ResourceRules.of(this) }
 
     /**
      * The folder the workbench currently has open, derived once per navigation.
@@ -3901,13 +3899,12 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         )
         wv.addJavascriptInterface(bridge, "AndroidBridge")
 
-        // One set of rules, read once, handed to both entry points. The service
-        // worker is the second route a resource request takes into the
-        // interceptor, so lists installed on only one side leave the other
-        // answering by different rules, and neither side would say a word about
-        // the difference.
-        val roots = resourceRoots
-        val sensitive = sensitivePaths
+        // One set of rules for both entry points. The service worker is the second
+        // route a resource request takes into the interceptor, so lists installed
+        // on only one side leave the other answering by different rules, and
+        // neither side would say a word about the difference. The client resolves
+        // them again at each main-frame navigation, and the worker reads the same
+        // holder per request.
 
         // Register ServiceWorkerClient BEFORE loading VS Code, because service
         // worker script fetches bypass WebViewClient.shouldInterceptRequest
@@ -3937,14 +3934,14 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         // than `self.get()?....` for that reason.
         val self = WeakReference(this)
         VSCodroidWebViewClient.setupServiceWorkerInterception(
-            port, roots, sensitive, { self.get()?.openWorkspaceRoot },
+            port, { self.get()?.resourceRules?.roots }, { self.get()?.resourceRules?.sensitive },
+            { self.get()?.openWorkspaceRoot },
             { self.get()?.workspaceResources?.roots() },
         ) { self.get()?.nodeService?.getConnectionToken() }
 
         wv.webViewClient = VSCodroidWebViewClient(
             allowedPort = port,
-            resourceRoots = roots,
-            sensitiveLocations = sensitive,
+            resourceRules = resourceRules,
             openFolder = { openWorkspaceRoot },
             workspaceMembers = { workspaceResources.roots() },
             connectionToken = { nodeService?.getConnectionToken() },

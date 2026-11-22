@@ -2,6 +2,7 @@
 """Compile native compatibility helpers with local fixtures."""
 
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -141,6 +142,53 @@ static long sys6(long nr, long sig, long act, long old, long size, long e, long 
 }
 BODY
 '''.replace("STRUCTURES", structures).replace("BODY", body)
+
+
+def environment_code(path):
+    """Every top-level declaration in a C file that names the environment variable.
+
+    Chosen by what it names rather than by where it sits, so the case below reads
+    whatever the file defines for the environment and whatever reads it. Comments and
+    preprocessor lines are dropped first; the rest splits where a declaration or a
+    function body ends at file scope.
+    """
+    literal = r'"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\''
+    text = re.sub(r"/\*.*?\*/|//[^\n]*|(" + literal + ")", lambda m: m.group(1) or " ",
+                  (ROOT / path).read_text(), flags=re.S)
+    text = re.sub(r"^[ \t]*#(?:[^\n]*\\\n)*[^\n]*", "", text, flags=re.M)
+    chunks, start, depth = [], 0, 0
+    for match in re.finditer(literal + r"|[{};]", text):
+        token = match.group()
+        depth += {"{": 1, "}": -1}.get(token, 0)
+        if depth == 0 and token in ("}", ";"):
+            chunks.append(text[start:match.end()])
+            start = match.end()
+    return [chunk for chunk in chunks if re.search(r"\b_{0,2}environ\b", chunk)]
+
+
+def sigsys_fixture():
+    """seccomp-shim.c's SIGSYS handler, with the epoll_pwait it makes recorded instead."""
+    body = function("scripts/seccomp-shim.c", "static void on_sigsys(", "\n/**")
+    return r'''
+#include <assert.h>
+#include <errno.h>
+#include <limits.h>
+#include <time.h>
+#define __NR_epoll_pwait2 441
+#define SYS_epoll_pwait 22
+#define SYS_SECCOMP 1
+typedef struct { int si_code; int si_syscall; } siginfo_t;
+typedef struct { struct { unsigned long regs[31]; } uc_mcontext; } ucontext_t;
+static long timeout_seen;
+static int calls;
+static long sys6(long nr, long fd, long events, long maxevents, long ms, long mask, long size) {
+    assert(nr == SYS_epoll_pwait && fd == 7 && events == 8 && maxevents == 9);
+    assert(mask == 10 && size == 8);
+    timeout_seen = ms; calls++;
+    return 3;
+}
+BODY
+'''.replace("BODY", body)
 
 
 def statx_fixture():
@@ -656,27 +704,61 @@ int main(void) {
 }
 '''.replace("BODY", body))
 
-    def test_epoll_timeouts(self):
-        body = function("scripts/seccomp-shim.c", "static void on_sigsys(", "\n/**")
+    def test_a_short_write_leaves_the_input_after_the_last_byte_copied(self):
+        body = function("scripts/glibc-shim.c", "static ssize_t copy_file_range_fallback(",
+                        "\nssize_t copy_file_range(")
         compile_and_run(r'''
+#define _GNU_SOURCE
 #include <assert.h>
 #include <errno.h>
-#include <limits.h>
-#include <time.h>
-#define __NR_epoll_pwait2 441
-#define SYS_epoll_pwait 22
-#define SYS_SECCOMP 1
-typedef struct { int si_code; int si_syscall; } siginfo_t;
-typedef struct { struct { unsigned long regs[31]; } uc_mcontext; } ucontext_t;
-static long timeout_seen;
-static int calls;
-static long sys6(long nr, long fd, long events, long maxevents, long ms, long mask, long size) {
-    assert(nr == SYS_epoll_pwait && fd == 7 && events == 8 && maxevents == 9);
-    assert(mask == 10 && size == 8);
-    timeout_seen = ms; calls++;
-    return 3;
-}
+#include <fcntl.h>
+#include <signal.h>
+#include <stdint.h>
+#include <string.h>
+#include <sys/resource.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#ifdef __APPLE__
+typedef off_t off64_t;
+#endif
 BODY
+static char bytes[40000];
+static void copied(int fd, size_t count) {
+    static char back[sizeof(bytes)];
+    struct stat st;
+    assert(fstat(fd, &st) == 0 && st.st_size == (off_t)count);
+    assert(pread(fd, back, count, 0) == (ssize_t)count && !memcmp(back, bytes, count));
+}
+int main(void) {
+    for (size_t i = 0; i < sizeof(bytes); i++) bytes[i] = (char)(i * 7 + 1);
+    int in = open("source", O_RDWR | O_CREAT | O_TRUNC, 0600);
+    assert(in >= 0 && write(in, bytes, sizeof(bytes)) == (ssize_t)sizeof(bytes));
+    /* A file size ceiling stops write() short inside the second 16 KB chunk. */
+    signal(SIGXFSZ, SIG_IGN);
+    struct rlimit ceiling = {20000, 20000};
+    assert(setrlimit(RLIMIT_FSIZE, &ceiling) == 0);
+
+    /* The descriptors' own positions: the input stops after the last byte copied,
+     * which is where a caller looping on the short count resumes. */
+    int out = open("output", O_RDWR | O_CREAT | O_TRUNC, 0600);
+    assert(lseek(in, 0, SEEK_SET) == 0);
+    assert(copy_file_range_fallback(in, NULL, out, NULL, sizeof(bytes), 0) == 20000);
+    assert(lseek(in, 0, SEEK_CUR) == 20000 && lseek(out, 0, SEEK_CUR) == 20000);
+    copied(out, 20000);
+
+    /* Explicit offsets advance by what was copied and leave the descriptor alone. */
+    int again = open("again", O_RDWR | O_CREAT | O_TRUNC, 0600);
+    off64_t input = 0, output = 0;
+    assert(lseek(in, 5, SEEK_SET) == 5);
+    assert(copy_file_range_fallback(in, &input, again, &output, sizeof(bytes), 0) == 20000);
+    assert(input == 20000 && output == 20000 && lseek(in, 0, SEEK_CUR) == 5);
+    copied(again, 20000);
+    return 0;
+}
+'''.replace("BODY", body))
+
+    def test_epoll_timeouts(self):
+        compile_and_run(sigsys_fixture() + r'''
 static void check(const struct timespec *ts, long expected) {
     siginfo_t info = {SYS_SECCOMP, __NR_epoll_pwait2};
     ucontext_t context = {0};
@@ -727,7 +809,32 @@ int main(void) {
     check(&(struct timespec){0, 1000000000}, -EINVAL);
     return 0;
 }
-'''.replace("BODY", body))
+''')
+
+    def test_another_refused_call_is_answered_enosys_and_epoll_pwait2_still_is(self):
+        compile_and_run(sigsys_fixture() + r'''
+static const unsigned long arguments[6] = {7, 8, 9, 0, 10, 8};
+static unsigned long refuse(int syscall) {
+    siginfo_t info = {SYS_SECCOMP, syscall};
+    ucontext_t context = {0};
+    for (int i = 0; i < 6; i++) context.uc_mcontext.regs[i] = arguments[i];
+    on_sigsys(0, &info, &context);
+    for (int i = 1; i < 6; i++) assert(context.uc_mcontext.regs[i] == arguments[i]);
+    return context.uc_mcontext.regs[0];
+}
+int main(void) {
+    /* rseq, clone3, set_robust_list, and a number no kernel assigns. None of them ran, so
+     * until the handler answers, x0 still holds the caller's own first argument. */
+    const int others[] = {293, 435, 99, 4095};
+    for (unsigned i = 0; i < sizeof(others) / sizeof(others[0]); i++) {
+        calls = 0;
+        assert((long)refuse(others[i]) == -ENOSYS && calls == 0);
+        /* Answering it does not use the handler up: the next epoll_pwait2 is emulated. */
+        assert(refuse(__NR_epoll_pwait2) == 3 && calls == 1 && timeout_seen == -1);
+    }
+    return 0;
+}
+''')
 
     def test_ctype_tables_are_whole_before_the_first_call(self):
         compile_and_run(ctype_fixture())
@@ -769,6 +876,77 @@ int main(void) {
 }
 ''')
 
+
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "needs ELF symbol preemption, which macOS's two-level namespace does not do")
+    def test_loading_the_shim_leaves_the_process_environment_as_it_is(self):
+        # The shim's environment code is built into a library of its own and loaded the
+        # way Node loads an addon, after the process has changed its environment.
+        library = r'''
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+''' + "\n".join(environment_code("scripts/glibc-shim.c"))
+        with tempfile.TemporaryDirectory() as directory:
+            source, shared = Path(directory) / "shim.c", Path(directory) / "libshim.so"
+            source.write_text(library)
+            subprocess.run(["cc", "-shared", "-fPIC", "-Wall", str(source), "-o", str(shared)],
+                           check=True, timeout=30)
+            compile_and_run(r'''
+#define _GNU_SOURCE
+#include <assert.h>
+#include <dlfcn.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+static int lists(char **environment, const char *entry) {
+    for (; environment && *environment; environment++) {
+        if (!strcmp(*environment, entry)) return 1;
+    }
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    if (argc == 2) {
+        /* Started again, with a variable in the environment it is executed with. */
+        assert(setenv("REMOVED_AFTER_EXEC", "1", 1) == 0);
+        execl(argv[0], argv[0], argv[1], "again", (char *)0);
+        return 2;
+    }
+    /* What the editor server does before an extension host loads a glibc addon:
+     * dns-proxy.js adds the proxy variables and deletes the one that asked for them. */
+    assert(unsetenv("REMOVED_AFTER_EXEC") == 0 && setenv("SET_AFTER_EXEC", "1", 1) == 0);
+    char **before = environ;
+    void *shim = dlopen(argv[1], RTLD_LAZY | RTLD_LOCAL);
+    if (!shim) { printf("%s\n", dlerror()); return 3; }
+    printf("environ %s, SET_AFTER_EXEC %s, REMOVED_AFTER_EXEC %s\n",
+           environ == before ? "kept" : "replaced", getenv("SET_AFTER_EXEC") ? "kept" : "gone",
+           getenv("REMOVED_AFTER_EXEC") ? "back" : "gone");
+    fflush(stdout);
+    assert(environ == before && getenv("SET_AFTER_EXEC") && !getenv("REMOVED_AFTER_EXEC"));
+    /* What a stub exports as glibc's environ shows both changes too. */
+    char **(*handed_to_stubs)(void) = (char **(*)(void))dlsym(shim, "__shim_environ");
+    assert(handed_to_stubs);
+    char **handed = handed_to_stubs();
+    assert(lists(handed, "SET_AFTER_EXEC=1") && !lists(handed, "REMOVED_AFTER_EXEC=1"));
+    /* It is the environment as it was at load, owned by the stub. A pointer into the
+     * process's own array would change under it here, and would be freed as that
+     * array grows. */
+    assert(setenv("SET_AFTER_EXEC", "2", 1) == 0 && !strcmp(getenv("SET_AFTER_EXEC"), "2"));
+    assert(lists(handed, "SET_AFTER_EXEC=1") && !lists(handed, "SET_AFTER_EXEC=2"));
+    for (int i = 0; i < 200; i++) {
+        char name[32];
+        snprintf(name, sizeof(name), "GROWN_%d", i);
+        assert(setenv(name, "1", 1) == 0);
+    }
+    assert(getenv("GROWN_199") && lists(handed, "SET_AFTER_EXEC=1") && !lists(handed, "GROWN_0=1"));
+    return 0;
+}
+''', flags=["-ldl"], args=[str(shared)])
 
     @unittest.skipUnless(sys.platform.startswith("linux"), "needs the kernel's own statx to compare with")
     def test_statx_fallback_matches_the_kernel(self):

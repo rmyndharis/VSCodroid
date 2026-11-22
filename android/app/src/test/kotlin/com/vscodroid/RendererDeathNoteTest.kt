@@ -7,6 +7,7 @@ import com.vscodroid.service.mockEditorGateway
 import com.vscodroid.util.CrashReporter
 import com.vscodroid.util.Logger
 import com.vscodroid.webview.VSCodroidWebViewClient
+import com.vscodroid.webview.noResourceRules
 import io.mockk.Runs
 import io.mockk.every
 import io.mockk.just
@@ -52,8 +53,7 @@ class RendererDeathNoteTest {
         }
         val client = VSCodroidWebViewClient(
             allowedPort = 13337,
-            resourceRoots = emptyList(),
-            sensitiveLocations = emptyList(),
+            resourceRules = noResourceRules(),
             openFolder = { null },
             connectionToken = { null },
             onCrash = { order += "rebuilt" },

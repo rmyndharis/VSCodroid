@@ -33,12 +33,14 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-$ROOT_DIR/android/app/src/main/assets/vscode-reh}"
 # ZEROMQ_PREBUILD in Environment.kt, relative to filesDir.
 ZEROMQ_OUTPUT="${ZEROMQ_OUTPUT:-$ROOT_DIR/android/app/src/main/assets/usr/lib/node-addons/zeromq}"
 
-# Must match remote/.npmrc `target` at the VS Code tag AND the bundled
-# libnode.so. A mismatch changes NODE_MODULE_VERSION and every addon here is
-# rejected at load with no useful message: terminals stop working and the log
-# says only that a module could not be loaded. The check at the end compares the
-# headers used here against the runtime actually being shipped, so the two
-# cannot drift apart silently.
+# Must have the major of remote/.npmrc `target` at the VS Code tag and of the
+# bundled libnode.so. NODE_MODULE_VERSION moves with the major, and a different
+# one gets every addon here rejected at load with no useful message: terminals
+# stop working and the log says only that a module could not be loaded. The rest
+# of the version may differ, and does at the 1.139.1 pin (`target` 24.20.0,
+# these headers 24.18.0). The check at the end compares the major of these
+# headers with the runtime actually being shipped, so those two cannot drift
+# apart silently; nothing here reads remote/.npmrc.
 NODE_VERSION="${NODE_VERSION:-24.18.0}"
 
 # What node-v$NODE_VERSION-headers.tar.gz must hash to, for the version on the

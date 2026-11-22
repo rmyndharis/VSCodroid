@@ -47,7 +47,7 @@ echo "=== Node runtime ==="
 mkdir -p "$WORK_DIR" "$JNILIBS_DIR"
 cd "$WORK_DIR"
 
-# Emptied at the start, the way the five other resolved-*.tsv writers do it, so a
+# Emptied at the start, the way the seven other resolved-*.tsv writers do it, so a
 # run that fails leaves no record naming a runtime that is not in jniLibs. The
 # write itself is at the very end; both halves are needed, and truncation alone
 # would not have been enough -- the record used to be written before the digest of

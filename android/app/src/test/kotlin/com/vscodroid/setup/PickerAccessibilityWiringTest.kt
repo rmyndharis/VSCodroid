@@ -33,11 +33,17 @@ class PickerAccessibilityWiringTest {
     private val toolbarLayout = File("src/main/res/layout/activity_toolchain.xml")
 
     /**
-     * The body of one function, brace-matched from its signature.
+     * The body of one function, brace-matched from its signature, with its comments
+     * blanked.
      *
      * Brace counting rather than a line range: a range drifts the moment anything
      * above it grows, and a guard anchored to a line number stops guarding the
      * function it was written for without saying so.
+     *
+     * Blanked, with each line kept, because the searches below are anchored to the
+     * start of a line, and a call wrapped in a block comment whose lines carry no
+     * leading `*` still starts one: the body used to come back with its comments in
+     * it, and such a call passed for a live one.
      */
     private fun bodyOf(source: File, signature: String): String {
         assertTrue(
@@ -54,7 +60,7 @@ class PickerAccessibilityWiringTest {
         // text[-1] and the reader gets an index-out-of-bounds instead of the
         // sentence written for them below.
         assertTrue(i >= 0, "no body follows `$signature` in ${source.name}")
-        val open = i
+        val code = StringBuilder()
         // Braces inside comments do not count. A single `{` in a comment anywhere
         // in the function makes the depth never return to zero at the real closing
         // brace, so the body runs on into whatever follows. Measured on this file:
@@ -65,19 +71,19 @@ class PickerAccessibilityWiringTest {
         // guard exactly as a file-wide search would.
         while (i < text.length) {
             when {
-                text.startsWith("//", i) -> while (i < text.length && text[i] != '\n') i++
+                text.startsWith("//", i) -> while (i < text.length && text[i] != '\n') { code.append(' '); i++ }
                 text.startsWith("/*", i) -> {
-                    i += 2
-                    while (i < text.length && !text.startsWith("*/", i)) i++
-                    i += 2
+                    val end = text.indexOf("*/", i + 2).let { if (it < 0) text.length else it + 2 }
+                    while (i < end) { code.append(if (text[i] == '\n') '\n' else ' '); i++ }
                 }
-                text[i] == '{' -> { depth++; i++ }
+                text[i] == '{' -> { depth++; code.append('{'); i++ }
                 text[i] == '}' -> {
                     depth--
-                    if (depth == 0) return text.substring(open, i + 1)
+                    code.append('}')
+                    if (depth == 0) return code.toString()
                     i++
                 }
-                else -> i++
+                else -> { code.append(text[i]); i++ }
             }
         }
         error("unbalanced braces after `$signature` in ${source.name}")

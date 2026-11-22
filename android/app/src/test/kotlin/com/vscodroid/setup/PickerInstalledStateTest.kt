@@ -95,9 +95,10 @@ class PickerInstalledStateTest {
         )
         // Anchored to the start of a line: a commented-out call is still a call to
         // a substring search, and commenting one out is how a developer disables
-        // something while debugging.
+        // something while debugging. And with the record as its argument: the
+        // call compiles with an empty list, which tells the cards nothing.
         assertTrue(
-            Regex("""(?m)^\s*adapter\.setInstalled\(""").containsMatchIn(body),
+            Regex("""(?m)^\s*adapter\.setInstalled\(\s*\w+\.getInstalledToolchains\(\)""").containsMatchIn(body),
             "the picker is never told what is already on disk, so every card is drawn " +
                 "as a fresh download and ticking an installed toolchain fetches it again",
         )
@@ -122,7 +123,7 @@ class PickerInstalledStateTest {
         val body = code(bodyOf("override fun onStart("))
 
         assertTrue(
-            Regex("""(?m)^\s*pickerAdapter\?\.setInstalled\(""").containsMatchIn(body),
+            Regex("""(?m)^\s*pickerAdapter\?\.setInstalled\(\s*\w+\.getInstalledToolchains\(\)""").containsMatchIn(body),
             "nothing refreshes the picker's installed set, so the refusal in " +
                 "ToolchainCardState reads a snapshot taken before the user left for the " +
                 "Toolchains screen and installed something",

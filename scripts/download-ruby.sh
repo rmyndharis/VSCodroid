@@ -186,13 +186,23 @@ echo ""
 echo "Stripping unnecessary files..."
 BEFORE_SIZE=$(du -sk "$PACK_ASSETS/usr" | cut -f1)
 
-# Strip gem cache, doc, ri
+# What RubyGems keeps beside each installed gem and never loads: the gem's own
+# documentation and test suite at the gem's root, the .gem archives under
+# cache/, and generated rdoc and ri under gems/<abi>/doc. Only at those roots.
+# A match by name at any depth also took code that lives in a directory of that
+# name: test-unit's lib/test, so `require "test/unit"` raised LoadError;
+# rdoc's lib/rdoc/ri, which RDoc::RI autoloads its driver from and irb's
+# documentation dialog reaches; rbs's lib/rbs/test; and bundler's
+# templates/newgem/test and spec, which `bundle gem --test` writes from.
+RUBY_GEMS="$PACK_ASSETS/usr/lib/ruby/gems"
 find "$PACK_ASSETS/usr/lib/ruby" -path "*/cache/*.gem" -delete 2>/dev/null || true
-find "$PACK_ASSETS/usr/lib/ruby" -type d -name "doc" -exec rm -rf {} + 2>/dev/null || true
-find "$PACK_ASSETS/usr/lib/ruby" -type d -name "ri" -exec rm -rf {} + 2>/dev/null || true
-# Strip test directories
-find "$PACK_ASSETS/usr/lib/ruby" -type d \( -name "test" -o -name "tests" -o -name "spec" \) -exec rm -rf {} + 2>/dev/null || true
-# Strip man pages if any leaked through
+for gem_dir in "$RUBY_GEMS"/*/gems/*/; do
+    rm -rf "${gem_dir}doc" "${gem_dir}test" "${gem_dir}tests" "${gem_dir}spec"
+done
+rm -rf "$RUBY_GEMS"/*/doc
+# Man pages, at any depth. That includes lib/ruby/<version>/bundler/man, the
+# manual `bundle help <command>` prints when there is no man command, as on a
+# phone; without it bundle help prints its shorter usage summary instead.
 find "$PACK_ASSETS/usr" -type d -name "man" -exec rm -rf {} + 2>/dev/null || true
 
 AFTER_SIZE=$(du -sk "$PACK_ASSETS/usr" | cut -f1)

@@ -199,6 +199,7 @@
          that got there first, and the only thing the user needs is to stop tapping. -->
     <string name="toolchain_already_installing">Quella toolchain è già in fase di installazione.</string>
     <string name="toolchain_failed_internal">Installazione non riuscita. I dettagli sono nel log dell\'app.</string>
+    <string name="toolchain_remove_failed">Impossibile rimuovere quella toolchain. I dettagli sono nel log dell\'app.</string>
     <!-- Shown on the splash screen when Install or Retry was tapped on the Toolchains screen while this
          build's setup had not finished. The tap goes to the splash screen, which runs setup, and the
          install is not carried over, so the person is told to wait for setup and install again. -->

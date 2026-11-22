@@ -188,6 +188,57 @@ class SafKindConflictTest : SafInitialSyncTestBase() {
         assertEquals("first draft", setAsideCopies("foo").single().readText())
     }
 
+    /**
+     * The same copy is told of once. It was also told of as an app edit kept beside its file, which reads as work on its
+     * way to the device, while the notice for files kept inside the app says it stays there.
+     */
+    @Test
+    fun `a copy kept inside the app beside the folder that replaced it is told of once`() {
+        deviceTree(mapOf("root" to listOf(Child("keep.txt", contents = "kept"), Child("foo", contents = "first draft"))))
+        sync()
+        record.writeText(record.readLines().joinToString("\n") {
+            if (it.startsWith("foo\t")) it.substringBeforeLast('\t') else it
+        })
+        deviceTree(
+            mapOf(
+                "root" to listOf(Child("keep.txt", contents = "kept"), Child("foo", isDirectory = true)),
+                "doc:foo" to emptyList(),
+            ),
+        )
+
+        sync()
+
+        val aside = setAsideCopies("foo").single().name
+        assertEquals(listOf(1 to aside), keptInApp, "the copy kept inside the app was not told of by name")
+        assertEquals(emptyList<String>(), localCopies, "the copy kept inside the app was also told of as an app edit kept beside its file")
+        assertEquals(1, record.readLines().count { it.startsWith(aside + "\t") }, "the copy kept inside the app has more than one row")
+    }
+
+    /** The same over a record an earlier build wrote, which the open sorts: still one row and one notice. */
+    @Test
+    fun `a copy kept inside the app beside the folder that replaced it over an earlier build's record is told of once`() {
+        deviceTree(mapOf("root" to listOf(Child("keep.txt", contents = "kept"), Child("foo", contents = "first draft"))))
+        sync()
+        record.writeText(record.readLines().joinToString("\n") {
+            if (it.startsWith("foo\t")) it.substringBeforeLast('\t') else it
+        })
+        recordLeftByEarlierBuild()
+        deviceTree(
+            mapOf(
+                "root" to listOf(Child("keep.txt", contents = "kept"), Child("foo", isDirectory = true)),
+                "doc:foo" to emptyList(),
+            ),
+        )
+
+        sync()
+
+        val aside = setAsideCopies("foo").single().name
+        assertEquals(listOf(1 to aside), keptInApp, "the copy kept inside the app was not told of by name")
+        assertEquals(emptyList<String>(), localCopies, "the copy kept inside the app was also told of as an app edit kept beside its file")
+        assertEquals(1, record.readLines().count { it.startsWith(aside + "\t") }, "the copy kept inside the app has more than one row")
+        assertEquals(emptyList<String>(), created.map { it.second }, "a copy nothing proves is work was sent to the device")
+    }
+
     @Test
     fun `a folder made where the device holds a file gives way and is kept beside it`() {
         openedBefore()

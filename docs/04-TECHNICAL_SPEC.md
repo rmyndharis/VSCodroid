@@ -1244,7 +1244,8 @@ update, and after six with no change of text, each less than half a minute after
 before, the next update a rule would refuse is applied as
 the editor without the patch applies it, whatever the six before it refused, so that input
 never stops answering (a stale letter, below, is the exception: its letter is still typed at
-the caret, with no restart forced); a range that reaches beyond the buffer is cut at the
+the caret, with no restart forced, so a pick that has the shape of a stale letter is never
+applied); a range that reaches beyond the buffer is cut at the
 buffer's end
 first, so that nothing after the buffer is replaced. Half a minute with no forced restart, by the
 page's monotonic clock, ends the count, so the refusals of separate moments do not add up to six; a touch or a turn of the
@@ -1283,11 +1284,20 @@ on a reopened letter would have the same shape there (a transliteration, a phone
 step, a final form, `ı` over `i`; no recording holds one), so a stale letter of those still
 replaces the last letter. These three shapes are recognised only while a composition is open:
 with none open, the letter alone over the word still replaces it (`line x`), and over the last
-letter still replaces that letter (`line twx`). A person sees either at once. A keyboard taking
+letter still replaces that letter (`line twx`). A person sees either at once. What the shapes
+cost: a pick of one letter from the suggestion strip over a reopened word cannot be told from a
+stale letter, so over a word of more letters, or over a one-letter word when the word and the
+pick are letters of the basic Latin alphabet with different base letters, it is typed after the
+word (`I` picked over `is` gives `isI`, `é` over `a` gives `aé`), and each try again does
+the same. A keyboard taking
 back a correction the editor applied for it (`u` corrected to `you`, then `u` written back
-over `you`) has the shape of a letter over the word and is applied, as long as nothing but a
-deletion at the end of the correction has changed the text since; a word completed from its
-first letter (`t` to `the`) is no correction, and the letter over it stays a stale letter.
+over `you`) has the shape of a letter over the word and is applied, as long as nothing has
+changed the text since but a deletion at the end of the correction or a space or a punctuation
+mark inserted there, which is how a keyboard that sends the correction and its space as two
+updates sends the space; a word completed from its first letter (`t` to `the`) is no
+correction, and the letter over it stays a stale letter. A Backspace that the editor runs as a
+key press, as Gboard 17.7 and 18.4 send it, is an edit no update reports, and the take-back
+after it is typed after the word (`youu`).
 Measured on an Android 12 emulator with Gboard 10.8 and WebView 134, with a word typed, a turn
 to landscape and back and one letter about eight seconds later: on a build of the release's
 sources 21 of 30 runs ended damaged, 20 of them with the word doubled (`line twotwox`, `line

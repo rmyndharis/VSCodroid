@@ -2,6 +2,6 @@
   "displayName": "VSCodroid Process Monitor",
   "description": "Monitors phantom process count on Android",
   "command.showProcesses": "VSCodroid: Show Process Tree",
-  "config.server.heapCeilingMb": "V8 heap ceiling for the editor server, in MB. Leave unset to derive it from device memory (an eighth of RAM, between 256 and 768). Takes effect the next time the app is started. A value larger than this device can hold is reduced automatically, and is turned off after repeated crashes.\n\nThe limit applies to each V8 isolate in the server separately, not to all of them together, so raising it costs several times what the number says.",
+  "config.server.heapCeilingMb": "V8 heap ceiling for the editor server, in MB. Leave unset to derive it from device memory (an eighth of RAM, between 256 and 768). Takes effect the next time the editor server starts: tap **Stop Server** in VSCodroid's notification, then open VSCodroid again. A value larger than this device can hold is reduced automatically, and is turned off after repeated crashes.\n\nThe limit applies to each V8 isolate in the server separately, not to all of them together, so raising it costs several times what the number says.",
   "config.antigravity.runEngine": "Let the Google Antigravity extension start its engine. While the engine runs, it listens on a local port that any app on this phone with network access can reach, and such an app can use the account signed in to the engine. Off until you turn it on. Reload the window after changing it."
 }

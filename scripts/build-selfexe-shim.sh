@@ -17,7 +17,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-OUT_DIR="${OUT_DIR:-$ROOT_DIR/android/app/src/main/assets/usr/lib}"
+# Movable through a name of this script's own, never a generic OUT_DIR a shell
+# may have exported for something else.
+OUT_DIR="${SELFEXE_OUT_DIR:-$ROOT_DIR/android/app/src/main/assets/usr/lib}"
 OUT="$OUT_DIR/libselfexe.so"
 
 TARGET=aarch64-linux-android

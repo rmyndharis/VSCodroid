@@ -12,17 +12,21 @@ printed a mock `node --version` giving v20.18.1.
 
 Nothing reported it, because a hardcoded string cannot disagree with itself.
 
-Two rules, both mechanical:
+Three rules, all mechanical:
 
   * No version number beside a bundled tool's name. The screen's job is to say
     the tool is there and ready; a user who needs the number runs `node -v`,
     which the very next step of the walkthrough tells them to do.
 
-  * No "coming soon". Java 25 and Ruby are installable today, and the screen
-    said the opposite -- which is worse than a stale number, because it sends a
-    user away from a toolchain already sitting on their device. Rust and C/C++
-    were promised there too, and neither has a module, a pack or a registry
-    entry.
+  * No "coming soon", in any language the screen ships in. Java 25 and Ruby
+    were installable while the screen said the opposite, which is worse than a
+    stale number, because it sends a user away from a toolchain already sitting
+    on their device. Rust was promised there too, and has no module, pack or
+    registry entry.
+
+  * A step's picture draws every toolchain its text offers by name. The tools
+    step's text gained C/C++ when that pack shipped, and the illustration beside
+    it went on drawing Java 25 and Ruby alone.
 
 This checks the manifest and the illustrations together. The pictures carried
 the same claims as the text and were missed when the text was first questioned.
@@ -36,6 +40,30 @@ from xml.etree import ElementTree
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 EXTENSIONS = ROOT / "android/app/src/main/assets/extensions"
+# What the app installs on demand, by the name a user reads.
+REGISTRY = ROOT / "android/app/src/main/kotlin/com/vscodroid/setup/ToolchainRegistry.kt"
+SVG = "{http://www.w3.org/2000/svg}"
+
+# "Coming soon" in every language the walkthrough ships in, each read from its own
+# bundle. The English phrase alone let a translation promise the same thing in its
+# own words. A bundle whose language has no entry here fails the check rather than
+# being read for English only.
+COMING_SOON = {
+    "": [r"\bcoming soon\b"],
+    "cs": [r"\bjiž brzy\b", r"\bpřipravujeme\b"],
+    "de": [r"\bdemnächst\b", r"\bin Kürze\b", r"\bbald verfügbar\b"],
+    "es": [r"\bpróximamente\b"],
+    "fr": [r"\bbientôt\b", r"\bprochainement\b"],
+    "it": [r"\bprossimamente\b", r"\bin arrivo\b"],
+    "ja": [r"近日", r"今後対応"],
+    "ko": [r"출시 예정", r"지원 예정", r"곧 제공"],
+    "pl": [r"\bwkrótce\b"],
+    "pt-br": [r"\bem breve\b"],
+    "ru": [r"\bскоро\b", r"\bв ближайшее время\b"],
+    "tr": [r"\byakında\b"],
+    "zh-cn": [r"即将推出", r"即将支持", r"敬请期待"],
+    "zh-tw": [r"即將推出", r"即將支援", r"敬請期待"],
+}
 
 # Tier-1 tools, all resolved from the Termux index at build time. Naming a
 # version for any of them is the defect; the toolchains are excluded on purpose,
@@ -52,9 +80,8 @@ FORBIDDEN = [
     # is followed by a word, and the number carries no prefix.
     (re.compile(r"\bv?\d+\.\d+\.\d+\b"),
      "prints a version string that goes stale on the next rebuild"),
-    (re.compile(r"\bcoming soon\b", re.I),
-     "promises something as unavailable; Go, Java 25 and Ruby ship today, and "
-     "nothing else is planned"),
+    (re.compile("|".join(p for patterns in COMING_SOON.values() for p in patterns), re.I),
+     "promises something as unavailable; say what a user can install today instead"),
 ]
 
 
@@ -201,6 +228,42 @@ def prose(directory):
     return rows, unresolved
 
 
+def undrawn_toolchains(directory):
+    """`(gaps, offered)`: the toolchains a step's English text names in bold that
+    its picture does not draw, and how many were offered in all.
+
+    The names are the registry's display names, so a toolchain added there is
+    looked for here without an edit. A picture is read for its `<text>` elements,
+    which is where a box's label is drawn.
+    """
+    names = re.findall(r'displayName\s*=\s*"([^"]+)"', REGISTRY.read_text(encoding="utf-8"))
+    if not names:
+        sys.exit(f"FAIL no displayName could be read from {REGISTRY.relative_to(ROOT)}; "
+                 "the pictures would be compared with nothing")
+    data = json.loads((directory / "package.json").read_text())
+    base = bundles(directory).get(BASE_BUNDLE, {})
+    gaps, offered = [], 0
+    for walkthrough in data.get("contributes", {}).get("walkthroughs", []):
+        for step in walkthrough.get("steps", []):
+            picture = (step.get("media") or {}).get("svg")
+            text = step.get("description", "")
+            key = PLACEHOLDER.fullmatch(text)
+            text = base.get(key.group(1), "") if key else text
+            bold = set(re.findall(r"\*\*([^*]+)\*\*", text))
+            named = [name for name in names if name in bold]
+            if not named or not picture:
+                continue
+            offered += len(named)
+            drawn = {
+                "".join(node.itertext()).strip()
+                for node in ElementTree.parse(directory / picture).iter(f"{SVG}text")
+            }
+            missing = [name for name in named if name not in drawn]
+            if missing:
+                gaps.append((picture, step.get("id", "?"), missing))
+    return gaps, offered
+
+
 def main():
     directory = welcome_dir()
     if directory is None:
@@ -224,6 +287,24 @@ def main():
             failed = True
 
     rows, unresolved = prose(directory)
+
+    languages = {name[len("package.nls"):-len(".json")].lstrip(".") for name in bundles(directory)}
+    unread = sorted(languages - COMING_SOON.keys())
+    if unread:
+        print(f"  FAIL    no \"coming soon\" wording for {', '.join(unread)} in COMING_SOON")
+        print("            a translation in that language would be read for the English phrase only")
+        failed = True
+
+    gaps, offered = undrawn_toolchains(directory)
+    if not offered:
+        print("  FAIL    no step's text names a toolchain from ToolchainRegistry.kt in bold")
+        print("            so no picture was compared with its text; the names or the markup moved")
+        failed = True
+    for picture, step, missing in gaps:
+        print(f"  FAIL    {picture}: step '{step}' offers {', '.join(missing)} and the picture "
+              f"does not draw {'it' if len(missing) == 1 else 'them'}")
+        print("            a user reads the picture beside the text; draw a box for each toolchain the text names")
+        failed = True
 
     # A run that examined nothing must not read as a run that examined
     # everything. With the prose behind `%key%` and no English bundle to resolve
@@ -258,8 +339,9 @@ def main():
 
     if failed:
         print(f"         Checked {directory.name}.")
-        print("         Say the tool is ready without naming its version, and say "
-              "what a user can install today rather than what is coming.")
+        print("         Say the tool is ready without naming its version, say what a "
+              "user can install today rather than what is coming, and draw what the "
+              "text offers.")
         return 1
 
     print(f"  ok      {directory.name} states nothing that goes stale on its own")

@@ -1,5 +1,6 @@
 package com.vscodroid.service
 
+import android.app.Notification
 import android.content.Intent
 import android.os.SystemClock
 import androidx.core.app.ServiceCompat
@@ -18,6 +19,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -151,6 +153,85 @@ class NodeServiceStopTest {
     }
 
     /**
+     * A temporary origin, bound because home was busy, is given up by the stop so that the next start
+     * tries home. A stop that threw skipped that, and the process went on holding the temporary port
+     * for the next start to inherit.
+     */
+    @Test
+    fun `a stop that throws still gives up a temporary origin`() {
+        every { processes.stopServer() } throws IllegalStateException("the kill was refused")
+        stop()
+        runEnd()
+
+        assertTrue("releaseAwayOrigin on server-stop" in events, "a failed stop kept the temporary origin: ${events.toList()}")
+    }
+
+    /**
+     * An error from the stop, not an exception, left the stop thread uncaught, and on Android that ends
+     * the process: the person who pressed Stop got a crash instead, with the stop's last steps undone.
+     */
+    @Test
+    fun `an error from the stop stays on its thread, and the stop still ends`() {
+        val escaped = LinkedBlockingQueue<Throwable>()
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { _, failure -> escaped += failure }
+        try {
+            every { processes.stopServer() } throws StackOverflowError()
+            stop()
+            runEnd()
+            // The end is handed over before the thread leaves, so let it leave before asking what escaped.
+            Thread.getAllStackTraces().keys.filter { it.name == "server-stop" }.forEach { it.join(5_000) }
+        } finally {
+            Thread.setDefaultUncaughtExceptionHandler(previous)
+        }
+
+        assertTrue(escaped.isEmpty(), "the error left the stop thread: ${escaped.toList()}")
+        assertTrue(
+            events.containsAll(listOf("releaseAwayOrigin on server-stop", "stopSelf", "told")),
+            "the stop did not end: ${events.toList()}",
+        )
+    }
+
+    /**
+     * The notice the last run left, a terminal one or a slow start, is about a server the person has
+     * just stopped. Only a launch cleared it, and a start that arrives while the stop runs waits for
+     * the stop to end before it launches, so a screen that bound meanwhile showed the stopped run's
+     * failure instead of waiting for the new server.
+     */
+    @Test
+    fun `a stop takes the last run's startup notice with it`() {
+        every { service.lastStartupNotice() } answers { callOriginal() }
+        NodeService::class.java.getDeclaredField("startupNotice").apply { isAccessible = true }
+            .set(service, StartupNotice("the restart budget is spent", terminal = true))
+
+        stop()
+        service.onStartCommand(command(null), 0, 2)
+
+        assertNull(service.lastStartupNotice(), "a screen that binds while the stop runs is shown the stopped run's notice")
+    }
+
+    /**
+     * Setup's card is up for the minutes the unpack takes, and a Stop on it ran the whole stop: the
+     * service left the foreground and stopped itself with setup still writing, the hold it takes against
+     * the low-memory killer gone. No server runs behind that card, so it offers no Stop.
+     */
+    @Test
+    fun `setup's card offers no Stop, and the server's card does`() {
+        val offered = mutableListOf<Boolean>()
+        every { service["promoteToForeground"](any<Boolean>()) } answers { callOriginal() }
+        every { ServiceCompat.startForeground(any(), any(), any(), any()) } just Runs
+        every { service["createNotification"](any<String>(), any<String>(), any<Boolean>(), any<Boolean>()) } answers {
+            offered += arg<Boolean>(3)
+            mockk<Notification>()
+        }
+
+        service.onStartCommand(command(NodeService.ACTION_HOLD), 0, 1)
+        service.onStartCommand(command(null), 0, 2)
+
+        assertEquals(listOf(false, true), offered, "setup's card and the server's card, in that order")
+    }
+
+    /**
      * The service with its real crash handling, stopped by the notification and started again while
      * the stop thread still runs, which leaves the start to [NodeService.stopEnded]. Only the framework
      * half is stubbed, as in [setUp].
@@ -204,6 +285,9 @@ class NodeServiceStopTest {
 
         assertTrue(completes(running, "handleServerCrash", 137, EPOCH), "a retry is waiting out its backoff beside the stop's launch")
         assertEquals(0, restartCount(running), "the old server's exit spent a restart of the new run")
+        // The report is turned away at its door: it does not reach the heap ceiling's count of kills
+        // either, which would charge the old server's exit to the person's chosen ceiling.
+        verify(exactly = 0) { processes.heapOverrideValueInEffect(any()) }
 
         release.countDown()
         runEnd()

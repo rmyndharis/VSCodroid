@@ -438,21 +438,24 @@ android {
         // network reason in defaultConfig; that deadline is a decision to take
         // from the report, not a failed build.
         //
-        // The four Play SDK Index ids are the same case. Lint fetches Google's
+        // The five Play SDK Index ids are the same case. Lint fetches Google's
         // index, cached for a week, and reports a non-blocking label on a pinned
         // version, such as the asset-delivery 2.2.2 this build keeps on purpose,
         // as a warning. Listing an id sets its severity whatever the label, and
         // lint has no override that tells the two apart, so a BLOCKING label on
         // these is informational here too. Its message still opens "[Prevents
         // app release in Google Play Console]", and Play Console refuses that
-        // upload. RiskyLibrary is reported only for a blocking critical issue
-        // and stays an error.
+        // upload, so release.yml reads the lint report for that label after
+        // lint has run (scripts/check-lint-baseline.py --play-console-labels).
+        // RiskyLibrary is reported only for a blocking critical issue and stays
+        // an error.
         informational += listOf(
             "GradleDependency",
             "AndroidGradlePluginVersion",
             "ExpiringTargetSdkVersion",
             "OutdatedLibrary",
             "PlaySdkIndexDeprecated",
+            "PlaySdkIndexGenericIssues",
             "PlaySdkIndexNonCompliant",
             "PlaySdkIndexVulnerability",
         )
@@ -789,17 +792,23 @@ tasks.withType<Test> {
     //   res/layout       PickerAccessibilityWiringTest, TextContrastTest
     //   res/values       PickerAccessibilityWiringTest, ThemeEdgeToEdgeTest,
     //                    TextContrastTest, StartColorTest
+    //   res/values-v30   ThemeEdgeToEdgeTest
     //   res/values-v31   StartColorTest
     //   res/xml          BackupRulesParityTest
     //
-    // layout/, values/, values-v31/ and xml/ only. Nothing reads drawable/ or
-    // mipmap-*/, and the mipmaps are images whose hashes would be paid for on
-    // every run and never asked about. Widen this the moment a suite reads one
-    // of them:
+    // values-v30 was missing from this list while ThemeEdgeToEdgeTest read it:
+    // setting window_cutout_mode to 1 there left the task UP-TO-DATE and green.
+    // The translated strings.xml files are declared above, as translatedStrings.
+    //
+    // layout/, values/, values-v30/, values-v31/ and xml/ only. Nothing reads
+    // drawable/ or mipmap-*/, and the mipmaps are images whose hashes would be
+    // paid for on every run and never asked about. Widen this the moment a suite
+    // reads one of them:
     //   grep -rn 'File("src/main/res' android/app/src/test/kotlin
     inputs.files(
         fileTree("src/main/res/layout"),
         fileTree("src/main/res/values"),
+        fileTree("src/main/res/values-v30"),
         fileTree("src/main/res/values-v31"),
         fileTree("src/main/res/xml"),
     )
@@ -899,35 +908,6 @@ val checkPatchFingerprints = tasks.register<Exec>("checkPatchFingerprints") {
     )
 }
 
-// The same script fetch-vscode-oss.sh runs, pointed at the tree that actually
-// gets packaged instead of the one that was downloaded. Those are two different
-// trees and only the second ships: server/vscode-reh is copied into assets/ by
-// package-assets.sh, locally and in build.yml and release.yml alike, and
-// build-native-addons.sh then writes its .node files INTO that copy. Several
-// steps read the packaged tree afterwards -- build-glibc-shim.sh --scan,
-// check-langserver-patterns.py, the "Verify assets" existence check -- but this
-// is the only one that asks whether the tree is VALID.
-//
-// Be honest about where it earns its keep, because the obvious answer is wrong.
-// In CI this is defence in depth rather than a hole being closed: release.yml has
-// no assets cache and always fetches, so the fetch-side run always happens; in
-// build.yml a cache miss or a restore-keys partial hit both leave
-// `cache-hit != 'true'`, so the fetch runs there too; and on an EXACT assets-cache
-// hit the restored tree necessarily passed this same script already, because
-// scripts/verify-server-tree.py is itself part of that cache key. What it does
-// cover is the local path -- fetch once, then build repeatedly for days, possibly
-// after patches/ or branding/ have moved underneath -- and any future workflow
-// that packages a tree without fetching one. Do not fold it back into
-// fetch-vscode-oss.sh: that script only ever sees the copy it just made.
-//
-// What it catches that checkPatchFingerprints cannot: staleness that is not a
-// missing patch. Measured on the tree in a working checkout on 2026-08-15 --
-// fingerprints exited 0 while this exited 1, on the same tree in the same
-// second, because the packaged workbench.css was built before an activity-bar
-// change that is appended at server-build time rather than applied as a patch.
-//
-// 0.56s on the real 699 MB tree, no network: one walk for native binaries, plus
-// product.json and workbench.css.
 /**
  * Refuses a packaged tree whose native addons are still the upstream glibc builds.
  *
@@ -992,8 +972,8 @@ val verifyNativeAddons = tasks.register<Exec>("verifyNativeAddons") {
             "\n" +
             "scripts/build-all.sh runs them in the order that works. If the\n" +
             "missing half is the compatibility shim rather than an addon, that is\n" +
-            "scripts/build-glibc-shim.sh, which download-termux-tools.sh removes\n" +
-            "as a side effect of refreshing its own libraries."
+            "scripts/build-glibc-shim.sh, which has not run since the addons it\n" +
+            "scans were last written."
     )
 }
 
@@ -1083,6 +1063,35 @@ val verifyPackagedAlignment = tasks.register<Exec>("verifyPackagedAlignment") {
     )
 }
 
+// The same script fetch-vscode-oss.sh runs, pointed at the tree that actually
+// gets packaged instead of the one that was downloaded. Those are two different
+// trees and only the second ships: server/vscode-reh is copied into assets/ by
+// package-assets.sh, locally and in build.yml and release.yml alike, and
+// build-native-addons.sh then writes its .node files INTO that copy. Several
+// steps read the packaged tree afterwards -- build-glibc-shim.sh --scan,
+// check-langserver-patterns.py, the "Verify assets" existence check -- but this
+// is the only one that asks whether the tree is VALID.
+//
+// Be honest about where it earns its keep, because the obvious answer is wrong.
+// In CI this is defence in depth rather than a hole being closed: release.yml has
+// no assets cache and always fetches, so the fetch-side run always happens; in
+// build.yml a cache miss or a restore-keys partial hit both leave
+// `cache-hit != 'true'`, so the fetch runs there too; and on an EXACT assets-cache
+// hit the restored tree necessarily passed this same script already, because
+// scripts/verify-server-tree.py is itself part of that cache key. What it does
+// cover is the local path -- fetch once, then build repeatedly for days, possibly
+// after patches/ or branding/ have moved underneath -- and any future workflow
+// that packages a tree without fetching one. Do not fold it back into
+// fetch-vscode-oss.sh: that script only ever sees the copy it just made.
+//
+// What it catches that checkPatchFingerprints cannot: staleness that is not a
+// missing patch. Measured on the tree in a working checkout on 2026-08-15 --
+// fingerprints exited 0 while this exited 1, on the same tree in the same
+// second, because the packaged workbench.css was built before an activity-bar
+// change that is appended at server-build time rather than applied as a patch.
+//
+// 0.56s on the real 699 MB tree, no network: one walk for native binaries, plus
+// product.json and workbench.css.
 val verifyServerTree = tasks.register<Exec>("verifyServerTree") {
     group = "verification"
     description = "Checks the server tree in assets/ is one this app can run."
@@ -1217,8 +1226,9 @@ val verifyBundledBinaries = tasks.register<Exec>("verifyBundledBinaries") {
             "In CI a cached jniLibs is restored whole with every download step\n" +
             "skipped, so a binary here can be older than the tree. It cannot be\n" +
             "older than this checker: scripts/verify-android-elf.py is hashed\n" +
-            "into all three cache keys, so tightening it misses the cache and\n" +
-            "refetches. Re-run the owning script above; do not bust a cache."
+            "into every download and asset cache key, so tightening it misses\n" +
+            "the cache and refetches. Re-run the owning script above; do not\n" +
+            "bust a cache."
     )
 }
 
