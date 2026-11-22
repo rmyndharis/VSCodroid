@@ -405,17 +405,22 @@ class WriteAtomicallyTest {
         assertTrue(dir.listFiles()!!.none { it.name.endsWith(".tmp~") }, "a temporary file was left")
     }
 
-    /** Links that lead round in a circle name no file at all, and none of them is replaced. */
+    /**
+     * Links that lead round in a circle name no file at all, and none of them is replaced. A caller that asks
+     * why is told which name could not be followed.
+     */
     @Test
     fun `through links that lead round in a circle nothing is written`() {
         val link = File(dir, ".bashrc")
         Files.createSymbolicLink(File(dir, "a").toPath(), Paths.get("b"))
         Files.createSymbolicLink(File(dir, "b").toPath(), Paths.get("a"))
         Files.createSymbolicLink(link.toPath(), Paths.get("a"))
+        var why: String? = null
 
-        assertFalse(writeAtomically(link, throughLink = true) { it.write("new".toByteArray()) })
+        assertFalse(writeAtomically(link, { why = it }, throughLink = true) { it.write("new".toByteArray()) })
 
         assertTrue(listOf(".bashrc", "a", "b").all { Files.isSymbolicLink(File(dir, it).toPath()) }, "a link was replaced")
+        assertEquals(".bashrc is a link that cannot be followed to a file", why, "the caller was not told why nothing was written")
     }
 
     @Test

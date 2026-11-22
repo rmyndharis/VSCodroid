@@ -179,6 +179,27 @@ class SettingsMigrationTest {
         assertFalse(legacy.exists(), "the original was left behind")
     }
 
+    /**
+     * A settings file that opens with a byte order mark, as one an editor saved in a dotfiles folder and linked
+     * here can. The reader of the Antigravity setting steps over the mark, and so does the withdrawal of it; the
+     * search for the root brace stopped at it, so nothing this app adds went in: no Claude launcher, without
+     * which the extension refuses to start, and no layout fact.
+     */
+    @Test
+    fun `a settings file that opens with a byte order mark still gets what this app adds`() {
+        legacy.delete()
+        val theirs = "\uFEFF{\n    \"editor.fontSize\": 17\n}\n"
+        current.writeText(theirs)
+
+        FirstRunSetup(context).updateSettingsNativeLibPaths()
+
+        val text = current.readText()
+        assertTrue(text.contains("\"claudeCode.claudeProcessWrapper\""), "the Claude launcher was not added: $text")
+        assertTrue(text.contains("\"vscodroid.layout.compactScreen\""), "the layout fact was not added: $text")
+        assertTrue(text.startsWith("\uFEFF{"), "the mark or the brace after it moved: $text")
+        assertTrue(text.contains("\"editor.fontSize\": 17"), "the person's setting was lost: $text")
+    }
+
     /** Reflection rather than widened visibility, as [TerminalShellPathTest] does. */
     private fun createDefaultSettings() {
         FirstRunSetup::class.java
