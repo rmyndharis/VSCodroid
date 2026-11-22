@@ -18,8 +18,8 @@
  * test, which reading /proc did not.
  *
  * scanPorts takes its connector, so nothing here opens a socket: the fake
- * records what was dialled, which also pins the probe order. Runs anywhere Node
- * runs.
+ * records what was dialled, as a set, since the probes go out together and
+ * their order is the scheduler's. Runs anywhere Node runs.
  *
  *   node scripts/test-serve-network.js
  */

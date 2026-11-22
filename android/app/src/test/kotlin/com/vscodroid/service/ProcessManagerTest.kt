@@ -438,32 +438,30 @@ class ProcessManagerTest {
         // this pins the behaviour that replaced it so nobody restores the check
         // without reading why it went.
         //
-        // The holder in the case that matters is not a stranger. It is our own
-        // editor server, surviving a SIGKILL of the parent that forked it -- a
-        // live, working server that the open WebView is still talking to.
-        // Refusing to start took that editor away from the user to fix
-        // bookkeeping, and could not recover afterwards: the port is resolved only
-        // while it is zero, so the refusal repeated for the life of the instance.
+        // At a restart the holder is never a stranger. It is this process's own
+        // EditorGateway, which binds the origin once and keeps it through every
+        // stop and restart, while the editor listens on a private socket. A start
+        // that refused a held port would refuse every restart, and the port is
+        // the origin the open WebView and its IndexedDB are keyed to. A port
+        // another program holds is a different case, met only by the first start
+        // of a process, whose bind the real gateway refuses: that start moves
+        // (`a cold start moves off a remembered port a stranger is holding`).
         //
-        // StubServer(null) holds the port without serving on it, so this asserts
-        // the start proceeds because of the port's state and not because of
-        // anything the holder answers.
-        val holder = StubServer(null)
-        try {
-            manager.portField = holder.port
+        // So the holder here is the gateway, bound by an earlier start. It was a
+        // listener of the suite's own until #584 made the origin the app's, and
+        // that version went on passing only because the stubbed gateway never
+        // refuses a bind; the real one would have moved the start.
+        val port = EditorGateway.instance.bind(0)
+        manager.portField = port
 
-            assertTrue(
-                startAndAwaitWatchdog(),
-                "a held port must not stop a restart; the surviving server is usually " +
-                    "ours, and the user is still using it",
-            )
-            assertEquals(
-                holder.port, manager.port,
-                "and the port must still be the one the WebView is bound to",
-            )
-        } finally {
-            holder.stop()
-        }
+        assertTrue(
+            startAndAwaitWatchdog(),
+            "a held port must not stop a restart; the holder is this process's own gateway",
+        )
+        assertEquals(
+            port, manager.port,
+            "and the port must still be the one the WebView is bound to",
+        )
     }
 
     @Test
@@ -507,11 +505,13 @@ class ProcessManagerTest {
     @Test
     fun `a stop that does not finish in time force-kills rather than waiting on`() {
         // Two invariants in one, and the issue that prompted this asked for
-        // neither directly. The wait must be BOUNDED -- the notification's Stop
-        // action reaches here on the main thread, and anything dispatched behind
-        // it waits too, which is what users saw as a freeze. And when the budget
-        // elapses the process must be killed outright, because shortening a wait
-        // without the forcible kill trades a freeze for an orphaned Node.
+        // neither directly. The wait must be BOUNDED -- `Service.onDestroy`
+        // reaches here on the main thread, and anything dispatched behind it
+        // waits too, which is what users saw as a freeze while the notification's
+        // Stop ran it there as well (it has a thread of its own now, whose end
+        // the foreground card waits for). And when the budget elapses the
+        // process must be killed outright, because shortening a wait without the
+        // forcible kill trades a freeze for an orphaned Node.
         val process = mockk<Process>(relaxed = true) {
             every { isAlive } returns true
             // The server ignores SIGTERM in this scenario -- the case the budget
@@ -608,12 +608,13 @@ class ProcessManagerTest {
     @Test
     fun `stopping a second time touches nothing and reports nothing running`() {
         // Two callers now stop the same server on one Stop press. NodeService
-        // does it inline when the notification action arrives, because a service
-        // that is started *and* bound is not destroyed by stopSelf() alone, and
-        // then Service.onDestroy does it again once the activity finishes and
-        // releases the binding. The second call has to be harmless as a property
-        // of this class rather than as an accident of ordering, because which
-        // one runs second depends on how quickly the activity goes away.
+        // does it on its stop thread when the notification action arrives,
+        // because a service that is started *and* bound is not destroyed by
+        // stopSelf() alone, and then Service.onDestroy does it again on the main
+        // thread once the activity finishes and releases the binding. The second
+        // call has to be harmless as a property of this class rather than as an
+        // accident of ordering: it runs whatever the first one left, including
+        // nothing at all after a first stop that threw.
         val process = mockk<Process>(relaxed = true) {
             every { isAlive } returns true
             every { waitFor(any(), any()) } returns true
@@ -1222,14 +1223,15 @@ class ProcessManagerTest {
 
     @Test
     fun `a stop that lands while the server is spawning takes the process with it`() {
-        // The window NodeService.shutdown documents and leaves to onDestroy to
-        // reap. `stopServer()` runs on the main thread and reads `serverProcess`,
-        // which is null everywhere above the spawn, so a Stop pressed inside the
-        // few milliseconds ProcessBuilder.start() takes destroys nothing and
-        // returns. What it leaves is a Node process with no foreground service
-        // tracking it, no watchdog, and the editor port in its hand: the next cold
-        // start either adopts it, keeping the session, or moves to another port
-        // and takes the workbench's IndexedDB with it.
+        // The window between a start's last look at the stop and its spawn.
+        // `stopServer()` runs on another thread (the stop thread of
+        // NodeService.shutdown, or the main one from Service.onDestroy) and reads
+        // `serverProcess`, which is null everywhere above the spawn, so a Stop
+        // pressed inside the few milliseconds ProcessBuilder.start() takes
+        // destroys nothing and returns. What it leaves is a Node process with no
+        // foreground service tracking it and no watchdog, serving a private socket
+        // nothing routes to, which only the next cold start finds, by its note,
+        // and adopts or reaps.
         //
         // The stop is fired from inside the start rather than raced against it.
         // buildProcessEnvironment is the last thing startServer asks for before it
@@ -3332,7 +3334,7 @@ class AdoptionTest {
         // NodeService restarts it on Dispatchers.IO, an orphan of the previous run
         // still holds the port, and the start parks inside the adoption round trip
         // for a second of connect plus a second of read while the notification's
-        // Stop action runs stopServer() on the main thread.
+        // Stop action runs stopServer() on the service's stop thread.
         //
         // That stop reads `adopted` as false for the whole of the window, so it
         // reaps nothing and returns; the branch then cleared isShuttingDown and

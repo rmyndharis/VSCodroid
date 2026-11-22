@@ -13,10 +13,12 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeFalse
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.nio.file.Files
 
 /**
  * The file that points pip at the wheelhouse, and the user's configuration it
@@ -142,18 +144,68 @@ class PipConfigTest {
         assertEquals(pipConfigContent("3.14"), owned.readText())
     }
 
+    /**
+     * Opens with this app's header, so a launch that could read it would bring it up to date: what keeps it
+     * as it is can only be that it was not read. A user who can read anything (root) proves nothing here.
+     */
     @Test
     fun `a file that cannot be read is not replaced`() {
+        val stale = "$PIP_CONF_HEADER\n[global]\nfind-links = https://old.test/wheels.html\n"
         owned.parentFile!!.mkdirs()
-        owned.writeText("[global]\nindex-url = https://mirror.test/simple\n")
+        owned.writeText(stale)
         owned.setReadable(false)
         try {
+            assumeFalse(owned.canRead(), "this user reads a file whatever its mode says")
             FirstRunSetup(context).ensurePipConfig()
         } finally {
             owned.setReadable(true)
         }
 
-        assertEquals("[global]\nindex-url = https://mirror.test/simple\n", owned.readText())
+        assertEquals(stale, owned.readText())
+    }
+
+    /**
+     * A pip.conf kept in a dotfiles folder and linked here, whose file has gone: the app's text is written
+     * where the link points and the link stays. The rename used to land on the link and replace it with a
+     * copy, which pip then read while the person's own file came back beside it unread.
+     */
+    @Test
+    fun `a pip conf that is a link to nothing is written where it points and stays a link`() {
+        val target = File(filesDir, "projects/dotfiles/pip.conf").apply { parentFile!!.mkdirs() }
+        owned.parentFile!!.mkdirs()
+        Files.createSymbolicLink(owned.toPath(), target.toPath())
+
+        FirstRunSetup(context).ensurePipConfig()
+
+        assertTrue(Files.isSymbolicLink(owned.toPath()), "the link was replaced by a copy")
+        assertEquals(pipConfigContent("3.14"), target.readText())
+    }
+
+    /** Brought up to date like an unlinked one, in the file the link names, and the link stays. */
+    @Test
+    fun `a linked pip conf this app wrote earlier is brought up to date through the link`() {
+        val target = File(filesDir, "projects/dotfiles/pip.conf").apply { parentFile!!.mkdirs() }
+        target.writeText("$PIP_CONF_HEADER\n[global]\nfind-links = https://old.test/wheels.html\n")
+        owned.parentFile!!.mkdirs()
+        Files.createSymbolicLink(owned.toPath(), target.toPath())
+
+        FirstRunSetup(context).ensurePipConfig()
+
+        assertTrue(Files.isSymbolicLink(owned.toPath()), "the link was replaced by a copy")
+        assertEquals(pipConfigContent("3.14"), target.readText())
+    }
+
+    /** A link into a folder that has gone is left as it is, and the folder is not made again. */
+    @Test
+    fun `a pip conf linked into a folder that has gone stays a link and nothing is made`() {
+        val gone = File(filesDir, "projects/dotfiles")
+        owned.parentFile!!.mkdirs()
+        Files.createSymbolicLink(owned.toPath(), File(gone, "pip.conf").toPath())
+
+        FirstRunSetup(context).ensurePipConfig()
+
+        assertTrue(Files.isSymbolicLink(owned.toPath()), "the link was replaced by a copy")
+        assertFalse(gone.exists(), "the folder the person moved was made again")
     }
 
     @Test

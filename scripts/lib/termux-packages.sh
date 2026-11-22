@@ -11,15 +11,16 @@
 #     termux_extract_packages "${REQUIRED_PACKAGES[@]}"
 #     termux_copy_notices "$ASSETS_DIR/usr" "${REQUIRED_PACKAGES[@]}"
 #
-# Five scripts source this today: download-cpp.sh, download-java.sh,
-# download-python.sh, download-ruby.sh and download-termux-tools.sh. A sixth,
-# download-go.sh, is why the count is worth stating: it went away with the Go
-# toolchain and the library did not notice, which is the point of the library.
-# Every one of them fetched the index, called
-# verify-termux-index.sh, resolved filenames and digests with the same awk, and
-# checked each .deb against the digest with the same function. A correction to
-# any of it had to be made five times and was worth nothing until it had been,
-# which is the shape of defect that arrives as "one script was missed".
+# Six scripts source this today: download-codex.sh, download-cpp.sh,
+# download-java.sh, download-python.sh, download-ruby.sh and
+# download-termux-tools.sh. Another, download-go.sh, is why the count is worth
+# stating: it went away with the Go toolchain and the library did not notice,
+# which is the point of the library. Before it, each script that existed then
+# fetched the index, called verify-termux-index.sh, resolved filenames and
+# digests with the same awk, and checked each .deb against the digest with the
+# same function. A correction to any of it had to be made in each and was worth
+# nothing until it had been, which is the shape of defect that arrives as "one
+# script was missed".
 #
 # What each caller still owns is what actually differs: which packages it wants,
 # where the files go afterwards, and which of them are checked as ELF objects.
@@ -338,10 +339,15 @@ termux_copy_notices() {
 # is whatever the packager chose.
 termux_extract_packages() {
     termux_require_work_dir || return 1
+    if ! command -v bsdtar > /dev/null 2>&1; then
+        echo "  ERROR: bsdtar is required to read a .deb (macOS ships it; on Debian" \
+             "and Ubuntu it is in libarchive-tools)" >&2
+        return 1
+    fi
     echo ""
     echo "Extracting packages..."
 
-    local pkg filename debname pkg_extract
+    local pkg filename debname pkg_extract member
     for pkg in "$@"; do
         filename="$(termux_pkg_filename "$pkg")"
         debname="$(basename "$filename")"
@@ -350,7 +356,11 @@ termux_extract_packages() {
         mkdir -p "$pkg_extract"
         (
             cd "$pkg_extract"
-            bsdtar xf "$WORK_DIR/debs/$debname" data.tar.xz data.tar.gz data.tar.zst 2>/dev/null || true
+            # The data member by the name the archive lists, rather than all three
+            # names with errors hidden: bsdtar reports the two that are absent as
+            # not found, and hiding that also hid a damaged archive.
+            member="$(bsdtar tf "$WORK_DIR/debs/$debname" | grep -xE 'data\.tar\.(xz|gz|zst)' || true)"
+            [ -z "$member" ] || bsdtar xf "$WORK_DIR/debs/$debname" "$member"
             if [ -f data.tar.xz ]; then
                 tar xf data.tar.xz
             elif [ -f data.tar.gz ]; then

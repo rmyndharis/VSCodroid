@@ -103,8 +103,10 @@ const DOLLAR_ESCAPE = "${'$'}";
  * The bundled bridge extension, whatever version it is at.
  *
  * Not a hardcoded directory. Bumping the version of a bundled extension is
- * mandatory here whenever its contents change -- a device only re-extracts a
- * directory whose name it does not already have -- so a path pinned to one
+ * required here whenever its manifest, translations or browser entry change
+ * once a release has shipped it (scripts/check-extension-updates.py): the
+ * editor server keeps its scan of the extension manifests until extensions.json
+ * changes, which a new directory name brings about. So a path pinned to one
  * version is a path that breaks on the next correct change, and the version in
  * it is stale the moment anyone edits the extension.
  *
@@ -198,6 +200,17 @@ const toggleCalls = [];
 let reportAnswer = '';
 const reportCalls = [];
 
+// Clearing the caches is the fourth of those disk-walking commands, answered by
+// reply id like the other three. The rest answer inline, and each call is kept
+// with its arguments in the order the Kotlin method takes them, the session
+// token first.
+let clearAnswer = '';
+const clearCalls = [];
+let recentAnswer = '[]';
+let sshKeyAnswer = '';
+let publicKeyAnswer = '';
+const inlineCalls = [];
+
 const AndroidBridge = {
     openExternalUrl(url, token) {
         bridgeCalls.push({ url, token });
@@ -223,6 +236,17 @@ const AndroidBridge = {
         reportCalls.push({ token });
         return reportAnswer;
     },
+    clearCaches(token, replyId) {
+        clearCalls.push({ token, replyId });
+        return clearAnswer;
+    },
+    openFolderPicker(token) { inlineCalls.push(['openFolderPicker', token]); },
+    getRecentFolders(token) { inlineCalls.push(['getRecentFolders', token]); return recentAnswer; },
+    openRecentFolder(token, uriString) { inlineCalls.push(['openRecentFolder', token, uriString]); },
+    openToolchainSettings(token) { inlineCalls.push(['openToolchainSettings', token]); },
+    showAboutDialog(token) { inlineCalls.push(['showAboutDialog', token]); },
+    generateSshKey(token, comment) { inlineCalls.push(['generateSshKey', token, comment]); return sshKeyAnswer; },
+    getSshPublicKey(token) { inlineCalls.push(['getSshPublicKey', token]); return publicKeyAnswer; },
 };
 
 // ---- the vscode API, stubbed ---------------------------------------------
@@ -550,7 +574,10 @@ async function main() {
         // case and a trailing slash.
         folder('/sdcard/documents/Silenced/'),
     ];
-    serverNote = '{"pid":4242,"port":13337}';
+    // Shaped as server.js writes it. The run id is the key the app proves the
+    // run with, which has no business in the workbench's storage.
+    const RUN_KEY = '0123456789abcdef0123456789abcdef';
+    serverNote = JSON.stringify({ pid: 4242, port: 13337, runId: RUN_KEY, socketPath: `${FILES}/e-1c6a.sock` });
 
     // A page with no folder on shared storage, the usual case, reads nothing.
     await pageLoad([folder('/data/user/0/com.vscodroid/files/home/projects/site')]);
@@ -586,6 +613,15 @@ async function main() {
     assert.deepStrictEqual(
         executed, ['vscodroid.openFolderFromDevice'],
         'the warning\'s button did not run Open Folder from Device: ' + JSON.stringify(executed),
+    );
+    // The folders warned about are tied to that server by something that tells
+    // one run from the next, never by the note's text, which holds the run's key.
+    const tiedTo = state.get('sharedStorageWarning.shown');
+    assert.ok(
+        tiedTo && typeof tiedTo.server === 'string' && tiedTo.server !== '' &&
+            !JSON.stringify(tiedTo).includes(RUN_KEY),
+        'the warned folders were not tied to the server, or the run\'s key was copied into ' +
+        'extension storage with them: ' + JSON.stringify(tiedTo),
     );
 
     // A reload, or a switch to another folder and back, loads a new page on the
@@ -689,7 +725,7 @@ async function main() {
     // warned about yet include the one the last server did, and a silenced
     // folder stays silenced under any spelling.
     warningChoice = null;
-    serverNote = '{"pid":5151,"port":13337}';
+    serverNote = JSON.stringify({ pid: 5151, port: 13337, runId: 'fedcba9876543210fedcba9876543210', socketPath: `${FILES}/e-2d7b.sock` });
     await pageLoad([notes, folder('/storage/emulated/0/documents/Mine')]);
     assert.deepStrictEqual(
         warnedNames(), ['notes'],
@@ -1271,6 +1307,129 @@ async function main() {
         'a toggle that brought the row back did not say so: ' + JSON.stringify(restored),
     );
 
+    // ---- clearing the caches --------------------------------------------
+    //
+    // It answers by reply id like the storage walk, because deleting the cache
+    // directories takes as long as their size. A branch that answered inline
+    // would post the stub's empty acceptance as the amount freed, and the user
+    // would read "Nothing to clear" while the clear was still running.
+    const clearCaches = commands.get('vscodroid.clearCaches');
+    assert.ok(clearCaches, 'the bundled extension no longer registers vscodroid.clearCaches');
+    async function clearTo(post) {
+        shown.info.length = 0; shown.error.length = 0; clearCalls.length = 0;
+        const run = { done: false };
+        run.running = clearCaches().then(() => { run.done = true; });
+        await settle();
+        if (post) {
+            assert.ok(
+                clearCalls.length === 1 && clearCalls[0].token === 'test-token' &&
+                    typeof clearCalls[0].replyId === 'string' && clearCalls[0].replyId.length > 0,
+                'the relay did not hand clearCaches the session token and a reply id: ' + JSON.stringify(clearCalls),
+            );
+            assert.ok(
+                !run.done && shown.info.length === 0 && shown.error.length === 0,
+                'clearing settled, or said something, before Android posted what it freed: ' + JSON.stringify(shown),
+            );
+            relayWindow.__vscodroidBridgeReply(clearCalls[0].replyId, ...post);
+        }
+        await run.running;
+        return { info: [...shown.info], error: [...shown.error] };
+    }
+    assert.deepStrictEqual(
+        await clearTo([true, '1500000']), { info: ['Freed 1.5 MB of cached data.'], error: [] },
+        'the amount freed, posted by reply id, did not reach the user',
+    );
+    assert.deepStrictEqual(
+        await clearTo([true, '0']), { info: ['Nothing to clear: no cached data was using space.'], error: [] },
+        'a clear that freed nothing did not say so',
+    );
+    clearAnswer = STALE_SESSION;
+    const clearRefused = await clearTo(null);
+    clearAnswer = '';
+    assert.ok(
+        clearRefused.info.length === 0 && clearRefused.error.length === 1 && clearRefused.error[0].includes(STALE_SESSION),
+        'a clear refused before it started did not reach the user in the bridge\'s words: ' + JSON.stringify(clearRefused),
+    );
+
+    // ---- the commands answered inline -----------------------------------
+    //
+    // Each is driven through the relay to the bridge and back, so a branch that
+    // passes its arguments in another order, drops the token or posts no data
+    // fails here rather than only on a device.
+    async function runInline(id) {
+        const command = commands.get(id);
+        assert.ok(command, `the bundled extension no longer registers ${id}`);
+        shown.info.length = 0; shown.error.length = 0; warnings.length = 0; inlineCalls.length = 0;
+        await command();
+        await settle();
+        return {
+            calls: inlineCalls.map((call) => [...call]),
+            info: [...shown.info], error: [...shown.error], warnings: warnings.map((w) => w.message),
+        };
+    }
+    for (const [id, method] of [
+        ['vscodroid.openFolderFromDevice', 'openFolderPicker'],
+        ['vscodroid.manageToolchains', 'openToolchainSettings'],
+        ['vscodroid.about', 'showAboutDialog'],
+    ]) {
+        assert.deepStrictEqual(
+            await runInline(id), { calls: [[method, 'test-token']], info: [], error: [], warnings: [] },
+            `${id} did not reach ${method} with the session token, or said something about it`,
+        );
+    }
+
+    const RECENT = 'content://com.android.externalstorage.documents/tree/primary%3ANotes';
+    recentAnswer = JSON.stringify([{ name: 'Notes', uri: RECENT, lastOpened: Date.now() }]);
+    quickPickChoice = (items) => items[0];
+    const recent = await runInline('vscodroid.openRecentFolder');
+    quickPickChoice = null;
+    assert.deepStrictEqual(
+        recent, { calls: [['getRecentFolders', 'test-token'], ['openRecentFolder', 'test-token', RECENT]], info: [], error: [], warnings: [] },
+        'a recent folder picked from the list was not opened by its address, with the token first',
+    );
+    recentAnswer = '[]';
+    const noRecent = await runInline('vscodroid.openRecentFolder');
+    assert.ok(
+        noRecent.calls.length === 1 && /^No recent folders/.test(noRecent.info[0] || '') && noRecent.error.length === 0,
+        'an empty recent list was not answered as one: ' + JSON.stringify(noRecent),
+    );
+
+    sshKeyAnswer = JSON.stringify({ success: true, existed: false });
+    const madeKey = await runInline('vscodroid.generateSshKey');
+    assert.ok(
+        JSON.stringify(madeKey.calls) === JSON.stringify([['generateSshKey', 'test-token', '']]) &&
+            /^SSH key created/.test(madeKey.info[0] || ''),
+        'generating a key did not reach the bridge with the token and an empty comment, or did not say it was made: ' +
+            JSON.stringify(madeKey),
+    );
+    sshKeyAnswer = JSON.stringify({ success: true, existed: true });
+    assert.match(
+        (await runInline('vscodroid.generateSshKey')).info[0] || '', /already set up/,
+        'a key that was already there was reported as made, which reads as the old one replaced',
+    );
+    sshKeyAnswer = JSON.stringify({ success: false, error: 'ssh-keygen exited with 1' });
+    assert.match(
+        (await runInline('vscodroid.generateSshKey')).error[0] || '', /ssh-keygen exited with 1/,
+        'a failed key generation did not say why',
+    );
+
+    publicKeyAnswer = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample vscodroid\n';
+    clipboard.length = 0;
+    const copiedKey = await runInline('vscodroid.copySshPublicKey');
+    assert.ok(
+        JSON.stringify(copiedKey.calls) === JSON.stringify([['getSshPublicKey', 'test-token']]) &&
+            JSON.stringify(clipboard) === JSON.stringify([publicKeyAnswer.trim()]) &&
+            /copied/.test(copiedKey.info[0] || ''),
+        'the public key the bridge answered did not reach the clipboard: ' + JSON.stringify({ copiedKey, clipboard }),
+    );
+    publicKeyAnswer = '';
+    clipboard.length = 0;
+    const noKey = await runInline('vscodroid.copySshPublicKey');
+    assert.ok(
+        clipboard.length === 0 && noKey.warnings.length === 1 && /No SSH key yet/.test(noKey.warnings[0]),
+        'with no key the clipboard was written or nothing was said: ' + JSON.stringify({ noKey, clipboard }),
+    );
+
     // ---- the bug report -------------------------------------------------
     //
     // The relay answered generateBugReport from the start and no extension sent
@@ -1638,6 +1797,38 @@ async function main() {
         assert.strictEqual(runLines.at(-1), "node '/work/new.js'", 'the accepted newer run was canceled with the old offer');
         vscodeStub.window.activeTextEditor = undefined;
     }
+    // A run while the offer is still up is not an answer to it. The offer stays
+    // answerable: Don't Ask Again is kept, and Reopen, with the run's terminal
+    // now open, says to close the terminals first instead of doing nothing.
+    for (const answer of ["Don't Ask Again", 'Reopen']) {
+        state.delete(DECLINED); state.delete(CARRIED);
+        directories = new Map([[NAMES, [['recipes', LINK]]]]);
+        const asked = deferred();
+        let offered = false;
+        infoChoice = items => (items.includes('Reopen') ? (offered = true, asked.promise) : undefined);
+        try {
+            await namedPageLoad({ folders: onCopy });
+            assert.ok(offered, 'the move was not offered, so this case measures nothing');
+            vscodeStub.window.activeTextEditor = { document: { uri: remote('/work/run.js'), languageId: 'javascript',
+                isUntitled: false, isDirty: false, async save() { return true; } } };
+            await commands.get('vscodroid.runFile')();
+            assert.strictEqual(runLines.at(-1), "node '/work/run.js'", 'the run did not start');
+            asked.resolve(answer); await settle();
+            if (answer === 'Reopen') {
+                assert.ok(
+                    moved().length === 0 && warnings.length === 1 && /close the terminals/.test(warnings[0].message),
+                    'Reopen after a run neither moved nor said why: ' + JSON.stringify({ ranWith, warnings }),
+                );
+            } else {
+                assert.deepStrictEqual(
+                    state.get(DECLINED), ['8e440ff38c8e'],
+                    'Don\'t Ask Again after a run was not kept, so the offer comes back at the next launch',
+                );
+            }
+        } finally {
+            infoChoice = null; vscodeStub.window.activeTextEditor = undefined;
+        }
+    }
     for (const replacement of [undefined, newerCarried()]) {
         state.delete(CARRIED); state.delete(DECLINED);
         directories = new Map([[NAMES, [['recipes', LINK]]]]);
@@ -1725,7 +1916,9 @@ async function main() {
         'server, with a button to Open Folder from Device and one that silences it for ' +
         'later sessions; the bug report opens in an editor before Copy takes what it holds; ' +
         'a page on a device folder copy\'s hash is offered the folder\'s name and moved there ' +
-        'only with nothing unsaved and no terminal, its editors following; ' +
+        'only with nothing unsaved and no terminal, its editors following, and a run while the offer is up ' +
+        'leaves it answerable; clearing the caches is answered by reply id and the commands answered ' +
+        'inline reach the bridge with the session token first; ' +
         `${asyncNamedCases} delayed named-path schedules preserve newer intent and carried records; ` +
         `all ${coverage.sent} commands sent by an extension have a relay branch${unused}\n`,
     );

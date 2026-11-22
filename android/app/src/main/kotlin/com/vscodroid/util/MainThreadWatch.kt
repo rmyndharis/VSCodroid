@@ -64,10 +64,10 @@ import com.vscodroid.BuildConfig
  *    launch that was measured rather than the launch this build produces.
  *
  * Judged rather than left open, so nobody re-litigates it: none of the eleven is
- * worth removing. Memoising `filesDir` would take them all, and 37 tests across
- * 36 files stub `context.filesDir` with a temp directory of their own, in one
- * JVM, so a process-wide cache would hand the first test's tree to every test
- * after it. A stat per call is the cheaper of the two risks by a wide margin.
+ * worth removing. Memoising `filesDir` would take them all, and about 150 test
+ * files stub `context.filesDir` with a temp directory of their own, in one JVM,
+ * so a process-wide cache would hand the first test's tree to every test after
+ * it. A stat per call is the cheaper of the two risks by a wide margin.
  *
  * Sites that did NOT fire on that launch, and which an earlier version of this
  * list named: `ProcessManager.readTokenFile`, `SafStorageManager.getPersistedFolders`

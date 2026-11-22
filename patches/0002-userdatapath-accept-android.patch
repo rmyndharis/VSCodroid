@@ -5,8 +5,10 @@ isLinux, so patch 0001 does not reach it, and 'android' falls to the default:
 throw new Error('Platform not supported').
 
 The main server never hits it: we pass --user-data-dir, and the CLI value returns
-early well before the switch. The Pty Host is forked without that argument, so it
-does hit it, and the throw kills the process during construction:
+early well before the switch. The Pty Host is started without that argument (its
+arguments are --type=ptyHost and --logsPath, whether it is forked as upstream does
+or run as a worker thread as patch 0003 does), so it does hit it, and the throw
+kills it during construction:
 
   [IPC Library: Pty Host] Unhandled Promise Rejection: Error: Platform not supported
       at uc (.../out/vs/platform/terminal/node/ptyHostMain.js:31:26877)
@@ -17,10 +19,9 @@ planning had this line recorded as unreachable, which is true only of the proces
 that receives the CLI argument.
 
 Falling through to the linux case is right rather than merely convenient: the
-value is XDG_CONFIG_HOME or ~/.config, and both are correct here. It is also
-moot in practice, since every process that reaches this code on device is given
-an explicit --user-data-dir; what matters is that the default arm no longer
-throws.
+value is XDG_CONFIG_HOME or ~/.config, and both are correct here. It is the
+value the Pty Host gets, since it is started without --user-data-dir; what
+matters is that the default arm no longer throws.
 
 diff --git a/src/vs/platform/environment/node/userDataPath.ts b/src/vs/platform/environment/node/userDataPath.ts
 index 98b4411..0c8988e 100644

@@ -9,6 +9,11 @@ import tempfile
 import unittest
 
 SOURCE = (Path(__file__).resolve().parent.parent / ".github/workflows/release.yml").read_text()
+# git reads none of the machine's configuration, and no git variable a hook may have
+# exported: a developer's commit.gpgsign or tag.gpgSign otherwise fails every fixture
+# commit and tag here, and the workflow's own lines run git too.
+ENV = {**{k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+       "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
 LINES = [line.strip() for line in SOURCE.splitlines()
          if line.strip().startswith(("version_name=$(", "version_code=$("))]
 
@@ -50,7 +55,7 @@ class ReleaseVersionsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             def git(*args):
-                subprocess.run(["git", "-C", directory, *args], capture_output=True, check=True)
+                subprocess.run(["git", "-C", directory, *args], capture_output=True, check=True, env=ENV)
             git("init", "-q")
             git("config", "user.name", "Fixture")
             git("config", "user.email", "fixture@example.invalid")
@@ -62,7 +67,7 @@ class ReleaseVersionsTest(unittest.TestCase):
                 git("commit", "-qm", "Set release version")
                 git("tag", f"v{version}")
             result = subprocess.run(
-                ["bash", "-c", program], cwd=root, env={**os.environ, "TAG": "v1.5.1"},
+                ["bash", "-c", program], cwd=root, env={**ENV, "TAG": "v1.5.1"},
                 capture_output=True, text=True,
             )
         return result
@@ -81,7 +86,7 @@ class ReleaseVersionsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             def git(*args):
                 return subprocess.run(
-                    ["git", "-C", directory, *args], capture_output=True, text=True, check=True,
+                    ["git", "-C", directory, *args], capture_output=True, text=True, check=True, env=ENV,
                 ).stdout.strip()
             git("init", "-q")
             git("config", "user.name", "Fixture")
@@ -98,7 +103,7 @@ class ReleaseVersionsTest(unittest.TestCase):
                 git("update-ref", "refs/remotes/origin/main", commits[remote])
             git("checkout", "-q", "--detach", commits[head])
             return subprocess.run(
-                ["bash", "-c", program], cwd=directory, env={**os.environ, "TAG": "v1.5.1"},
+                ["bash", "-c", program], cwd=directory, env={**ENV, "TAG": "v1.5.1"},
                 capture_output=True, text=True,
             )
 

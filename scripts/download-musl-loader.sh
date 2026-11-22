@@ -87,9 +87,9 @@ mkdir -p "$WORK_DIR" "$JNI_DIR"
 # record before the digest of what it resolved had been checked -- and it is one
 # grep to confirm which state the tree is in:
 #     grep -nE '^[[:space:]]*: >' scripts/download-*.sh scripts/lib/*.sh
-# The second path is not padding: the five Termux scripts truncate their record
+# The second path is not padding: the six Termux scripts truncate their record
 # through scripts/lib/termux-packages.sh now, so a grep over scripts/download-*.sh
-# alone reports two writers where there are seven, and reads as an answer.
+# alone reports two writers where there are eight, and reads as an answer.
 # Note the anchor. An earlier form of this comment prescribed
 # grep -n ': > "$PKG_MAP_FILE"', which answered the wrong question in both
 # directions: it missed this script and download-node.sh, which truncate through
@@ -189,9 +189,17 @@ if age > limit:
     )
 print("  freshness : %d days old, limit %d" % (age, limit))
 PY
+# From index.signed, the stream openssl verified, and never from the whole file.
+# The file starts with the signature stream, which the signature does not cover,
+# and the check above lists it with Python's tar reader, which ends a listing at a
+# damaged header without a word. bsdtar retries past that header and reads on,
+# so an entry placed behind one became this APKINDEX: measured on macOS, an
+# unsigned entry naming another release, with a C: of its own, resolved that
+# release, and its loader was installed with every check above passing.
+#
 # Unpacked to a file rather than piped: the parser stops at the first match, and
 # closing the pipe early makes tar fail the whole script under `set -o pipefail`.
-tar xzf "$WORK_DIR/APKINDEX.tar.gz" -C "$WORK_DIR" APKINDEX
+tar xzf "$WORK_DIR/index.signed" -C "$WORK_DIR" APKINDEX
 MUSL_VERSION=$(awk -v RS='' '/(^|\n)P:musl\n/ { for (i = 1; i <= NF; i++) if ($i ~ /^V:/) { print substr($i, 3); exit } }' "$WORK_DIR/APKINDEX")
 # The strongest digest APKINDEX carries: C: is "Q1" + base64(SHA1). SHA1 is
 # below today's bar but it is what Alpine publishes for v2 indexes, and a
@@ -241,20 +249,34 @@ fi
 # stream alone. It does not cover the loader bytes at all, so on its own it
 # authenticates the package's metadata while leaving the payload free. The
 # control stream's .PKGINFO carries `datahash`, the SHA-256 of the data stream,
-# which is the link that reaches the file actually extracted below.
-if ! python3 - "$APK" "$MUSL_C1" <<'PY'
+# which is the link that reaches the loader.
+#
+# The loader is then taken from that data stream alone, written out by the same
+# check that hashed it. Neither link covers the signature stream, and tar run over
+# the whole file reads it first: a loader entry there, followed by an
+# end-of-archive marker, was what got installed, with both links verified. Bytes
+# after the data stream belong to no stream the chain reaches either, so a file
+# carrying any is refused rather than trimmed.
+DATA_STREAM="$WORK_DIR/musl-$MUSL_VERSION.data.tar.gz"
+rm -f "$DATA_STREAM"
+if ! python3 - "$APK" "$MUSL_C1" "$DATA_STREAM" <<'PY'
 import base64, hashlib, io, sys, tarfile, zlib
 
-apk, expected_c1 = sys.argv[1], sys.argv[2]
+apk, expected_c1, data_stream = sys.argv[1], sys.argv[2], sys.argv[3]
 data = open(apk, "rb").read()
 
 bounds, i = [], 0
 for _ in range(3):
     d = zlib.decompressobj(31)
     d.decompress(data[i:])
+    if not d.eof:
+        sys.exit("the package is not three complete gzip streams")
     end = len(data) - len(d.unused_data)
     bounds.append((i, end))
     i = end
+if i != len(data):
+    sys.exit("%d bytes follow the data stream, which is where a package ends"
+             % (len(data) - i))
 
 control = data[bounds[0][1]:bounds[1][1]]
 payload = data[bounds[1][1]:bounds[2][1]]
@@ -281,6 +303,7 @@ if actual != datahash:
     sys.exit("payload does not match the datahash the signed metadata names\n"
              "  .PKGINFO: %s\n  file    : %s" % (datahash, actual))
 
+open(data_stream, "wb").write(payload)
 print("  control   : matches the signed index (SHA1, what APKINDEX carries)")
 print("  payload   : matches .PKGINFO datahash (SHA-256)")
 PY
@@ -290,12 +313,16 @@ then
     exit 1
 fi
 
-# An .apk is a gzipped tar. In musl the loader and libc are one file, so this is
-# the only artifact needed -- it satisfies its own DT_NEEDED and runs with no
-# LD_LIBRARY_PATH, which was verified on device.
+# The data stream is a gzipped tar. In musl the loader and libc are one file, so
+# this is the only artifact needed: it satisfies its own DT_NEEDED and runs with
+# no LD_LIBRARY_PATH, which was verified on device.
+#
+# stderr is left visible. GNU tar warns twice about apk-tools' own
+# APK-TOOLS.checksum.SHA1 header keyword and exits 0, which is harmless; hiding
+# stderr to keep that out of the log also hid every real complaint tar had.
 rm -rf "$WORK_DIR/extract"
 mkdir -p "$WORK_DIR/extract"
-tar xzf "$APK" -C "$WORK_DIR/extract" lib/ld-musl-aarch64.so.1 2>/dev/null
+tar xzf "$DATA_STREAM" -C "$WORK_DIR/extract" lib/ld-musl-aarch64.so.1
 
 SRC="$WORK_DIR/extract/lib/ld-musl-aarch64.so.1"
 if [ ! -f "$SRC" ]; then

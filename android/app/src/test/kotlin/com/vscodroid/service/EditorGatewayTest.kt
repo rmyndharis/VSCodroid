@@ -1,7 +1,5 @@
 package com.vscodroid.service
 
-import android.system.ErrnoException
-import android.system.OsConstants
 import com.vscodroid.util.Logger
 import io.mockk.Runs
 import io.mockk.every
@@ -63,6 +61,9 @@ class EditorGatewayTest {
         previousHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { _, failure -> failures.add(failure) }
         mockkStatic("com.vscodroid.service.EditorGatewayKt")
+        // What a read or a write with nothing to move answers on the device: EAGAIN, Linux's 11. One
+        // instance, thrown on every empty poll.
+        val wouldBlock = errnoException(11)
         every { connectEditorBackend(any()) } answers {
             val channel = openUnixClientChannel()
             resources.add(channel)
@@ -79,14 +80,14 @@ class EditorGatewayTest {
                         input.selectedKeys().clear()
                         count = channel.read(buffer)
                     }
-                    if (count == 0) throw ErrnoException("read", OsConstants.EAGAIN)
+                    if (count == 0) throw wouldBlock
                     if (count < 0) 0 else count
                 }
                 every { backend.write(any(), any(), any()) } answers {
                     val count = channel.write(ByteBuffer.wrap(firstArg(), secondArg(), thirdArg()))
                     if (count == 0) {
                         Thread.sleep(20)
-                        throw ErrnoException("write", OsConstants.EAGAIN)
+                        throw wouldBlock
                     }
                     count
                 }
@@ -637,11 +638,7 @@ class EditorGatewayTest {
         val elapsed = TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - started)
         assertTrue(elapsed in 9..14, "a silent client kept its slot for $elapsed seconds")
         silent.forEach { assertEquals(-1, it.getInputStream().read()) }
-        Thread.sleep(1500) // the relays let their slots go once both pumps have left
-        client().use {
-            it.getOutputStream().write(request)
-            assertArrayEquals(reply, it.getInputStream().readNBytes(reply.size))
-        }
+        awaitServed(request, reply)
     }
 
     @Test
@@ -659,6 +656,30 @@ class EditorGatewayTest {
             Thread.sleep(10000) // past the bound counted from the connect
             it.getOutputStream().write(request, 1, request.size - 1)
             assertArrayEquals(reply, it.getInputStream().readNBytes(reply.size))
+        }
+    }
+
+    /**
+     * Sends [request] until [reply] comes back, for up to ten seconds. A relay gives its slot back once
+     * both of its pumps have left, and a fixed pause only guessed at how long that takes on a busy
+     * machine; until then a client is answered 503, or reset.
+     */
+    private fun awaitServed(request: ByteArray, reply: ByteArray) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+        while (true) {
+            val answer = try {
+                client().use {
+                    it.getOutputStream().write(request)
+                    it.getInputStream().readNBytes(reply.size)
+                }
+            } catch (_: IOException) {
+                ByteArray(0)
+            }
+            if (answer.contentEquals(reply) || System.nanoTime() >= deadline) {
+                assertArrayEquals(reply, answer, "the listener never served again")
+                return
+            }
+            Thread.sleep(50)
         }
     }
 
@@ -771,12 +792,8 @@ class EditorGatewayTest {
             it.finish(request, reply)
             it.close()
         }
-        Thread.sleep(1500) // the relays let their slots go once both pumps have left
         // The listener goes on serving after the failure.
-        client().use {
-            it.getOutputStream().write(request)
-            assertArrayEquals(reply, it.getInputStream().readNBytes(reply.size))
-        }
+        awaitServed(request, reply)
     }
 
     private fun SocketChannel.socketInput() = java.nio.channels.Channels.newInputStream(this)

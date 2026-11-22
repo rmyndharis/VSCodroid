@@ -5,7 +5,6 @@ import android.net.LocalSocketAddress
 import android.os.ParcelFileDescriptor
 import android.system.ErrnoException
 import android.system.Os
-import android.system.OsConstants
 import com.vscodroid.util.Logger
 import java.io.Closeable
 import java.io.File
@@ -41,6 +40,11 @@ private const val MAX_CONNECTIONS = 32
 // to the backend can take IO_POLL_MS, and the client is refused then, as it was before.
 private const val MAKE_ROOM_WAIT_MS = 500L
 private const val BUFFER_BYTES = 32 * 1024
+// errno values, compared with Linux's own numbers rather than `OsConstants`: a JVM test reads every
+// field there as 0, so each comparison matched whatever errno a case gave. The generic table arm64 uses.
+private const val EINTR = 4
+private const val EBADF = 9
+private const val EAGAIN = 11
 
 /**
  * Keeps the WebView origin owned even when its editor backend stops.
@@ -319,7 +323,7 @@ internal class EditorGateway(
         }
 
         private fun retry(failure: ErrnoException) {
-            if (failure.errno != OsConstants.EAGAIN && failure.errno != OsConstants.EINTR) {
+            if (failure.errno != EAGAIN && failure.errno != EINTR) {
                 throw IOException(failure)
             }
             checkIdle()
@@ -478,7 +482,7 @@ internal fun ownLoopbackClients(
             ParcelFileDescriptor.fromFd(number)
         } catch (failure: IOException) {
             // Closed since the listing. Any other failure leaves a socket nobody has looked at.
-            if ((failure.cause as? ErrnoException)?.errno == OsConstants.EBADF) continue
+            if ((failure.cause as? ErrnoException)?.errno == EBADF) continue
             throw failure
         }
         copy.use {

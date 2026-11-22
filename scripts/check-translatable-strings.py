@@ -36,6 +36,9 @@ first is invisible to it, and those ways are ordinary rather than exotic:
     constructor argument, not a sink, and the adapter that draws it passes a
     property rather than a literal. Both ends pass.
   * A string built by concatenation where no single part carries a letter.
+  * A Kotlin raw string, the kind opened by three double quotes, at a sink.
+    The tokeniser blanks raw strings rather than reading them as literals, so
+    prose written in one passes.
   * Anything outside `app/src/main/kotlin`: the server's JavaScript, the
     bundled extensions, and the web client all speak to the user too, and all
     of them are somebody else's translation problem.
@@ -349,7 +352,12 @@ def main():
     # cannot: whether the tokeniser is still reading these files at all. A
     # rename that moved the sources, or an edge case that made scan_string
     # swallow a file, would report zero findings over zero literals and read
-    # exactly like a clean tree.
+    # exactly like a clean tree, so zero is refused rather than printed.
+    if not literals_seen:
+        print(f"error: {len(files)} Kotlin sources and 0 string literals; the tokeniser is not "
+              "reading them, so a pass here would mean nothing", file=sys.stderr)
+        return 2
+
     # The sentence says what the scan establishes, which is narrower than what a
     # reader wants it to say. Two classes pass it while being read by a user: a
     # sink this file does not list, and a literal is_prose judges to be formatting

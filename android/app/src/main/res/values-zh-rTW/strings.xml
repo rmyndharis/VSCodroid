@@ -199,6 +199,7 @@
          that got there first, and the only thing the user needs is to stop tapping. -->
     <string name="toolchain_already_installing">該工具鏈已在安裝中。</string>
     <string name="toolchain_failed_internal">安裝失敗。應用程式記錄中有詳細資訊。</string>
+    <string name="toolchain_remove_failed">無法移除該工具鏈。應用程式記錄中有詳細資訊。</string>
     <string name="toolchain_install_after_setup">請等初始設定完成後再重新安裝。</string>
     <string name="progress_cancel">取消</string>
     <string name="progress_retry">重試</string>

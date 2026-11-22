@@ -119,6 +119,23 @@ class PackReleaseOutcomeTest {
         every { context.packageName } returns "com.vscodroid"
 
         File(filesDir, "home/.vscodroid").mkdirs()
+        clearPackClaims()
+    }
+
+    /**
+     * The claims on packs live on the companion, so they outlast a case. One a failed case left behind declines the
+     * next case's install or removal of that pack, or holds its release back, and the failure names no cause.
+     */
+    @Suppress("UNCHECKED_CAST")
+    private fun clearPackClaims() {
+        for (name in listOf("installsInFlight", "packRemovalsInFlight", "pendingPackReleases")) {
+            val claims = ToolchainManager::class.java.getDeclaredField(name).apply { isAccessible = true }.get(null)
+            when (claims) {
+                is MutableCollection<*> -> claims.clear()
+                is MutableMap<*, *> -> claims.clear()
+                else -> error("$name is no longer a collection this case can clear")
+            }
+        }
     }
 
     @AfterEach
@@ -218,12 +235,14 @@ class PackReleaseOutcomeTest {
         // Nothing calls playHolds, so Play is holding no delivery at all.
         recordInstalled("java", "ruby")
 
-        manager().reconcileDeliveredPacks()
+        val manager = manager()
+        manager.reconcileDeliveredPacks()
 
-        // Ordered after a call that reconcile makes unconditionally on the same
-        // executor, so this asserts on a pass that has finished rather than on one
-        // that has not started.
-        verify(timeout = 10_000) { packManager.getPackLocation("toolchain_java") }
+        // After the whole pass, not after its first question: the pass goes on to
+        // the packs behind Java and to the retired ones, and any of them could
+        // still remove something after a check made earlier.
+        drained(manager)
+        verify { packManager.getPackLocation("toolchain_java") }
         verify(exactly = 0) { packManager.removePack(any()) }
     }
 
@@ -304,9 +323,14 @@ class PackReleaseOutcomeTest {
         recordInstalled("java")
         playHolds("toolchain_java")
 
-        manager().reconcileDeliveredPacks()
+        val manager = manager()
+        manager.reconcileDeliveredPacks()
 
-        verify(timeout = 10_000, exactly = 1) { packManager.removePack("toolchain_java") }
+        drained(manager)
+        // The premise, without which the case passes whatever the catch wraps:
+        // Ruby's install threw out of the reconcile, into the catch for that pack.
+        verify { Logger.w(any(), match { it.startsWith("Could not reconcile toolchain_ruby:") }, any()) }
+        verify(exactly = 1) { packManager.removePack("toolchain_java") }
     }
 
     /** Waits until everything already queued on [manager]'s io thread has run. */

@@ -71,8 +71,7 @@ class TlsFailureNoticeTest {
 
         client = VSCodroidWebViewClient(
             allowedPort = 13337,
-            resourceRoots = emptyList(),
-            sensitiveLocations = emptyList(),
+            resourceRules = noResourceRules(),
             openFolder = { null },
             connectionToken = { null },
             onCrash = {},

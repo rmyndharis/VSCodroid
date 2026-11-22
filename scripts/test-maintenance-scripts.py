@@ -28,6 +28,9 @@ def deny_network(event, args):
 sys.addaudithook(deny_network)
 sys.dont_write_bytecode = True
 SOURCE = Path(__file__).resolve().parents[1]
+# Asked of the interpreter and flags the cases run the checks with: `-I` hides the user site, so a PyYAML
+# installed there is found by this process and not by the check.
+PYYAML = subprocess.run([sys.executable, "-I", "-c", "import yaml"], capture_output=True).returncode == 0
 
 
 def write(path, text, executable=False):
@@ -591,6 +594,252 @@ class MaintenanceScriptsTest(unittest.TestCase):
                     if status:
                         self.assertIn(f"no longer sets {flag} = true", result["stdout"], result)
 
+    def test_lint_policy_keeps_every_play_sdk_index_id_informational(self):
+        """Each id lint's Play SDK Index reports a pinned version under is informational, and held so."""
+        fixture = self.root / "sdk-index"
+        (fixture / "scripts").mkdir(parents=True)
+        (fixture / "android/app").mkdir(parents=True)
+        checker = fixture / "scripts/check-lint-baseline.py"
+        shutil.copy2(SOURCE / "scripts/check-lint-baseline.py", checker)
+        shutil.copy2(SOURCE / "android/app/lint-baseline.xml", fixture / "android/app")
+        original = (SOURCE / "android/app/build.gradle.kts").read_text()
+        gradle = fixture / "android/app/build.gradle.kts"
+        # The four ids GradleDetector in lint 32.3.1 defines for a Play SDK Index label, and the
+        # one it raises for a version the same index marks outdated.
+        for issue in ("OutdatedLibrary", "PlaySdkIndexDeprecated", "PlaySdkIndexGenericIssues",
+                      "PlaySdkIndexNonCompliant", "PlaySdkIndexVulnerability"):
+            entry = f'            "{issue}",\n'
+            with self.subTest(issue=issue):
+                self.assertEqual(1, original.count(entry), f"{issue} is not listed as informational")
+                gradle.write_text(original.replace(entry, "", 1))
+                result = run([sys.executable, "-I", "-B", str(checker)], fixture)
+                self.assertEqual(1, result["status"], result)
+                self.assertIn(issue, result["stdout"])
+
+    def test_release_refuses_a_lint_report_play_console_would_block(self):
+        """Listing the SDK Index ids as informational hides a blocking label too, so the report is read for it."""
+        reports = self.root / "reports"
+        reports.mkdir()
+        checker = [sys.executable, "-I", "-B", str(SOURCE / "scripts/check-lint-baseline.py"),
+                   "--play-console-labels", str(reports)]
+
+        def report(name, *issues):
+            body = "".join(f'  <issue id="{i}" severity="{s}" message="{m}" category="Compliance"/>\n'
+                           for i, s, m in issues)
+            # The shape lint 9.3.1 writes; an id listed as informational is reported as a Hint.
+            write(reports / name, f'<?xml version="1.0" encoding="UTF-8"?>\n<issues format="6" by="lint 9.3.1">\n{body}</issues>\n')
+
+        nothing = run(checker, self.root)
+        self.assertEqual(1, nothing["status"], nothing)
+        self.assertIn("no lint XML report", nothing["stdout"])
+        report("lint-results-debug.xml",
+               ("GradleDependency", "Hint", "A newer version of androidx.core is available"),
+               ("PlaySdkIndexNonCompliant", "Hint",
+                "com.google.android.play:asset-delivery version 2.2.2 has policy issues that will block "
+                "publishing of your app to Play Console in the future"))
+        clean = run(checker, self.root)
+        self.assertEqual(0, clean["status"], clean)
+        report("lint-results-release-fatal.xml",
+               ("PlaySdkIndexGenericIssues", "Hint",
+                "[Prevents app release in Google Play Console] com.example:lib version 1.0 has been "
+                "reported as problematic by its author and will block publishing of your app to Play Console"))
+        blocked = run(checker, self.root)
+        self.assertEqual(1, blocked["status"], blocked)
+        self.assertIn("PlaySdkIndexGenericIssues", blocked["stdout"])
+        self.assertIn("lint-results-release-fatal.xml", blocked["stdout"])
+        write(reports / "lint-results-release-fatal.xml", "<issues>")
+        unreadable = run(checker, self.root)
+        self.assertEqual(1, unreadable["status"], unreadable)
+        release = (SOURCE / ".github/workflows/release.yml").read_text()
+        step = ("      - name: Refuse a dependency Play Console would block\n"
+                "        run: python3 scripts/check-lint-baseline.py --play-console-labels android/app/build/reports\n")
+        self.assertEqual(1, release.count(step), "release.yml does not read the lint report for a blocking label")
+        self.assertLess(release.index("        run: ./gradlew lint\n"), release.index(step))
+        self.assertLess(release.index(step), release.index("      - name: Decode keystore\n"))
+
+    def test_a_mistyped_self_test_flag_is_refused_rather_than_running_the_main_check(self):
+        """`--selftest` ran the main check and exited 0, so a CI line with a typo skipped the self-test in green."""
+        for script in ("check-markdown-tables.py", "check-workflow-steps.py"):
+            if script == "check-workflow-steps.py" and not PYYAML:
+                self.assertFalse(os.environ.get("CI"), "CI images carry PyYAML")
+                continue
+            for args in (["--selftest"], ["--self-test", "extra"], ["-self-test"]):
+                with self.subTest(script=script, args=args):
+                    result = run([sys.executable, "-I", "-B", str(SOURCE / "scripts" / script), *args], self.root)
+                    self.assertEqual(2, result["status"], result)
+                    self.assertIn("usage", result["stderr"])
+
+    def test_translatable_strings_refuses_a_scan_that_read_no_literal(self):
+        """Zero literals over the whole tree is a tokeniser that stopped reading, not a clean tree."""
+        fixture = self.root / "translatable"
+        checker = fixture / "scripts/check-translatable-strings.py"
+        write(checker, (SOURCE / "scripts/check-translatable-strings.py").read_text())
+        source = fixture / "android/app/src/main/kotlin/com/example/Example.kt"
+        write(source, "package com.example\n\nclass Example {\n    fun size(list: List<Int>) = list.size\n}\n")
+        empty = run([sys.executable, "-I", "-B", str(checker)], fixture)
+        self.assertEqual(2, empty["status"], empty)
+        self.assertIn("0 string literals", empty["stderr"])
+        write(source, 'package com.example\n\nclass Example {\n    val tag = "Example"\n}\n')
+        clean = run([sys.executable, "-I", "-B", str(checker)], fixture)
+        self.assertEqual(0, clean["status"], clean)
+        self.assertIn("1 string literals", clean["stdout"])
+
+    def test_pack_overlap_refuses_a_run_that_compared_no_pack(self):
+        """With no pack tree on disk the comparison is empty, and an empty comparison is not a pass."""
+        fixture = self.root / "pack-overlap"
+        checker = fixture / "scripts/check-pack-overlap.py"
+        write(checker, (SOURCE / "scripts/check-pack-overlap.py").read_text())
+        write(fixture / "android/app/src/main/assets/usr/lib/libffi.so", "base")
+        (fixture / "android/toolchain_ruby").mkdir(parents=True)
+        none = run([sys.executable, "-I", "-B", str(checker)], fixture)
+        self.assertEqual(1, none["status"], none)
+        self.assertIn("no toolchain pack", none["stdout"])
+        write(fixture / "android/toolchain_ruby/src/main/assets/usr/lib/libruby.so", "ruby")
+        one = run([sys.executable, "-I", "-B", str(checker)], fixture)
+        self.assertEqual(0, one["status"], one)
+        self.assertIn("toolchain_ruby", one["stdout"])
+        write(fixture / "android/toolchain_ruby/src/main/assets/usr/lib/libffi.so", "ruby")
+        shared = run([sys.executable, "-I", "-B", str(checker)], fixture)
+        self.assertEqual(1, shared["status"], shared)
+        self.assertIn("toolchain_ruby: assets/usr/lib/libffi.so", shared["stdout"])
+
+    def test_extension_check_names_every_aarch64_payload_it_ships(self):
+        """A shared object is loaded whatever its mode, so a non-executable one is still named."""
+        ext = self.root / "ext"
+        write(ext / "package.json", json.dumps({"name": "fixture", "engines": {"vscode": "^1.90.0"}}))
+        version = self.root / "VSCODE_VERSION"
+        write(version, "1.139.1\n")
+        aarch64 = elf_import("libc.so.6", "GLIBC_2.17", "malloc")
+        x86 = aarch64[:18] + struct.pack("<H", 62) + aarch64[20:]
+        (ext / "bin").mkdir()
+        for name, body, mode in (("native/addon.node", aarch64, 0o644), ("lib/libhelper.so", aarch64, 0o644),
+                                 ("lib/libversioned.so.1", aarch64, 0o644), ("bin/tool", aarch64, 0o755),
+                                 ("lib/libother.so", x86, 0o644), ("lib/notes.txt", b"text", 0o644)):
+            path = ext / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(body)
+            path.chmod(mode)
+        result = run([sys.executable, "-I", "-B", str(SOURCE / "scripts/check-extension.py"), str(ext), str(version)],
+                     self.root)
+        self.assertEqual(0, result["status"], result)
+        named = sorted(line.split(": ", 1)[1] for line in result["stdout"].splitlines()
+                       if "carries an aarch64 native" in line)
+        self.assertEqual(["bin/tool", "lib/libhelper.so", "lib/libversioned.so.1", "native/addon.node"], named, result)
+
+    def test_document_dates_hold_a_pending_change_to_the_day_it_reaches_main(self):
+        """A change not yet on main is stamped when it lands there, never earlier than today."""
+        repo = self.root / "dates"
+        write(repo / "scripts/check-document-dates.py", (SOURCE / "scripts/check-document-dates.py").read_text())
+        legal = "_This document was last updated on {}._\n"
+        policy = "**Last Updated: {}**\n"
+        env = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+               "GIT_AUTHOR_NAME": "Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+               "GIT_COMMITTER_NAME": "Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+               "GIT_AUTHOR_DATE": "2026-01-05T12:00:00+07:00", "GIT_COMMITTER_DATE": "2026-01-05T12:00:00+07:00"}
+
+        def git(*args):
+            result = run(["git", *args], repo, env)
+            self.assertEqual(0, result["status"], result)
+
+        def check():
+            return run([sys.executable, "-I", "-B", str(repo / "scripts/check-document-dates.py")], repo, env)
+
+        write(repo / "docs/LEGAL_NOTICES.md", legal.format("January 5, 2026"))
+        write(repo / "docs/PRIVACY_POLICY.md", policy.format("January 5, 2026"))
+        git("init", "-q")
+        git("add", "--", ".")
+        git("commit", "-q", "-m", "Date both documents")
+        git("update-ref", "refs/remotes/origin/main", "HEAD")
+        on_main = check()
+        self.assertEqual(0, on_main["status"], on_main)
+
+        # The same day on a branch: the squash that carries it is stamped the day it merges.
+        git("checkout", "-q", "-b", "edit")
+        write(repo / "docs/PRIVACY_POLICY.md", policy.format("January 5, 2026") + "A new paragraph.\n")
+        git("commit", "-q", "-am", "Edit the policy")
+        branch = check()
+        self.assertEqual(1, branch["status"], branch)
+        self.assertIn("docs/PRIVACY_POLICY.md", branch["stdout"])
+        self.assertNotIn("docs/LEGAL_NOTICES.md", branch["stdout"])
+        write(repo / "docs/PRIVACY_POLICY.md", policy.format("December 31, 2099") + "A new paragraph.\n")
+        git("commit", "-q", "-am", "Date the policy for its release")
+        ahead = check()
+        self.assertEqual(0, ahead["status"], ahead)
+
+        # An edit not committed yet has no commit at all; the last one that touched the file is older.
+        git("checkout", "-q", "-")
+        write(repo / "docs/LEGAL_NOTICES.md", legal.format("January 5, 2026") + "A new row.\n")
+        dirty = check()
+        self.assertEqual(1, dirty["status"], dirty)
+        self.assertIn("docs/LEGAL_NOTICES.md", dirty["stdout"])
+
+    def test_bundle_size_reads_plays_megabytes_the_strict_way(self):
+        """Play states its caps in MB; read as MiB they let through a base up to 23 MiB over 500 million bytes."""
+        spec = importlib.util.spec_from_file_location("fixture_bundle_size", SOURCE / "scripts/check-bundle-size.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        aab = self.root / "app.aab"
+        aab.write_bytes(b"")
+        mib = 1024 * 1024
+        cases = {
+            "base just under 500 million bytes": ({"base": (476 * mib, 900 * mib)}, 0),
+            "base between 500 million bytes and 500 MiB": ({"base": (490 * mib, 900 * mib)}, 1),
+            "pack between 1.5 billion bytes and 1536 MiB": ({"base": (200 * mib, 600 * mib),
+                                                              "toolchain_codex": (1450 * mib, 1500 * mib)}, 1),
+        }
+        for label, (sizes, status) in cases.items():
+            with self.subTest(case=label):
+                module.module_sizes = lambda _aab, sizes=sizes: sizes
+                with contextlib.redirect_stdout(io.StringIO()) as out:
+                    self.assertEqual(status, module.main(["check-bundle-size.py", str(aab)]), out.getvalue())
+
+    def test_build_step_check_refuses_a_copied_notice_missing_from_the_assets_key(self):
+        """A notice a download script copies into the cached tree has to move the cache key when it changes."""
+        fixture, check = self.step_checks_fixture("build-steps-notices")
+        healthy = check("check-build-steps.py")
+        self.assertEqual(0, healthy.returncode, healthy.stdout + healthy.stderr)
+        self.assertIn("licence notices the build job copies into the cached tree are in", healthy.stdout)
+        build = fixture / ".github/workflows/build.yml"
+        text = build.read_text()
+        entry = "'licenses/**', "
+        self.assertEqual(1, text.count(entry), "the assets cache key does not hash licenses/")
+        build.write_text(text.replace(entry, "", 1))
+        unkeyed = check("check-build-steps.py")
+        self.assertNotEqual(0, unkeyed.returncode, unkeyed.stdout + unkeyed.stderr)
+        self.assertIn("licenses/LICENSE.ICU", unkeyed.stdout)
+        self.assertIn("licenses/COPYRIGHT.musl", unkeyed.stdout)
+
+    def test_workflow_step_check_refuses_an_unbounded_package_index_refresh(self):
+        """An apt-get update with no bound on it can hold a stalled mirror for the whole job's budget."""
+        self.assertTrue(PYYAML or not os.environ.get("CI"), "CI images carry PyYAML")
+        if not PYYAML:
+            self.skipTest("check-workflow-steps.py needs PyYAML")
+        fixture, check = self.step_checks_fixture("apt-bounded")
+        healthy = check("check-workflow-steps.py")
+        self.assertEqual(0, healthy.returncode, healthy.stdout + healthy.stderr)
+        for name in ("codeoss-build.yml", "build.yml", "release.yml"):
+            workflow = fixture / ".github/workflows" / name
+            text = workflow.read_text()
+            bounded = "            if sudo timeout 120 apt-get update; then\n"
+            budget = "\n        timeout-minutes: "
+            self.assertEqual(1, text.count(bounded), name)
+            for label, edited in (("no timeout on the command", text.replace(bounded, "            if sudo apt-get update; then\n")),
+                                  ("no timeout on the step", self.drop_step_budget(text, bounded, budget))):
+                workflow.write_text(edited)
+                with self.subTest(workflow=name, case=label):
+                    result = check("check-workflow-steps.py")
+                    self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
+                    self.assertIn(f"{name}: job", result.stdout)
+                    self.assertIn("apt-get update", result.stdout)
+            workflow.write_text(text)
+
+    @staticmethod
+    def drop_step_budget(text, inside, budget):
+        """`text` without the `timeout-minutes` of the step holding `inside`."""
+        at = text.rindex(budget, 0, text.index(inside))
+        end = text.index("\n", at + 1)
+        return text[:at] + text[end:]
+
     def test_logger_recovers_after_rotation_errors_and_honors_drop(self):
         text = (SOURCE / "scripts/build-native-addons.sh").read_text()
 
@@ -721,12 +970,83 @@ class MaintenanceScriptsTest(unittest.TestCase):
         self.assertNotEqual(0, unread.returncode, unread.stdout + unread.stderr)
         self.assertIn("the pattern stopped matching", unread.stdout)
 
-    # Asked of the interpreter and flags the case runs the check with: `-I` hides the user site, so a PyYAML
-    # installed there is found by this process and not by the check.
-    @unittest.skipUnless(subprocess.run([sys.executable, "-I", "-c", "import yaml"], capture_output=True).returncode == 0,
-                         "check-workflow-steps.py needs PyYAML, which CI images carry")
+    def step_checks_fixture(self, name):
+        """A copy of what check-build-steps.py and check-workflow-steps.py read, and a runner for both."""
+        fixture = self.root / name
+        shutil.copytree(SOURCE / "scripts", fixture / "scripts")
+        shutil.copytree(SOURCE / ".github/workflows", fixture / ".github/workflows")
+        (fixture / "android/app").mkdir(parents=True)
+        shutil.copy2(SOURCE / "android/app/build.gradle.kts", fixture / "android/app")
+        shutil.copy2(SOURCE / "CONTRIBUTING.md", fixture)
+        (fixture / "docs").mkdir()
+        shutil.copy2(SOURCE / "docs/USER_GUIDE.md", fixture / "docs")
+
+        def check(script):
+            return subprocess.run([sys.executable, "-I", str(fixture / "scripts" / script)], cwd=fixture,
+                                  capture_output=True, text=True, timeout=60)
+        return fixture, check
+
+    def test_step_checks_refuse_a_self_check_step_that_cannot_run(self):
+        """A step switched off in place is as unrun as a deleted one, to both step checkers."""
+        fixture, check = self.step_checks_fixture("switched-off")
+        lint = fixture / ".github/workflows/lint.yml"
+        text = lint.read_text()
+        step = "      - name: Check the bundled JavaScript runtime\n"
+        job = "  lint:\n    name: Android Lint\n"
+        self.assertEqual(1, text.count(step))
+        self.assertEqual(1, text.count(job))
+        for script in ("check-build-steps.py", "check-workflow-steps.py"):
+            if script == "check-workflow-steps.py" and not PYYAML:
+                continue
+            healthy = check(script)
+            self.assertEqual(0, healthy.returncode, healthy.stdout + healthy.stderr)
+        switched_off = {
+            "a step under if: ${{ false }}": text.replace(step, step + "        if: ${{ false }}\n"),
+            "a step that may fail": text.replace(step, step + "        continue-on-error: true\n"),
+            "a step under an event lint never sees":
+                text.replace(step, step + "        if: github.event_name == 'schedule'\n"),
+            "a step whose bullet carries the condition":
+                text.replace(step, "      - if: ${{ false }}\n        name: Check the bundled JavaScript runtime\n"),
+            "the job under if: ${{ false }}": text.replace(job, job + "    if: ${{ false }}\n"),
+            "the job that may fail": text.replace(job, job + "    continue-on-error: true\n"),
+        }
+        for label, edited in switched_off.items():
+            lint.write_text(edited)
+            with self.subTest(case=label, script="check-build-steps.py"):
+                result = check("check-build-steps.py")
+                self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
+                self.assertIn("test-dns-proxy.js", result.stdout)
+            if PYYAML:
+                with self.subTest(case=label, script="check-workflow-steps.py"):
+                    result = check("check-workflow-steps.py")
+                    self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
+                    self.assertIn("job lint" if label.startswith("the job") else
+                                  "Check the bundled JavaScript runtime", result.stdout)
+        # A list written at another indentation is refused rather than read without its conditions.
+        steps = "    steps:\n      - name: Checkout\n"
+        self.assertEqual(1, text.count(steps))
+        lint.write_text(text.replace(steps, "    steps:\n    - name: Checkout\n"))
+        moved = check("check-build-steps.py")
+        self.assertNotEqual(0, moved.returncode, moved.stdout + moved.stderr)
+        self.assertIn("lint.yml: a steps: list this reader cannot place", moved.stdout)
+        # A condition the workflow lists for a step that still runs, and a step that may not fail.
+        for label, edited in {
+            "always()": text.replace(step, step + "        if: always()\n"),
+            "continue-on-error: false": text.replace(step, step + "        continue-on-error: false\n"),
+        }.items():
+            lint.write_text(edited)
+            with self.subTest(case=label):
+                result = check("check-build-steps.py")
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertTrue(PYYAML or not os.environ.get("CI"),
+                        "CI images carry PyYAML; without it half of this case did not run")
+
+    # Skipped on a machine without PyYAML, never in CI: a skip there reads as a pass in a log nobody opens,
+    # and CI images carry it, so its absence there is a changed image and fails.
+    @unittest.skipUnless(PYYAML or os.environ.get("CI"), "check-workflow-steps.py needs PyYAML, which CI images carry")
     def test_workflow_step_check_holds_the_release_document_gates(self):
         """The release steps that hold the documents to the build are required steps like any other gate."""
+        self.assertTrue(PYYAML, "CI set and no PyYAML for this interpreter with -I: the check cannot run here")
         fixture = self.root / "workflow-steps"
         (fixture / "scripts").mkdir(parents=True)
         shutil.copy2(SOURCE / "scripts/check-workflow-steps.py", fixture / "scripts")
@@ -1396,7 +1716,8 @@ esac
                 guide=guide.replace("roughly 2 MB for a complete tree", "less for a complete tree"))
         # Documents that agree with each other and not with what setup asks of this APK.
         refused("free space against the APK", "setup asks a fresh install for 6.0 MB", apk={"assets": 1_000_000},
-                readme=readme.replace("6 MB", "5 MB"), guide=guide.replace("6 MB", "5 MB"), srs=srs.replace("6 MB", "5 MB"))
+                readme=readme.replace("6 MB", "5 MB"), guide=guide.replace("6 MB", "5 MB"), srs=srs.replace("6 MB", "5 MB"),
+                site=site.replace("6 MB", "5 MB"))
         refused("update against the APK", "setup asks an update for 2.0 MB", apk={"assets": 1_000_000},
                 guide=guide.replace("roughly 2 MB", "roughly 3 MB"))
         refused("a setup figure that is not a number", "EXTRACTION_SLACK_BYTES",

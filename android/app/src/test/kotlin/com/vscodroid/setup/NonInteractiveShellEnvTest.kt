@@ -158,11 +158,43 @@ class NonInteractiveShellEnvTest {
             "the wrapper does not go through the launcher, so the CLI starts without the " +
                 "seccomp shim and is killed on Android 13 and 14",
         )
-        assertTrue(
-            wrapper.contains("159"),
-            "the wrapper does not read the status a SIGSYS kill leaves (128+31), so a call " +
-                "the shim does not cover reaches the user as bash's bare \"Bad system call\"",
+    }
+
+    /**
+     * What the wrapper says when the CLI is killed by SIGSYS anyway, asked of bash: a launcher that returns 159
+     * (128+31) stands in for the CLI killed because the shim never loaded. The person is told to look for the
+     * shim instead of seeing bash's bare "Bad system call", and the status survives for a script; any other
+     * failure passes through with nothing said.
+     */
+    @Test
+    fun `a CLI killed by SIGSYS is named as a missing shim and keeps its status`() {
+        assumeTrue(File("/bin/bash").canExecute(), "no /bin/bash on this host to ask")
+
+        FirstRunSetup(context).createBashEnvFile()
+        val cwd = File(filesDir, "workspace").apply { mkdirs() }
+        File(filesDir, "home/.vscodroid/extensions/anthropic.claude-code-1.0.0/resources/native-binary/claude")
+            .apply { parentFile.mkdirs(); writeText("") }
+
+        val out = runBash(
+            cwd,
+            bashEnvFile().path,
+            """
+            libclaude-launch.so() { return 159; }
+            claude --version; echo "killed=${'$'}?"
+            echo ---
+            libclaude-launch.so() { return 3; }
+            claude --version; echo "failed=${'$'}?"
+            """.trimIndent(),
         )
+
+        val killed = out.takeWhile { it != "---" }
+        assertTrue(
+            killed.any { it.startsWith("claude: the CLI was killed for a system call") },
+            "a SIGSYS kill reached the person with nothing to say what to check: $out",
+        )
+        assertTrue(killed.any { it.contains("libseccomp-shim.so") }, "the message does not name the shim: $out")
+        assertEquals("killed=159", killed.last(), "the wrapper changed the status a SIGSYS kill leaves: $out")
+        assertEquals(listOf("---", "failed=3"), out.dropWhile { it != "---" }, "another failure was given the message: $out")
     }
 
     /**

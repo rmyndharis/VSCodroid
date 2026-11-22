@@ -15,6 +15,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -179,6 +180,71 @@ class EngineConsentSetupRunTest {
         setup().withdrawRestoredEngineConsent()
 
         assertEquals(before, settings.readText())
+    }
+
+    /**
+     * A second launch's settings refresh runs beside setup and outside the setup lock (Home and a relaunch
+     * during the unpack). One that read the restored file before the withdrawal and wrote after it put the
+     * person's `true` back for good, since nothing withdraws it once setup has completed. Each of the two
+     * holds the file's write lock from its read to its write, so one lands wholly before the other.
+     */
+    @Test
+    fun `a settings refresh beside setup cannot put a withdrawn consent back`() {
+        restore()
+
+        whileWaitingOnTheLock(other = { setup().updateSettingsNativeLibPaths() }) {
+            setup().withdrawRestoredEngineConsent()
+        }
+
+        assertTrue(
+            settings.readText().contains("vscodroid.layout.compactScreen"),
+            "the refresh wrote nothing, so it proves nothing: ${settings.readText()}",
+        )
+        assertFalse(stillOn(), "a refresh beside setup put the restored consent back: ${settings.readText()}")
+    }
+
+    /**
+     * The other order. A withdrawal that read the file before a refresh and wrote after it took the refresh's
+     * paths and layout fact back out until the next launch; under the lock it reads what the refresh wrote.
+     */
+    @Test
+    fun `a withdrawal beside a settings refresh keeps what the refresh wrote`() {
+        restore()
+
+        whileWaitingOnTheLock(other = { setup().withdrawRestoredEngineConsent() }) {
+            setup().updateSettingsNativeLibPaths()
+        }
+
+        assertFalse(stillOn(), "the consent was left standing: ${settings.readText()}")
+        assertTrue(
+            settings.readText().contains("vscodroid.layout.compactScreen"),
+            "the withdrawal wrote back what it read before the refresh: ${settings.readText()}",
+        )
+    }
+
+    /**
+     * Holds the settings file's write lock, starts [other] on its own thread, and runs [inside] (the lock lets
+     * the thread that holds it in) once [other] waits on that lock. A writer that takes the lock only to write
+     * has read the file by then, so [inside] lands between its read and its write; one that holds it from its
+     * read has read nothing yet.
+     */
+    private fun whileWaitingOnTheLock(other: () -> Unit, inside: () -> Unit) {
+        var failure: Throwable? = null
+        val thread = Thread { runCatching(other).onFailure { failure = it } }
+        holdingWriteLock(settings) {
+            thread.start()
+            val deadline = System.nanoTime() + 10_000_000_000L
+            while (thread.state != Thread.State.BLOCKED ||
+                thread.stackTrace.firstOrNull()?.methodName !in setOf("holdingWriteLock", "writeAtomicallyTo")
+            ) {
+                check(thread.isAlive && System.nanoTime() < deadline) { "the other writer never waited for the settings file's lock" }
+                Thread.sleep(5)
+            }
+            inside()
+        }
+        thread.join(10_000)
+        assertFalse(thread.isAlive, "the other writer did not finish")
+        assertNull(failure, "the other writer failed: $failure")
     }
 
     @Test

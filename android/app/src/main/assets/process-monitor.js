@@ -300,9 +300,23 @@ function namesProgram(name, needle) {
     return ['', '.js', '.mjs', '.cjs'].some((ext) => name === needle + ext);
 }
 
-/** Remove the bundled loader wrapper and its options before reading the executable. */
+/**
+ * Remove a loader in front of the program before reading the executable: the
+ * system loader, and the bundled musl loader with its options.
+ *
+ * Every program stored in the app's files directory runs under
+ * /system/bin/linker64, because SELinux refuses to exec a file there and the
+ * loader can map one: the toolchain trampoline, the Codex launcher and
+ * platform-fix.js all start the program as `linker64 <file> <args>`, and the
+ * kernel keeps that argv in /proc. Read as the loader, clangd was 'unknown' and
+ * never marked idle, and every such row was listed as 'linker64'. The system
+ * loader takes no option in front of a program it runs; `--list` prints the
+ * libraries a file needs and runs nothing, so that stays the loader.
+ */
 function programArguments(parts) {
-    if (path.basename(parts[0] || '').toLowerCase() !== 'libldmusl.so') return parts;
+    const loader = path.basename(parts[0] || '').toLowerCase();
+    if (loader === 'linker64') return parts.length > 1 && !parts[1].startsWith('-') ? parts.slice(1) : parts;
+    if (loader !== 'libldmusl.so') return parts;
     let i = 1;
     while (i < parts.length) {
         const arg = parts[i];

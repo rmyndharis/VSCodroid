@@ -43,10 +43,13 @@ on a device, not trust.
 """
 
 import argparse
+import contextlib
+import io
 import pathlib
 import re
 import struct
 import sys
+import tempfile
 
 # The Bionic libraries a forwarder's target can come from, read from the NDK
 # stubs for the minimum API level. __shim_resolve in glibc-shim.c asks libc and
@@ -98,30 +101,13 @@ UNSUPPORTED_LIBS = {"libstdc++.so.6"}
 # because a count would be satisfied by the wrong four.
 TOLERATED_BLOCKED = {"kerberos.node"}
 
-# The glibc loader appears in DT_NEEDED of objects built against it. Bionic's
-# linker is already the one running, so a stub carrying the name is enough to
-# satisfy the entry.
-LOADER_SONAME = "ld-linux-aarch64.so.1"
-
-SHT_DYNSYM, SHT_GNU_VERNEED, SHT_GNU_VERSYM = 11, 0x6FFFFFFE, 0x6FFFFFFF
+SHT_DYNAMIC, SHT_DYNSYM, SHT_GNU_VERNEED, SHT_GNU_VERSYM = 6, 11, 0x6FFFFFFE, 0x6FFFFFFF
+DT_NULL, DT_NEEDED = 0, 1
 SHT_GNU_VERDEF = 0x6FFFFFFD
 STT_FUNC, STT_OBJECT = 2, 1
 STT_NOTYPE = 0
 TYPE_NAMES = {STT_NOTYPE: "STT_NOTYPE", STT_OBJECT: "STT_OBJECT", STT_FUNC: "STT_FUNC"}
 STB_WEAK = 2
-
-# Data imports cannot be a branch -- the addon reads the storage itself, so the
-# stub has to own a variable of the right type and fill it with Bionic's value
-# before anything runs. Only the ones that actually turn up are listed; a new one
-# is reported rather than guessed at, because guessing a type here means memory
-# corruption rather than a link error.
-# Provided by the dynamic linker rather than by any library, so dlsym cannot find
-# them by name -- but a stub linked against libdl can take their address the
-# ordinary way. Everything else goes through dlsym.
-LINKER_PROVIDED = {
-    "dlopen", "dlsym", "dlclose", "dlerror", "dladdr", "dlvsym",
-    "dl_iterate_phdr", "dl_unwind_find_exidx",
-}
 
 # Symbols Bionic has, but whose arguments it lays out differently from glibc.
 # Forwarding one of these does not fail -- it writes the right bytes to the wrong
@@ -200,15 +186,24 @@ TRANSLATED = {
 # a working call into an abort.
 NEEDS_TRANSLATION = set()
 
+# Data imports cannot be a branch -- the addon reads the storage itself, so the
+# stub has to own a variable of the right type and fill it with Bionic's value
+# before anything runs. Only the ones that actually turn up are listed; a new one
+# is reported rather than guessed at, because guessing a type here means memory
+# corruption rather than a link error.
+#
 # Every source is a call into libglibc-shim.so, never a bare name. The stub
 # exports these very names itself (versioned, default visibility), so a bare
 # `environ` or `stdout` in its own constructor binds to its own zeroed storage
 # and copies NULL over NULL -- the same self-binding hazard the resolver
 # comment below describes for dlopen, measured here with readelf: the GLOB_DAT
 # entries pointed into the stub's own .bss. libglibc-shim.so defines none of
-# these names except the three environ ones, and its constructor fills those
-# through the same references __shim_environ() reads, so a call routed through
-# it reaches a filled value.
+# these names, so a call routed through it reaches Bionic's value.
+#
+# Each is read once, when the stub loads. For the environment that is a copy of
+# what Bionic held at that moment, not Bionic's pointer, which setenv can free
+# as it grows the array (see __shim_environ in glibc-shim.c): an addon reading
+# environ sees the environment as it was when its stub loaded.
 DATA_SYMBOLS = {
     "stdout": ("FILE *", "__shim_stdout()"),
     "stderr": ("FILE *", "__shim_stderr()"),
@@ -323,6 +318,26 @@ class Elf:
             yield soname, version, name, st_info & 0xF, (st_info >> 4) == STB_WEAK
 
 
+    def needed(self):
+        """The DT_NEEDED names: every library the loader has to find first.
+
+        A wider list than the sonames imports() reports. An object can name a
+        library it imports nothing from at any version, and the loader still
+        refuses the object when that library is absent.
+        """
+        dynamic = self._by_type(SHT_DYNAMIC)
+        if not dynamic:
+            return []
+        strtab = self.sections[dynamic["link"]]
+        names = []
+        for off in range(dynamic["offset"], dynamic["offset"] + dynamic["size"], 16):
+            tag, value = struct.unpack_from("<qQ", self.data, off)
+            if tag == DT_NULL:
+                break
+            if tag == DT_NEEDED:
+                names.append(self._cstr(strtab["offset"] + value))
+        return names
+
     def exports(self):
         """Yield (symbol, version) for every symbol this object defines.
 
@@ -397,6 +412,11 @@ def verify_shipped(inputs, lib_dir: pathlib.Path,
     compiled, a symbol dropped between the two, all surface here as the same
     kind of miss.
 
+    It also reads each addon's DT_NEEDED list, which names libraries the
+    versioned imports do not: Copilot's runtime.node lists libutil.so.1 and
+    imports nothing from it. Every name there has to be Bionic's or ship in
+    lib_dir, or dlopen refuses the addon before any of its symbols matter.
+
     With bionic_dir it also asks what stands behind each name. A forwarder
     finds its target by name at load time, a string the linker never sees, and
     one that finds nothing aborts the process on its first call. malloc_trim
@@ -407,8 +427,15 @@ def verify_shipped(inputs, lib_dir: pathlib.Path,
 
     needed: dict = {}
     unbound = set()
+    listed, unshipped = set(), set()
     for path in inputs:
-        for soname, version, name, _, is_weak in Elf(path).imports():
+        elf = Elf(path)
+        for lib in elf.needed():
+            listed.add(lib)
+            if not (lib in BIONIC_LIBS or (lib_dir / lib).is_file()
+                    or (bionic_dir and (bionic_dir / lib).is_file())):
+                unshipped.add((str(path), lib))
+        for soname, version, name, _, is_weak in elf.imports():
             if RUNTIME_PROVIDED.match(name) or name in WEAK_OPTIONAL:
                 continue
             if soname is None or version is None:
@@ -432,6 +459,9 @@ def verify_shipped(inputs, lib_dir: pathlib.Path,
                 unbound.add((str(path), name))
                 continue
             needed.setdefault(soname, set()).add((name, version))
+
+    if not unshipped:
+        print(f"  {len(listed)} DT_NEEDED libraries, each Bionic's or shipped")
 
     missing = []
     for soname, wants in sorted(needed.items()):
@@ -458,6 +488,16 @@ def verify_shipped(inputs, lib_dir: pathlib.Path,
             # With nothing provided, every target comes back.
             total = len(unresolved_targets(needed, set()))
             print(f"  forwarder targets {total} resolved at API {bionic_dir.name}")
+
+    if unshipped:
+        print(f"\n  ERROR: {len(unshipped)} DT_NEEDED name(s) are neither Bionic's nor in"
+              f"\n  {lib_dir}, so dlopen refuses the addon that lists them:",
+              file=sys.stderr)
+        for owner, lib in sorted(unshipped):
+            print(f"    {owner}: {lib}", file=sys.stderr)
+        print("\n  A glibc library needs its soname in STUBS in scripts/build-glibc-shim.sh,"
+              "\n  which builds a stub for every name there. Anything else has to be"
+              "\n  bundled.", file=sys.stderr)
 
     if missing:
         print(f"\n  ERROR: {len(missing)} import(s) are not in the libraries that ship:",
@@ -487,16 +527,48 @@ def verify_shipped(inputs, lib_dir: pathlib.Path,
               "\n  a fallback, as copy_file_range and posix_spawn_file_actions_addchdir"
               "\n  already do.", file=sys.stderr)
 
-    return 1 if (missing or unbound or unresolved) else 0
+    return 1 if (missing or unbound or unresolved or unshipped) else 0
+
+
+def synthetic_object(needed) -> bytes:
+    """The smallest ELF64 Elf() reads, with a .dynamic section listing `needed`.
+
+    Shaped for the parser only: no segments and no code, nothing a loader maps.
+    """
+    names = b"\0.shstrtab\0.dynstr\0.dynamic\0"
+    strings, dynamic = b"\0", b""
+    for name in needed:
+        dynamic += struct.pack("<qQ", DT_NEEDED, len(strings))
+        strings += name.encode() + b"\0"
+    dynamic += struct.pack("<qQ", DT_NULL, 0)
+    data, headers = bytearray(64), [bytes(64)]
+    for name, kind, body, link, entsize in ((b".shstrtab", 3, names, 0, 0),
+                                            (b".dynstr", 3, strings, 0, 0),
+                                            (b".dynamic", SHT_DYNAMIC, dynamic, 2, 16)):
+        data += bytes(-len(data) % 8)
+        headers.append(struct.pack("<IIQQQQIIQQ", names.index(name), kind, 0, 0,
+                                   len(data), len(body), link, 0, 8, entsize))
+        data += body
+    data += bytes(-len(data) % 8)
+    shoff = len(data)
+    data += b"".join(headers)
+    data[:64] = struct.pack("<16sHHIQQQIHHHHHH", b"\x7fELF\x02\x01\x01" + bytes(9),
+                            3, 183, 1, 0, 0, shoff, 0, 64, 0, 0, 64, len(headers), 1)
+    return bytes(data)
 
 
 def self_test() -> int:
-    """Hand unresolved_targets() the forwarders it exists to refuse, and a control.
+    """Hand unresolved_targets() and verify_shipped() what each exists to refuse.
 
     Every target in the shipped tree resolves, so the refusal has no file to
     fire on. sigaction is in Bionic on purpose: a check that dropped the
     TRANSLATED mapping would find it there and pass. stdout is provided
     nowhere, so a check that stopped skipping data symbols would flag it.
+
+    The addon after that names a glibc library in DT_NEEDED and imports
+    nothing from it at any version, the way Copilot's runtime.node names
+    libutil.so.1. No versioned import points at that library, so only the
+    DT_NEEDED list says the loader will look for it.
     """
     needed = {"libc.so.6": {("malloc_trim", "GLIBC_2.17"), ("stdout", "GLIBC_2.17")},
               "libpthread.so.0": {("sigaction", "GLIBC_2.17")}}
@@ -512,6 +584,25 @@ def self_test() -> int:
             print(f"  FAIL   self-test: {label}: expected {expected}, got {got}")
             return 1
     print("  ok     self-test: a forwarder with nothing behind it is refused")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        lib_dir = pathlib.Path(tmp) / "lib"
+        lib_dir.mkdir()
+        (lib_dir / "libc.so.6").write_bytes(b"")
+        addon = pathlib.Path(tmp) / "addon.node"
+        # libm.so is Bionic's, so it is found without being shipped here.
+        addon.write_bytes(synthetic_object(["libc.so.6", "libutil.so.1", "libm.so"]))
+        for label, shipped, expected in (("a library that does not ship", False, 1),
+                                         ("the same library once it ships", True, 0)):
+            if shipped:
+                (lib_dir / "libutil.so.1").write_bytes(b"")
+            report = io.StringIO()
+            with contextlib.redirect_stdout(report), contextlib.redirect_stderr(report):
+                status = verify_shipped([addon], lib_dir)
+            if status != expected or (expected and "libutil.so.1" not in report.getvalue()):
+                print(f"  FAIL   self-test: {label}: exit {status}\n{report.getvalue()}")
+                return 1
+    print("  ok     self-test: a library named only in DT_NEEDED has to ship")
     return 0
 
 
@@ -705,17 +796,17 @@ def generate(inputs, out_dir: pathlib.Path):
     if skipped_runtime:
         print(f"\n  {len(skipped_runtime)} runtime-provided symbols skipped"
               f" (napi_*, uv_*), as the loader defines those")
-
-    if unforwardable:
-        return report_unforwardable(unforwardable)
     return 0
 
 
 def needs_glibc(path: pathlib.Path) -> bool:
     """True when this object asks for a library only glibc provides.
 
-    Read from DT_NEEDED rather than from the file name, because a .node built
-    for Bionic and one built for glibc are both just .node.
+    Read from the libraries its versioned imports name, not from the file
+    name, because a .node built for Bionic and one built for glibc are both
+    just .node. Every glibc build in the tree imports from libc.so.6 at a
+    GLIBC_ version, so that list finds it; verify_shipped() then reads the whole
+    DT_NEEDED list, which can name libraries those imports do not.
     """
     try:
         elf = Elf(path)

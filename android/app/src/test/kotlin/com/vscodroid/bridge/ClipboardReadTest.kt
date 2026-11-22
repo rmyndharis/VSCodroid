@@ -37,9 +37,11 @@ import org.junit.jupiter.api.Test
  * did not consult it, so the guard and the read disagreed: the guard said there
  * was no text and the read returned a file.
  *
- * The coercion is kept for the clip it is right for. A styled or HTML clip is
- * a wildcard text clip and can carry no plain-text field, and rendering it is
- * `coerceToText` is for there.
+ * The coercion is kept for the one text clip it reads without opening anything:
+ * an item with no text and no URI, which in practice is an Intent clip (its
+ * description, `text/vnd.android.intent`, matches the wildcard), written out as
+ * an `intent:` URI. It renders no HTML; an HTML or styled clip's plain text is
+ * its own text field, which the read takes first.
  */
 class ClipboardReadTest {
 
@@ -122,16 +124,16 @@ class ClipboardReadTest {
     }
 
     @Test
-    fun `a styled clip with no plain text field is still rendered`() {
-        // The case the coercion is for, and the control that keeps the fix from
-        // being "return item.text and nothing else": an HTML or styled clip is
-        // the text/ wildcard, and its plain-text field can be absent.
-        // No URI, which is what distinguishes it from the file-manager clip above.
+    fun `a text clip with no text field and no URI is still coerced`() {
+        // The case the coercion is kept for: an Intent clip matches the text/
+        // wildcard and has no text field, and coerceToText writes it as an
+        // intent: URI. No URI, which is what distinguishes it from the
+        // file-manager clip above.
         val item = clipOf(null, mimeIsText = true, uri = null)
-        every { item.coerceToText(any()) } returns "rendered text"
+        every { item.coerceToText(any()) } returns "intent:#Intent;action=android.intent.action.VIEW;end"
 
-        assertEquals("rendered text", clipboard.readFromClipboard())
-        assertTrue(clipboard.hasClipboardText(), "the styled clip must still count as text")
+        assertEquals("intent:#Intent;action=android.intent.action.VIEW;end", clipboard.readFromClipboard())
+        assertTrue(clipboard.hasClipboardText(), "the clip the read coerces must count as text")
     }
 
     @Test

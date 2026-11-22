@@ -8,6 +8,8 @@ import com.google.android.gms.tasks.OnFailureListener
 import com.google.android.gms.tasks.Task
 import com.google.android.play.core.assetpacks.AssetPackManager
 import com.google.android.play.core.assetpacks.AssetPackManagerFactory
+import com.google.android.play.core.assetpacks.AssetPackState
+import com.google.android.play.core.assetpacks.AssetPackStateUpdateListener
 import com.google.android.play.core.assetpacks.AssetPackStates
 import com.google.android.play.core.assetpacks.model.AssetPackStatus
 import com.vscodroid.util.Logger
@@ -18,6 +20,7 @@ import io.mockk.mockk
 import io.mockk.mockkConstructor
 import io.mockk.mockkObject
 import io.mockk.mockkStatic
+import io.mockk.slot
 import io.mockk.unmockkAll
 import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
@@ -242,6 +245,63 @@ class ToolchainInstallTest {
      * NEGATIVE CONTROL: take the name out of PLAY_INSTALLERS and this fails on
      * the fetch, exactly as the sideload case one test below passes.
      */
+    /**
+     * Cancel ends this manager's request, so the next Install asks Play again.
+     * Play cancels only a download that is running, so a pack waiting on its
+     * cellular-data question, or already delivered, sends no CANCELED to clear
+     * the request by, and every later Install returned without fetching or
+     * saying anything.
+     */
+    @Test
+    fun `an install after a cancel asks Play again`() {
+        installedBy("com.android.vending")
+        // The cancel hands Play's copy back; a delete that never completes would keep the pack
+        // marked as being removed for every later case in this JVM.
+        every { packManager.removePack(any()) } answers { completedPackRemoval() }
+        val m = manager()
+
+        m.install("toolchain_java")
+        m.cancel("toolchain_java")
+        m.install("toolchain_java")
+
+        verify(exactly = 2) { packManager.fetch(listOf("toolchain_java")) }
+    }
+
+    /**
+     * Play's CANCELED for the cancelled request can arrive after the Install that followed it, and it ends that
+     * Install's request too, because requests are kept by pack name. The download carries on and still reports; what
+     * is lost is the record that this manager asked for it, so a further Install asks Play again rather than being
+     * swallowed, and a screen that hands its listener back on CANCELED may miss the rest until the next launch's
+     * reconcile.
+     */
+    @Test
+    fun `a CANCELED arriving after the next Install ends that Install's request too`() {
+        installedBy("com.android.vending")
+        every { packManager.removePack(any()) } answers { completedPackRemoval() }
+        val listener = slot<AssetPackStateUpdateListener>()
+        every { packManager.registerListener(capture(listener)) } just Runs
+        val m = manager()
+        m.install("toolchain_java")
+        m.cancel("toolchain_java")
+        m.install("toolchain_java")
+
+        listener.captured.onStateUpdate(mockk<AssetPackState> {
+            every { name() } returns "toolchain_java"
+            every { status() } returns AssetPackStatus.CANCELED
+            every { totalBytesToDownload() } returns 0L
+            every { bytesDownloaded() } returns 0L
+            every { errorCode() } returns 0
+        })
+
+        @Suppress("UNCHECKED_CAST")
+        val requests = ToolchainManager::class.java.getDeclaredField("playRequests")
+            .apply { isAccessible = true }.get(m) as Map<String, Any>
+        assertEquals(listOf(AssetPackStatus.CANCELED), statuses())
+        assertFalse("toolchain_java" in requests, "the later Install's request outlived the earlier CANCELED")
+        m.install("toolchain_java")
+        verify(exactly = 3) { packManager.fetch(listOf("toolchain_java")) }
+    }
+
     @Test
     fun `a Play install recorded under the legacy installer name fetches the pack`() {
         installedBy("com.google.android.feedback")
@@ -496,28 +556,28 @@ class ToolchainInstallTest {
     // ── a copy that cannot finish ────────────────────────────────────────
 
     /**
-     * A pack whose tree cannot be copied whole, however much room there is.
+     * A pack whose copy runs out of room partway.
      *
-     * The obstruction is a regular file where the copy has to create a
-     * directory, which fails with a `FileNotFoundException` -- an `IOException`,
-     * the same type `copyDirectoryTree` throws for a directory it cannot list
-     * and the same one a full disk produces. Arranged this way because the
-     * alternatives are not deterministic: filling a temporary filesystem is not
-     * available here, and a permission trick answers differently depending on
-     * who runs the suite.
+     * One file's write is refused the way a full disk refuses it, at the
+     * temporary file the atomic writer opens ([blockAtomicWritesTo]), because
+     * filling a temporary filesystem is not available here and a permission
+     * trick answers differently depending on who runs the suite. The folder
+     * around that file is made before its write is tried, so the copy has
+     * written something by the time it fails, in whichever order the files are
+     * listed. (An entry of the wrong kind in the pack's way used to stand in for
+     * a full disk here; it is refused before the copy now, and as something
+     * else.)
      *
      * Both files sit under the manifest's `installRoot`, which is what the
      * reclaim below is asserted against.
      */
     private fun packWithBlockedCopy(): File {
-        File(filesDir, "usr/opt/java").mkdirs()
-        // Where a directory has to go.
-        File(filesDir, "usr/opt/java/blocked").writeText("in the way")
         val pack = File(filesDir, "pack-java").apply { mkdirs() }
         File(pack, "toolchain_java.json").writeText("""{"name":"java","installRoot":"usr/opt/java"}""")
         File(pack, "usr/opt/java/blocked").mkdirs()
         File(pack, "usr/opt/java/blocked/inner").writeText("payload")
         File(pack, "usr/opt/java/ok").writeText("payload")
+        blockAtomicWritesTo(File(filesDir, "usr/opt/java/blocked/inner"))
         return pack
     }
 
@@ -580,11 +640,15 @@ class ToolchainInstallTest {
         File(filesDir, "home/.vscodroid/toolchains.json").writeText(
             """[{"name":"java","installRoot":"usr/opt/java"}]"""
         )
+        val installed = File(filesDir, "usr/opt/java/installed").apply {
+            parentFile?.mkdirs()
+            writeText("installed bytes")
+        }
 
         installFromDirectory(manager(), "toolchain_java", packWithBlockedCopy())
 
-        assertTrue(
-            File(filesDir, "usr/opt/java").exists(),
+        assertEquals(
+            "installed bytes", installed.takeIf { it.isFile }?.readText(),
             "the failed reinstall deleted the tree of the install that is still recorded",
         )
     }

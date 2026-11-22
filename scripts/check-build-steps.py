@@ -3,7 +3,7 @@
 
     check-build-steps.py
 
-Eight assertions, nearly all about scripts nobody notices are missing until an
+Nine assertions, nearly all about scripts nobody notices are missing until an
 app is built without them, or shipped without them having run:
 
   * every shell script a workflow runs is mentioned in CONTRIBUTING.md, so
@@ -34,7 +34,14 @@ app is built without them, or shipped without them having run:
     in build.yml rather than lint.yml because they read an assets tree lint does
     not build, and the rest are invoked with arguments from a script or from
     Gradle. The answerable question for this family is whether anything runs
-    them at all. A scripts/check-*.js is asked the same question.
+    them at all. A scripts/check-*.js is asked the same question;
+  * build.yml's assets cache key hashes every script that shapes the server
+    tree and every licence notice the build job copies into the cached tree, so
+    an edit to one cannot meet an exact hit and ship the cached copy.
+
+A workflow step or job only counts as running what it names when it can run
+and fail: one under an `if:` that LIVE_CONDITIONS does not list for its
+workflow, or allowed to fail by `continue-on-error`, counts as running nothing.
 
 The first three are about `.sh` and say so. The JavaScript rule is deliberately
 not folded into them: those three pair four sources, build.yml, release.yml,
@@ -54,6 +61,7 @@ Scripts that only prepare optional extras may be documented without being in
 build-all.sh -- the direction that matters is that nothing CI needs is absent.
 """
 
+import fnmatch
 import pathlib
 import re
 import sys
@@ -176,34 +184,116 @@ def executable_lines(path) -> str:
         raise Unreadable(f"{path} could not be read  {e}") from e
     kept = [line for line in text.splitlines()
             if not line.lstrip().startswith(("#", "//"))]
-    return "\n".join(drop_disabled_steps(kept))
+    if path.parent == WORKFLOWS:
+        kept = drop_disabled_steps(kept, LIVE_CONDITIONS.get(path.name, ()), path.name)
+    return "\n".join(kept)
 
 
-def drop_disabled_steps(lines: list) -> list:
-    """Remove workflow step blocks whose `if:` is a literal false.
+# The `if:` a step or a job may carry and still count as run, by workflow, exactly as
+# the workflow writes it. Every other condition, and any `continue-on-error` that is
+# not `false`, takes the step or the job out of what the rules here count: a
+# self-check under `if: ${{ false }}`, under an event its workflow never sees, or
+# allowed to fail, is unrun or toothless while its `run:` line still reads as wired.
+# Measured before this table existed: `if: ${{ false }}` on lint.yml's
+# JavaScript runtime step left every rule here green. Whether a listed condition
+# holds on the path that matters is a judgement made when it is added: a step
+# skipped on an exact assets cache hit is covered by that key, and a tag-only step
+# runs on every tag. Per workflow, because the same words mean different things in
+# two files: `github.event_name == 'push'` is every tag in release.yml and would be
+# no pull request at all in lint.yml.
+LIVE_CONDITIONS = {
+    "build.yml": {"steps.cache-assets.outputs.cache-hit != 'true'"},
+    "codeoss-build.yml": {"${{ !inputs.fresh }}", "steps.cache.outputs.cache-hit != 'true'",
+                          "always()"},
+    "lint.yml": {"always()"},
+    "pages.yml": {"github.event_name != 'workflow_run' || "
+                  "github.event.workflow_run.conclusion == 'success'"},
+    "r8.yml": {"always()"},
+    "release.yml": {"github.event_name == 'push'",
+                    "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')",
+                    "always()"},
+}
 
-    Commenting a command out is one of the two canonical ways to silence a CI step;
-    `if: false` is the other, and it leaves the `run:` line untouched, so a rule
-    that only strips comments still counts a step GitHub Actions will skip. A step
-    block runs from one `- ` bullet at step indentation to the next.
+# The layout every workflow here is written in: jobs at two spaces, their keys at
+# four, step bullets at six and step keys at eight. Read by position rather than
+# parsed, because this script needs no PyYAML; a workflow written another way is
+# refused rather than read wrong, since a step this reader cannot place is a step
+# whose condition it cannot see.
+JOB = re.compile(r"^  [A-Za-z_][\w-]*:\s*$")
+JOB_KEY = re.compile(r"^    (if|continue-on-error):(.*)$")
+STEPS = re.compile(r"^(\s*)steps:\s*$")
+STEP = re.compile(r"^      - ")
+STEP_KEY = re.compile(r"^(?:      - |        )(if|continue-on-error):(.*)$")
 
-    Bounded on purpose, and the bound is the point: only the literal form is caught.
-    `if: ${{ false }}`, or an expression that happens to be false at run time, is
-    not, and cannot be without evaluating GitHub's expression language. No workflow
-    here uses any form today -- measured, zero occurrences -- so this changes
-    nothing in the current tree and only starts acting when someone disables a step
-    that way.
+
+def switched_off(block, key, live):
+    """Whether a job or step block carries a condition that keeps it from counting."""
+    for line in block:
+        found = key.match(line)
+        if not found:
+            continue
+        name, value = found.group(1), found.group(2).strip()
+        if name == "if" and value not in live:
+            return True
+        if name == "continue-on-error" and value != "false":
+            return True
+    return False
+
+
+def drop_disabled_steps(lines: list, live=(), name="workflow") -> list:
+    """Remove the jobs and steps of a workflow that cannot run, or cannot fail.
+
+    Commenting a command out is one canonical way to silence a CI step; a condition
+    is the other, and it leaves the `run:` line untouched, so a rule that only
+    strips comments still counts a step GitHub Actions will skip. `if: false` was
+    the one form caught here, and `if: ${{ false }}`, an event the workflow never
+    sees, or `continue-on-error: true` all passed. So the test is now the other way
+    round: a condition counts only if LIVE_CONDITIONS lists it for this workflow,
+    which needs no evaluation of GitHub's expression language. A job block runs from
+    its name to the next job; a step block from its bullet to the next bullet or the
+    end of its job.
     """
-    out, block, in_block = [], [], False
-    for line in lines + ["\x00sentinel"]:
-        starts_step = line.lstrip().startswith("- ") and line.startswith("      ")
-        if starts_step or line == "\x00sentinel":
-            if in_block and not any(
-                    re.match(r"\s*if:\s*false\s*$", b) for b in block):
-                out.extend(block)
-            block, in_block = [], True
-        if line != "\x00sentinel":
-            (block if in_block else out).append(line)
+    for i, line in enumerate(lines):
+        steps = STEPS.match(line)
+        first = next((l for l in lines[i + 1:] if l.strip()), "") if steps else ""
+        if steps and (len(steps.group(1)) != 4 or not STEP.match(first)):
+            raise Unreadable(f"{name}: a steps: list this reader cannot place (key at "
+                             f"{len(steps.group(1))} spaces, first step {first.strip()[:40]!r}); "
+                             "it expects the key at 4 and each step's bullet at 6")
+
+    # Jobs first: a job's own condition takes every step in it along.
+    jobs, job, in_jobs = [], None, False
+    for line in lines:
+        if re.match(r"^\S", line):
+            in_jobs, job = line.startswith("jobs:"), None
+            jobs.append((False, [line]))
+        elif in_jobs and JOB.match(line):
+            job = [line]
+            jobs.append((True, job))
+        elif job is not None:
+            job.append(line)
+        else:
+            jobs.append((False, [line]))
+
+    out = []
+    for is_job, block in jobs:
+        if is_job and switched_off(block, JOB_KEY, live):
+            continue
+        step = None
+        for line in block + ["\x00end"]:
+            ends = line == "\x00end" or STEP.match(line) or re.match(r"^ {0,7}\S", line)
+            if step is not None and ends:
+                if not switched_off(step, STEP_KEY, live):
+                    out.extend(step)
+                step = None
+            if line == "\x00end":
+                break
+            if STEP.match(line):
+                step = [line]
+            elif step is not None:
+                step.append(line)
+            else:
+                out.append(line)
     return out
 
 
@@ -476,12 +566,12 @@ def _main() -> int:
     # the copy already there.
     build_sh = ROOT / "scripts" / "build-vscode-oss.sh"
     workflow = ROOT / ".github" / "workflows" / "build.yml"
+    key_line = next(
+        (l for l in workflow.read_text().splitlines() if "assets-" in l and "hashFiles" in l),
+        "",
+    ) if workflow.is_file() else ""
     if build_sh.is_file() and workflow.is_file():
         shapers = set(re.findall(r'\$SCRIPT_DIR/([\w.-]+\.(?:py|js))', build_sh.read_text()))
-        key_line = next(
-            (l for l in workflow.read_text().splitlines() if "assets-" in l and "hashFiles" in l),
-            "",
-        )
         keyed = set(re.findall(r"scripts/([\w.-]+\.(?:py|js))", key_line))
         missing_from_key = shapers - keyed
         if missing_from_key:
@@ -494,6 +584,33 @@ def _main() -> int:
         elif shapers:
             print(f"  ok     all {len(shapers)} scripts that shape the server tree are in "
                   "the assets cache key")
+
+    # The same question of what the build job's scripts copy in from the repository
+    # itself rather than produce. download-termux-tools.sh and
+    # download-musl-loader.sh place licenses/LICENSE.ICU and licenses/COPYRIGHT.musl
+    # under assets/usr/share/doc, which the assets cache restores whole, so an edit
+    # to either text alone met an exact hit and the debug APK kept the old notice.
+    if workflow.is_file():
+        notices = set()
+        for script in sorted(ci_pr):
+            path = ROOT / "scripts" / script
+            if path.is_file():
+                notices |= set(re.findall(r"\$ROOT_DIR/(licenses/[\w.+-]+)", executable_lines(path)))
+        globs = re.findall(r"'([^']+)'", key_line)
+        unkeyed = {n for n in notices if not any(fnmatch.fnmatchcase(n, g) for g in globs)}
+        if not notices:
+            print("  FAIL   no build job script names a file under licenses/; the pattern "
+                  "stopped matching, so this rule was about to pass by reading nothing")
+            return 1
+        if unkeyed:
+            report("licence notices the build job copies into the cached tree but the assets "
+                   "cache key does not hash", unkeyed,
+                   ".github/workflows/build.yml, the assets- hashFiles list",
+                   "On an exact hit the cached copy ships, whatever the file says now.")
+            failed = True
+        else:
+            print(f"  ok     all {len(notices)} licence notices the build job copies into the "
+                  "cached tree are in the assets cache key")
 
     unwired = checkers - wired
     if unwired:

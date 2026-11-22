@@ -56,7 +56,7 @@
  * a quick suggestion by another.
  *
  * NEGATIVE CONTROL, measured on the 1.139.1 tree with Node 22.23.2. Against upstream's
- * files, with no patch applied, 189 of the 206 cases fail. Each of these single edits to a
+ * files, with no patch applied, 198 of the 216 cases fail. Each of these single edits to a
  * copy of a patched file fails at least one case:
  *
  *   0046  the body of the blur listener removed; the composing clause dropped from the
@@ -105,7 +105,10 @@
  *         replaced, the start, the buffer's text of the range or its test for a text that starts
  *         with what it replaced; the last replacement kept across a
  *         text written over its end, a deletion inside it, one that reaches before it, or an edit
- *         of the editor's own.
+ *         of the editor's own; a space inserted at its end not kept with it, or kept without its
+ *         text added; the last replacement kept across a letter, a digit or a combining mark
+ *         inserted at its end, a text written over what follows it, or a space inserted there
+ *         after an edit of the editor's own.
  *   0051  `_caretUnmoved` answering false; its single-caret test removed; the count of
  *         carets not taken when the others are dropped.
  *   0052  the bounds test of `_onListTap` removed.
@@ -119,9 +122,12 @@
  *         widened to modifier letters, or without the dollar sign; its combining marks
  *         after the letter removed, or a lone mark or one after a modifier letter taken.
  *
- * One edit changes no case, and no case could see it: the reset in `_afterAppliedEdit`
- * removed. It runs only when the model's version has moved, and the next update starts the
- * count again for that reason.
+ * Two edits change no case, and no case could see them: the reset in `_afterAppliedEdit`
+ * removed, which runs only when the model's version has moved, and the next update starts the
+ * count again for that reason; and in `_afterAppliedEdit` the test that a text kept with the
+ * last replacement is inserted at its end and not written over it, removed: a text written over
+ * the end of what was kept is then added to it, while the buffer lost what it replaced, so the
+ * kept text is longer than what the buffer holds there and no take-back can match it.
  */
 
 'use strict';
@@ -616,6 +622,18 @@ class Page {
     // A paste the editor makes, from its menu or a hardware key.
     async paste(text) {
         this.run(this.cursors.map(selection => new this.tree.ReplaceCommand(selection, text)), this.tree.CursorChangeReason.Paste);
+        await this.settle();
+    }
+
+    // A Backspace the keyboard sends as a key press, as Gboard 17.7 and 18.4 do: the editor runs
+    // it as its own command, one edit of the unit before each caret, and no update reaches the
+    // edit context. What the key does to the buffer's start until it is released is not modeled.
+    async backspaceKey() {
+        const { Range, ReplaceCommand, CursorChangeReason } = this.tree;
+        this.run(this.cursors.map(selection => {
+            const caret = this.model.offsetAt(selection.getPosition());
+            return new ReplaceCommand(Range.fromPositions(this.model.positionAt(caret - 1), this.model.positionAt(caret)), '');
+        }), CursorChangeReason.NotSet);
         await this.settle();
     }
 
@@ -2286,6 +2304,76 @@ check('0050 a deletion that reaches before the corrected text ends what is kept 
     await p.update('q', 1, 2, 2);
     return [p.state(), { text: 'zxq', carets: [3], restarts: 1 }];
 });
+// A keyboard can send the correction and its space as two updates. The space, inserted at the end of the corrected text,
+// is kept with it, so the Backspace on the space and the take-back after it read as they do when both came in one update.
+check('0050 a correction taken back after its space, sent as an update of its own, was deleted is applied', async () => {
+    const p = page('', [0]);
+    await p.compose();
+    await p.update('u', 0, 0);
+    await p.endComposition();
+    await p.update('you', 0, 1);
+    await p.update(' ', 3, 3);
+    await p.update('', 3, 4);
+    await p.compose();
+    await p.update('u', 0, 3);
+    return [p.state(), applied('u', 1, 0)];
+});
+// A letter, a digit or a mark typed at the end of the correction goes on with the word, and is no space or punctuation sent
+// with it: the case of the s above, and these two.
+for (const [name, typed] of [['a digit', '2'], ['a combining mark', '\u0301']]) {
+    check(`0050 ${name} typed at the end of a correction ends what is kept of the correction`, async () => {
+        const p = page('', [0]);
+        await p.compose();
+        await p.update('u', 0, 0);
+        await p.endComposition();
+        await p.update('you', 0, 1);
+        await p.update(typed, 3, 3);
+        await p.update('', 3, 4);
+        await p.compose();
+        await p.update('u', 0, 3);
+        return [p.state(), { text: 'youu', carets: [4], restarts: 1 }];
+    });
+}
+check('0050 a text written over what follows a correction ends what is kept of the correction', async () => {
+    const p = page(' abc', [0]);
+    await p.compose();
+    await p.update('u', 0, 0);
+    await p.endComposition();
+    await p.update('you', 0, 1);
+    await p.update('-', 3, 4);
+    await p.update('', 3, 4);
+    await p.compose();
+    await p.update('u', 0, 3);
+    return [p.state(), { text: 'youuabc', carets: [4], restarts: 1 }];
+});
+check('0050 the space of a correction sent after an edit the editor made elsewhere ends what is kept of the correction', async () => {
+    const p = page('\nabc', [0]);
+    await p.compose();
+    await p.update('u', 0, 0);
+    await p.endComposition();
+    await p.update('you', 0, 1);
+    await p.tap(7);
+    await p.paste('!');
+    await p.tap(3);
+    await p.update(' ', 3, 3);
+    await p.update('', 3, 4);
+    await p.compose();
+    await p.update('u', 0, 3);
+    return [p.state(), { text: 'youu\nabc!', carets: [4] }];
+});
+// What that costs: a Backspace that the editor runs as a key press is an edit of its own, which no update reports, so it ends
+// what is kept, and the take-back after it is typed as a stale letter.
+check('0050 known limit: the take-back after a Backspace sent as a key press is a stale letter and is typed at the caret', async () => {
+    const p = page('', [0]);
+    await p.compose();
+    await p.update('u', 0, 0);
+    await p.endComposition();
+    await p.update('you ', 0, 1);
+    await p.backspaceKey();
+    await p.compose();
+    await p.update('u', 0, 3);
+    return [p.state(), { text: 'youu', carets: [4], restarts: 1 }];
+});
 // Two updates in one task, which only a script on the page can send: once the stale letter is typed the composition has typed,
 // so a letter over the letter just typed is the rewrite of a composition in step and is applied.
 check('0050 a stale letter typed at the caret counts as typed for the composition it was sent in', async () => {
@@ -2389,6 +2477,35 @@ check('0050 a Hangul syllable over the last syllable of a reopened word is appli
     await p.compose();
     await p.update('\uB09C', 1, 2, 2);
     return [p.state(), applied('\uAC00\uB09C', 2)];
+});
+// What the stale letters cost: an honest pick of one letter over a reopened word has their shapes. Over a word of more letters
+// it is the letter over the whole word, and over a word of one letter with another base letter it is the letter over the last
+// letter, so the pick is typed after the word, and each try again is a stale letter as well, past the bound too.
+check('0050 known limit: a one-letter pick over a reopened word of two letters is typed after the word', async () => {
+    const p = page('is', [2]);
+    await p.compose();
+    await p.update('I', 0, 2);
+    return [p.state(), typedAtCaret('isI', 3)];
+});
+check('0050 known limit: the same pick tried seven times is typed after the word seven times', async () => {
+    const p = page('is', [2]);
+    for (let tries = 0; tries < 7; tries++) {
+        await p.compose();
+        await p.update('I', 0, 2 + tries);
+    }
+    return [p.state(), { text: 'isIIIIIII', carets: [9], restarts: 6 }];
+});
+check('0050 known limit: a pick of another letter over a reopened word of one letter is typed after it', async () => {
+    const p = page('x', [1]);
+    await p.compose();
+    await p.update('c', 0, 1, 1);
+    return [p.state(), typedAtCaret('xc', 2)];
+});
+check('0050 known limit: an accented pick of another base letter over a reopened word of one letter is typed after it', async () => {
+    const p = page('a', [1]);
+    await p.compose();
+    await p.update('\u00E9', 0, 1, 1);
+    return [p.state(), typedAtCaret('a\u00E9', 2)];
 });
 check('0054 an uppercase and a titlecase final letter arm one each', async () => {
     const model = suggestModel(android, false);
