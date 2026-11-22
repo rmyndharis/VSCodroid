@@ -11,7 +11,8 @@
  * stdio family, everything ordinary. What is missing splits into three kinds,
  * and all three are small:
  *
- *   - renamed internals: __errno_location, __environ, __assert_fail
+ *   - renamed internals: __errno_location, __assert_fail, and the environment
+ *     under glibc's three names, which the stubs export (see __shim_environ)
  *   - the stat family, which glibc exports as versioned __xstat wrappers
  *     carrying a struct version glibc uses and Bionic does not
  *   - a few glibc-only conveniences: gnu_get_libc_version, __res_init
@@ -38,65 +39,6 @@
 
 /* glibc keeps errno behind a function; Bionic exposes __errno(). */
 int *__errno_location(void) { return __errno(); }
-
-/*
- * The environment, under all three names glibc exports.
- *
- * Bionic's libc exports `environ` only at its own LIBC version and does not
- * export `__environ` or `_environ` at all, so a glibc addon that asks libc.so.6
- * for them at GLIBC_2.17 fails to link even though the data is right there.
- * These are re-exported copies, filled from /proc/self/environ at load time.
- *
- * The ceiling: they are copies of the pointer, so an addon reading them after
- * the process has called setenv() sees the array as it was. Bionic reallocates
- * that array when it grows, and nothing here would notice. Fine for reading
- * configuration at startup, which is what these addons do; not a general
- * substitute for the real thing.
- */
-char **environ = 0;
-char **__environ = 0;
-char **_environ = 0;
-
-/*
- * These copies are built at load time from /proc/self/environ, which the
- * kernel maintains for every process, and not from Bionic's `environ`, which a
- * bare reference here is not guaranteed to reach: this library defines that
- * name itself.
- *
- * The ceiling: it is a snapshot. An addon reading it after the process calls
- * setenv() sees the environment as it was at load. That covers reading
- * configuration during initialisation, which is what these addons do with it,
- * and nothing more. Raising it would mean intercepting setenv, which is a much
- * larger promise than this file should make.
- */
-__attribute__((constructor)) static void init_environ(void) {
-    FILE *f = fopen("/proc/self/environ", "rb");
-    if (!f) return;
-
-    static char buf[64 * 1024];
-    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
-    fclose(f);
-    if (n == 0) return;
-    buf[n] = '\0';
-
-    size_t count = 0;
-    for (size_t i = 0; i < n; i++) {
-        if (buf[i] == '\0') count++;
-    }
-
-    static char *slots[1024];
-    size_t used = 0;
-    for (size_t i = 0; i < n && used < (sizeof(slots) / sizeof(*slots)) - 1; ) {
-        slots[used++] = &buf[i];
-        while (i < n && buf[i] != '\0') i++;
-        i++;
-    }
-    slots[used] = 0;
-
-    environ = slots;
-    __environ = slots;
-    _environ = slots;
-}
 
 /*
  * The stat family. glibc's public stat() is a thin inline over __xstat(ver, ...),
@@ -361,15 +303,50 @@ int __xpg_strerror_r(int code, char *buf, size_t len) {
  * `environ` or `stdout` by name: they define those very names (versioned, at
  * default visibility), so the reference would bind to their own zeroed storage
  * and the constructor would copy NULL over NULL; measured with readelf, the
- * GLOB_DAT entries pointed at the stub's own .bss. This library does not define
- * `stdout` or its siblings, so from here those references reach Bionic's real
- * ones. It does define `environ` (the copies above), so `__shim_environ`
- * returns whichever definition the loader binds that name to.
+ * GLOB_DAT entries pointed at the stub's own .bss. This library defines none of
+ * those names, so from here the references reach Bionic's real ones.
+ *
+ * It must not define the environment's names either: Bionic's libc exports
+ * only `environ`, at its own LIBC version, and the stubs export all three at
+ * GLIBC_2.17. A definition here is preemptible, so a store to it goes through
+ * a GOT entry the loader binds to the first definition it finds, and Bionic's
+ * libc, loaded with the program, is searched before anything dlopen brings in
+ * (glibc searches in the same order, which is where test-native-shims.py shows
+ * the overwrite). An earlier version defined all three and filled them from
+ * /proc/self/environ at load, which wrote the environment the process was
+ * started with over the live one the first time a glibc addon loaded: every
+ * variable set since exec was gone and every one removed was back.
+ * build-glibc-shim.sh refuses a build that relocates any of the three by a
+ * bare name.
  */
-char **__shim_environ(void) { return environ; }
 FILE *__shim_stdin(void)  { return stdin; }
 FILE *__shim_stdout(void) { return stdout; }
 FILE *__shim_stderr(void) { return stderr; }
+
+/*
+ * The stubs are handed a copy of the environment, not Bionic's pointer. Each
+ * keeps what it is handed for the life of the process, and Bionic's setenv
+ * grows its array with reallocarray when a name is added (Android 10's libc.so
+ * does, read in its disassembly), which can free the block a kept pointer
+ * names. The strings are copied as well, so nothing a stub keeps depends on
+ * how Bionic manages its own memory.
+ *
+ * So an addon reading glibc's `environ` sees the environment as it was when
+ * its stub loaded, while getenv and setenv, forwarded to Bionic, see the live
+ * one. Reading the array races a concurrent setenv exactly as getenv does; the
+ * copy stops at the count it allocated for, or at the first NULL, whichever
+ * comes first, and a failed allocation leaves it shorter rather than unended.
+ */
+char **__shim_environ(void) {
+    size_t count = 0;
+    while (environ && environ[count]) count++;
+    char **copy = calloc(count + 1, sizeof(*copy));
+    if (!copy) return environ;
+    for (size_t i = 0; i < count && environ && environ[i]; i++) {
+        if (!(copy[i] = strdup(environ[i]))) break;
+    }
+    return copy;
+}
 
 /*
  * The last few glibc keeps and Bionic does not.
