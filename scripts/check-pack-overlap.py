@@ -9,7 +9,11 @@ its own tree; this is the one place that knows both.
 
 Run after the downloads that populate the trees. A check against an empty
 pack would pass for the wrong reason, so a pack whose directory exists but
-answers with nothing is refused rather than skipped.
+answers with nothing is refused rather than skipped, and so is a run that
+found no pack at all: it printed "no overlap between base and" over an empty
+list and exited 0. The Gradle task runs this only once a pack holds payload,
+and release.yml runs it after downloading every pack, so neither caller meets
+that case unless a download put its tree somewhere else.
 """
 
 import sys
@@ -37,10 +41,14 @@ def main() -> int:
         print("FAIL base module answers with no assets; nothing to compare")
         return 1
 
+    packs = [p for p in sorted(REPO.glob(PACK_GLOB)) if p.is_dir()]
+    if not packs:
+        print(f"FAIL no toolchain pack holds an assets directory ({PACK_GLOB}); "
+              "nothing was compared with the base module")
+        return 1
+
     overlaps = []
-    for pack in sorted(REPO.glob(PACK_GLOB)):
-        if not pack.is_dir():
-            continue
+    for pack in packs:
         entries = relative_paths(pack)
         if not entries:
             print(f"FAIL {pack.parents[2].name} has an assets directory with nothing in it")
@@ -58,8 +66,7 @@ def main() -> int:
         print("before any toolchain installs.")
         return 1
 
-    packs = [p.parents[2].name for p in sorted(REPO.glob(PACK_GLOB)) if p.is_dir()]
-    print(f"ok -- no overlap between base and {', '.join(packs)}")
+    print(f"ok -- no overlap between base and {', '.join(p.parents[2].name for p in packs)}")
     return 0
 
 

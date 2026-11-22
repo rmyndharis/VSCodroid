@@ -186,7 +186,7 @@ function newPage(options) {
     }
 
     // Zero-delay timers are the pump yielding between pieces and have to run
-    // for real. The hold expiry is two minutes away, so it is captured instead
+    // for real. The hold expiry is ten minutes away (HOLD_MS), so it is captured instead
     // and fired on demand: waiting for it would make this check take longer
     // than the whole suite, and stubbing the clock away would leave the release
     // untested, which is how a hold that never expires ships as a memory leak.
@@ -438,6 +438,33 @@ test('each piece decodes on its own', async () => {
     const perPiece = page.chunks.map((c) => Array.from(Buffer.from(c.base64, 'base64')));
     assert.deepStrictEqual(perPiece, [[1, 2], [3], [4, 5, 6]],
         'a piece that only decodes when joined to its neighbours would corrupt the file');
+});
+
+/**
+ * A piece far larger than one encode window, which is what a real read hands
+ * over: every piece above is a few bytes, so the windowing in encode() ran once
+ * per piece and nothing measured it. The window exists because
+ * String.fromCharCode.apply takes the bytes as arguments, and a call with every
+ * byte of a large piece overflows the stack (here at 200,000 arguments, not at
+ * 100,000), so the piece is a million bytes, not a multiple of the window, and
+ * patterned so a window dropped, repeated or reordered changes the result.
+ */
+test('a piece larger than one encode window arrives byte for byte', async () => {
+    const big = new Uint8Array(1000003);
+    for (let i = 0; i < big.length; i += 1) big[i] = (i * 7 + (i >> 15)) & 0xff;
+    const page = newPage();
+    const url = page.objectUrl([big, Uint8Array.from([1, 2, 3])]);
+    page.anchor(url, { download: 'big.bin' }).click();
+
+    page.send(url, 'dl-1');
+    await settle(() => page.finished.length > 0);
+
+    assert.deepStrictEqual(page.finished, [{ token: 'session-token', id: 'dl-1', error: '' }],
+        'a large piece has to be sent, not fail the download');
+    assert.strictEqual(page.chunks.length, 2, 'one bridge call per piece, however large');
+    assert.ok(Buffer.from(page.chunks[0].base64, 'base64').equals(Buffer.from(big)),
+        'the large piece has to decode to exactly its own bytes');
+    assert.deepStrictEqual(Array.from(Buffer.from(page.chunks[1].base64, 'base64')), [1, 2, 3]);
 });
 
 /**

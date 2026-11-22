@@ -355,8 +355,12 @@ add('running the script twice installs one listener of each kind', () => {
 add('the beforeunload listener is in the capture phase', () => {
     const p = page();
     const unload = p.listeners.find((l) => l.type === 'beforeunload');
-    assert.ok(unload.capture, 'a listener in the bubbling phase runs behind the page\'s own and any ' +
-        'that stops propagation');
+    // Exactly true, or an options object asking for it: any truthy value passed, so
+    // `{ capture: false }` or `{ passive: true }` read as the capture phase.
+    const capture = unload.capture === true
+        || (typeof unload.capture === 'object' && unload.capture !== null && unload.capture.capture === true);
+    assert.ok(capture, 'a listener in the bubbling phase runs behind the page\'s own and any ' +
+        `that stops propagation (registered with ${JSON.stringify(unload.capture)})`);
 });
 
 let failed = 0;

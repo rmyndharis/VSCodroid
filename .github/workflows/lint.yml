@@ -217,11 +217,6 @@ jobs:
       - name: Check the lint baseline has not grown
         run: python3 scripts/check-lint-baseline.py
 
-      # The committed half: the bundled extension list and the notices table are
-      # two hand-kept copies of one fact, and each edit only ever touched one.
-      # The other half of this script reads the extracted trees for the licence
-      # they declare, and runs from download-extensions.sh, because those trees
-      # are gitignored and no job here builds them.
       # Three Unicode dashes this project does not write, replaced by ordinary
       # punctuation. 857 of them had accumulated across 118 files before anyone
       # counted, because each arrives one edit at a time from an editor that
@@ -232,6 +227,11 @@ jobs:
       - name: Check the tree writes plain punctuation
         run: python3 scripts/check-plain-punctuation.py
 
+      # The committed half: the bundled extension list and the notices table are
+      # two hand-kept copies of one fact, and each edit only ever touched one.
+      # The other half of this script reads the extracted trees for the licence
+      # they declare, and runs from download-extensions.sh, because those trees
+      # are gitignored and no job here builds them.
       - name: Check the bundled extensions match the notices
         run: python3 scripts/check-bundled-extensions.py
 

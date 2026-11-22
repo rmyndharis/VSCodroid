@@ -2,6 +2,7 @@
 """Exercise extension version checks against real, temporary Git histories."""
 
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -10,6 +11,11 @@ import tempfile
 import unittest
 
 CHECK = Path(__file__).with_name("check-extension-updates.py")
+# git reads none of the machine's configuration, and no git variable a hook may have
+# exported: a developer's commit.gpgsign or core.hooksPath otherwise fails or rewrites
+# every fixture commit here, and the checker runs git too.
+ENV = {**{k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+       "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
 
 
 class ExtensionUpdatesTest(unittest.TestCase):
@@ -33,10 +39,10 @@ class ExtensionUpdatesTest(unittest.TestCase):
         shutil.copyfile(CHECK, self.check)
 
     def git(self, *args):
-        return subprocess.run(["git", "-C", str(self.root), *args], capture_output=True, check=True)
+        return subprocess.run(["git", "-C", str(self.root), *args], capture_output=True, check=True, env=ENV)
 
     def check_status(self):
-        return subprocess.run([sys.executable, str(self.check)], capture_output=True, text=True)
+        return subprocess.run([sys.executable, str(self.check)], capture_output=True, text=True, env=ENV)
 
     def test_semantic_manifest_edit_requires_new_directory(self):
         pkg = json.loads(self.manifest.read_text())
@@ -63,6 +69,16 @@ class ExtensionUpdatesTest(unittest.TestCase):
         self.git("add", "--", str(self.manifest.relative_to(self.root)))
         self.git("commit", "-qm", "Change title")
         self.assertNotEqual(0, self.check_status().returncode)
+
+    def test_adding_translation_requires_new_directory(self):
+        # A language file the directory did not ship with is served stale like an edited one:
+        # the server's extension scan is cached until the directory name changes.
+        (self.directory / "package.nls.ja.json").write_text('{"title":"Japanese"}')
+        result = self.check_status()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("package.nls.ja.json added without a directory version bump", result.stdout)
+        self.directory.rename(self.directory.with_name("vscodroid.example-1.0.1"))
+        self.assertEqual(0, self.check_status().returncode)
 
     def test_removing_translation_requires_new_directory(self):
         (self.directory / "package.nls.json").unlink()
@@ -101,13 +117,13 @@ class ExtensionUpdatesTest(unittest.TestCase):
         clone = Path(clones.name) / "shallow"
         subprocess.run(
             ["git", "clone", "-q", "--depth", "1", self.root.as_uri(), str(clone)],
-            capture_output=True, check=True,
+            capture_output=True, check=True, env=ENV,
         )
         (clone / "scripts").mkdir()
         shutil.copyfile(CHECK, clone / "scripts/check-extension-updates.py")
         result = subprocess.run(
             [sys.executable, str(clone / "scripts/check-extension-updates.py")],
-            capture_output=True, text=True,
+            capture_output=True, text=True, env=ENV,
         )
         self.assertNotEqual(0, result.returncode)
         self.assertIn("shallow", result.stdout + result.stderr)

@@ -8,6 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { execFileSync } = require('node:child_process');
+const { applyFixturePatch } = require('./lib/apply-fixture-patch');
 const { once } = require('node:events');
 const { stripTypeScriptTypes } = require('node:module');
 
@@ -107,7 +108,7 @@ module.exports = (async () => {
         fs.copyFileSync(path.join(__dirname, 'fixtures/web-client-server.ts'), sourceFile);
         for (const name of ['0006-callback-intent-relay.patch', '0043-serve-only-regular-files.patch']) {
             const patch = path.join(__dirname, '../patches', name);
-            execFileSync('git', ['apply', '--include=' + relativeTarget, patch], { cwd: temporary });
+            applyFixturePatch(temporary, patch, { include: [relativeTarget], changes: [relativeTarget] });
         }
 
         const rawSource = fs.readFileSync(sourceFile, 'utf8')

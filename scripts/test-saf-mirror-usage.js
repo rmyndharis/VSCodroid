@@ -6,7 +6,7 @@ const os = require('node:os');
 const hostPath = require('node:path');
 const path = hostPath.posix;
 const assert = require('node:assert/strict');
-const { execFileSync } = require('node:child_process');
+const { applyFixturePatch } = require('./lib/apply-fixture-patch');
 const { stripTypeScriptTypes } = require('node:module');
 
 // Added to node:module in 22.13 and 23.2. On anything older the destructured name
@@ -38,12 +38,13 @@ try {
         fs.mkdirSync(hostPath.dirname(destination), { recursive: true });
         fs.copyFileSync(hostPath.join(__dirname, 'fixtures', fixture), destination);
     }
-    execFileSync('git', ['apply', '--include=' + helperPath, '--include=' + configurationPath,
-        '--include=' + diskPath, hostPath.join(root, 'patches', '0035-claim-device-folder-copies-before-use.patch')], { cwd: temporary });
-    execFileSync('git', ['apply', '--include=' + helperPath, '--include=' + configurationPath,
-        hostPath.join(root, 'patches', '0038-publish-workspace-resource-roots.patch')], { cwd: temporary });
-    execFileSync('git', ['apply', '--include=' + configurationPath,
-        hostPath.join(root, 'patches', '0042-tolerate-non-list-workspace-folders.patch')], { cwd: temporary });
+    for (const [patch, files] of [
+        ['0035-claim-device-folder-copies-before-use.patch', [helperPath, configurationPath, diskPath]],
+        ['0038-publish-workspace-resource-roots.patch', [helperPath, configurationPath]],
+        ['0042-tolerate-non-list-workspace-folders.patch', [configurationPath]],
+    ]) {
+        applyFixturePatch(temporary, hostPath.join(root, 'patches', patch), { include: files, changes: files });
+    }
     helperSource = fs.readFileSync(hostPath.join(temporary, helperPath), 'utf8');
     configurationSource = fs.readFileSync(hostPath.join(temporary, configurationPath), 'utf8');
     diskSource = fs.readFileSync(hostPath.join(temporary, diskPath), 'utf8');

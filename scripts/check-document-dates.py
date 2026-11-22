@@ -30,6 +30,16 @@ request stayed green because none of them runs this, and the first notice would
 have been the release job aborting on a tag that was already public. lint.yml now
 takes `fetch-depth: 0` for this step, so the sweep that restales a date reddens on
 the way in.
+
+A change that is not on main yet is held to the day it can reach main, not to the
+day it was written. Main gets a squash merge, stamped when it merges, so a policy
+dated on the day of its branch commit passed every pull request check and failed
+on main the day after (measured, #426), and an edit not committed at all was held
+only to the last commit that had touched the file. Such a change is held to today,
+in the zone the squash is stamped in. That narrows the gap and cannot close it: a
+pull request merged on a later day than its last check still lands red on main.
+A file whose last change is already on main is checked exactly as before, which is
+every file on a push to main and on a tag.
 """
 
 import datetime
@@ -70,11 +80,31 @@ def refuse_shallow():
         )
 
 
+# The zone a squash merged through GitHub by this repository's owner is stamped in,
+# and so the zone in which main's day turns (00:00 at +07:00 is 17:00 UTC).
+MERGE_ZONE = datetime.timezone(datetime.timedelta(hours=7))
+
+
 def last_change(rel):
-    r = git("log", "-1", "--format=%ad", "--date=short", "--", rel)
+    """The date of the last commit that changed `rel`, and the commit."""
+    r = git("log", "-1", "--format=%H %ad", "--date=short", "--", rel)
     if r.returncode != 0 or not r.stdout.strip():
         sys.exit(f"FAIL git has no commit touching {rel}; the date cannot be checked")
-    return datetime.date.fromisoformat(r.stdout.strip())
+    commit, date = r.stdout.split()
+    return datetime.date.fromisoformat(date), commit
+
+
+def on_main(rel, commit):
+    """Whether the text of `rel` being checked is the text main already carries.
+
+    None when this checkout has no origin/main to ask, in which case only the commit
+    date is checked, as it always was.
+    """
+    if git("diff", "--quiet", "HEAD", "--", rel).returncode != 0:
+        return False
+    if git("rev-parse", "--verify", "-q", "refs/remotes/origin/main").returncode != 0:
+        return None
+    return git("merge-base", "--is-ancestor", commit, "refs/remotes/origin/main").returncode == 0
 
 
 def main():
@@ -92,14 +122,22 @@ def main():
                 "than removing the date."
             )
         stated = datetime.datetime.strptime(match.group(1), "%B %d, %Y").date()
-        changed = last_change(rel)
-        if stated < changed:
-            failures.append((rel, stated, changed))
+        changed, commit = last_change(rel)
+        landed = on_main(rel, commit)
+        if landed is None:
+            print(f"note    no origin/main here, so {rel} is held to its last commit only")
+        if landed is False:
+            today = datetime.datetime.now(MERGE_ZONE).date()
+            if stated < max(changed, today):
+                failures.append((rel, stated, f"changed and not on main yet, so it lands "
+                                              f"there no earlier than {max(changed, today)}"))
+        elif stated < changed:
+            failures.append((rel, stated, f"last changed {changed}"))
 
     if failures:
         print(f"FAIL {len(failures)} document(s) dated before their own contents:")
-        for rel, stated, changed in failures:
-            print(f"  {rel}  says {stated}, last changed {changed}")
+        for rel, stated, why in failures:
+            print(f"  {rel}  says {stated}, {why}")
         print(
             "  -> a reader takes the stated date as when the text was settled, and "
             "the privacy policy promises in its own body that this date moves with "

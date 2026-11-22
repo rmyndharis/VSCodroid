@@ -1,9 +1,6 @@
 name: Self-check Node compatibility
 
 on:
-  push:
-    branches:
-      - fix/self-check-node-version-message
   pull_request:
     branches: [main]
     paths:
@@ -11,6 +8,7 @@ on:
       - scripts/test-bridge-relay.js
       - scripts/test-saf-mirror-usage.js
       - scripts/test-server-startup.js
+      - scripts/lib/apply-fixture-patch.js
       - .github/workflows/self-check-node-compat.yml
   workflow_dispatch:
 
