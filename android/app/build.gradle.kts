@@ -1,4 +1,9 @@
 import java.util.Properties
+import javax.inject.Inject
+import org.gradle.api.file.ConfigurableFileCollection
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.FileSystemOperations
+import org.gradle.api.provider.ListProperty
 
 plugins {
     alias(libs.plugins.android.application)
@@ -8,7 +13,10 @@ plugins {
 val signingProps = Properties()
 rootProject.file("signing.properties").takeIf { it.exists() }?.inputStream()?.use { signingProps.load(it) }
 fun signingProp(key: String, envVar: String, fallback: String = "") =
-    signingProps.getProperty(key) ?: System.getenv(envVar) ?: fallback
+    signingProps.getProperty(key) ?: providers.environmentVariable(envVar).orNull ?: fallback
+
+val androidDir = rootProject.projectDir
+val appJniLibsDir = file("src/main/jniLibs/arm64-v8a")
 
 // The attribution documents, copied into the APK so a person holding the
 // binaries can read the notices that have to travel with them.
@@ -52,60 +60,72 @@ fun signingProp(key: String, envVar: String, fallback: String = "") =
 // treat that as the order of magnitude rather than as a figure to check against.
 //
 // They are read out of the APK by MainActivity's licences dialog and never
-// extracted, which is why they are a separate assets source directory: it keeps
+// extracted, which is why they are a generated assets source directory: it keeps
 // them out of the src/main/assets sum that sizes first-run extraction.
 //
-// Sync rather than Copy, because the app opens these by basename and a Copy
-// leaves behind whatever the last run wrote. Measured: with COPYING.GPLv3
-// removed from the tree, the Copy ran, succeeded, and left the previous run's
-// COPYING.GPLv3 in the output directory, where the next incremental APK
-// packaged it. A licence text still shipping under a name the repository no
-// longer has is the stale copy this task exists to avoid, arriving by the back
-// door. Only this task writes that directory, so deleting what it did not write
-// costs nothing.
-val bundleNotices = tasks.register<Sync>("bundleNotices") {
-    group = "build"
-    description = "Copies the attribution and licence documents into the APK's assets."
+// Sync via FileSystemOperations rather than Copy, because the app opens these
+// by basename and a Copy leaves behind whatever the last run wrote. Measured:
+// with COPYING.GPLv3 removed from the tree, a Copy ran, succeeded, and left the
+// previous run's COPYING.GPLv3 in the output directory, where the next
+// incremental APK packaged it. Only this task writes its output directory, so
+// fsOps.sync removes stale files cleanly while staying configuration-cache safe.
+abstract class BundleNoticesTask : DefaultTask() {
+    @get:Inject
+    abstract val fsOps: FileSystemOperations
 
-    val repoRoot = rootProject.projectDir.parentFile
-    // One list, read by the copy and by the guard below, so the two cannot
-    // name different documents. The names the app opens are kept beside it:
-    // com.vscodroid.util.Notices lists the same six, and NoticesTest compares
-    // the lists, so a rename here fails the build rather than emptying the
-    // dialog on a device.
-    val documents = listOf(
-        "NOTICE.md",
-        "docs/LEGAL_NOTICES.md",
-        "licenses/COPYING.GPLv2",
-        "licenses/COPYING.GPLv3",
-        "licenses/COPYING.LGPLv2.1",
-        "licenses/COPYING.LGPLv3"
-    ).map { File(repoRoot, it) }
-    from(documents)
-    into(layout.buildDirectory.dir("generated/notices"))
+    @get:Internal
+    abstract val repoRootDir: DirectoryProperty
+
+    @get:Input
+    abstract val documentPaths: ListProperty<String>
+
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val sourceFiles: ConfigurableFileCollection
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
 
     // A source that is not there fails the build rather than shortening the
-    // copy. Sync and Copy both skip a missing from() without a word, which is
-    // the measurement recorded above: with COPYING.GPLv3 removed the task ran
-    // and reported success. NoticesTest pins every one of these by sha256, but
-    // the test task is not in the packaging graph, so a local bundleRelease or
-    // scripts/build-aab.sh on a checkout with one moved aside reaches a signed
-    // AAB with every packaging gate green, and Notices.readOne then opens that
-    // entry of the licence chooser on its missing-document marker. For the
-    // LGPL-3.0 text that is the one copy a device that installed Ruby has of
-    // the terms GMP ships under.
-    doFirst {
-        val missing = documents.filterNot { it.isFile }
+    // copy. FileSystemOperations.sync skips a missing from() without a word, so
+    // every expected file is checked before the sync runs. NoticesTest pins
+    // every one of these by sha256, but the test task is not in the packaging
+    // graph, so a local bundleRelease or scripts/build-aab.sh on a checkout
+    // with one moved aside would otherwise reach a signed AAB with every
+    // packaging gate green.
+    @TaskAction
+    fun bundle() {
+        val root = repoRootDir.get().asFile
+        val expected = documentPaths.get().map { File(root, it) }
+        val missing = expected.filterNot { it.isFile }
         if (missing.isNotEmpty()) {
             throw GradleException(
-                "bundleNotices: ${missing.joinToString { it.relativeTo(repoRoot).path }} " +
+                "bundleNotices: ${missing.joinToString { it.relativeTo(root).path }} " +
                     "missing from the repository. The licences dialog would ship " +
                     "without it, and the GPL and LGPL require the text to travel " +
                     "with the binaries."
             )
         }
+        fsOps.sync {
+            from(expected)
+            into(outputDir)
+        }
     }
 }
+
+// One list, read by the task registration and by NoticesTest, so the two cannot
+// name different documents. The names the app opens are kept beside it:
+// com.vscodroid.util.Notices lists the same six, and NoticesTest compares
+// the lists, so a rename here fails the build rather than emptying the
+// dialog on a device.
+val noticeDocuments = listOf(
+    "NOTICE.md",
+    "docs/LEGAL_NOTICES.md",
+    "licenses/COPYING.GPLv2",
+    "licenses/COPYING.GPLv3",
+    "licenses/COPYING.LGPLv2.1",
+    "licenses/COPYING.LGPLv3"
+)
 
 android {
     namespace = "com.vscodroid"
@@ -127,7 +147,7 @@ android {
     signingConfigs {
         create("release") {
             storeFile = file(signingProp("storeFile", "VSCODROID_KEYSTORE_FILE",
-                "${System.getProperty("user.home")}/vscodroid-release.jks"))
+                "${providers.systemProperty("user.home").orNull ?: ""}/vscodroid-release.jks"))
             storePassword = signingProp("storePassword", "VSCODROID_KEYSTORE_PASSWORD")
             keyAlias = signingProp("keyAlias", "VSCODROID_KEY_ALIAS", "vscodroid")
             keyPassword = signingProp("keyPassword", "VSCODROID_KEY_PASSWORD")
@@ -361,18 +381,6 @@ android {
         }
     }
 
-    // The attribution documents, packaged so they reach the device. See
-    // `bundleNotices` at the foot of this file for why they are copied rather
-    // than committed here.
-    //
-    // Named by the task, not by its directory, and that is what carries the
-    // dependency. A bare path is a directory something happens to fill, so
-    // every consumer has to declare the producer itself or Gradle refuses the
-    // build at validation. Lint has several such consumers and AGP adds more
-    // between versions; naming the task answers for all of them at once.
-    // `bundleNotices` is registered above for this reason and no other.
-    sourceSets["main"].assets.srcDir(bundleNotices)
-
     lint {
         // The baseline is what makes this affordable: the 3 issues recorded in
         // lint-baseline.xml are filtered out of every report, so what remains is
@@ -476,6 +484,28 @@ android {
         compilerOptions {
             jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
         }
+    }
+}
+
+// Wire attribution and licence documents through the Variant API so AGP
+// registers both the generated assets directory and its producer task edges for
+// every variant (asset merges and lint) without legacy sourceSets provider opt-outs.
+androidComponents {
+    val repoRoot = rootProject.projectDir.parentFile
+    val documents = noticeDocuments
+    onVariants { variant ->
+        val variantCap = variant.name.replaceFirstChar { it.uppercase() }
+        val bundleNotices = tasks.register<BundleNoticesTask>("bundle${variantCap}Notices") {
+            group = "build"
+            description = "Copies the attribution and licence documents into the ${variant.name} APK's assets."
+            repoRootDir.set(repoRoot)
+            documentPaths.set(documents)
+            sourceFiles.from(documents.map { File(repoRoot, it) })
+        }
+        variant.sources.assets?.addGeneratedSourceDirectory(
+            bundleNotices,
+            BundleNoticesTask::outputDir,
+        )
     }
 }
 
@@ -1104,6 +1134,7 @@ val verifyServerTree = tasks.register<Exec>("verifyServerTree") {
     description = "Checks the server tree in assets/ is one this app can run."
 
     val serverTree = "android/app/src/main/assets/vscode-reh"
+    val isStubAssets = stubAssets
 
     workingDir = rootProject.projectDir.parentFile
     commandLine("python3", "scripts/verify-server-tree.py", serverTree)
@@ -1111,7 +1142,7 @@ val verifyServerTree = tasks.register<Exec>("verifyServerTree") {
     // Fail loudly unless the caller explicitly asked for a stub-asset build.
     // This also guarantees the xterm hook checks in verify-server-tree.py run
     // on every real packaging build.
-    onlyIf { !stubAssets.get() }
+    onlyIf { !isStubAssets.get() }
 
     failOnExit(
         "The server tree in assets/ is not one this app can run.\n" +
@@ -1148,12 +1179,15 @@ val verifyServerTree = tasks.register<Exec>("verifyServerTree") {
 // produced the mixture, not here.
 val jniLibsStubCeiling = 1000L
 
-// Asked by both packaging gates below, so they arm and skip together on one
-// answer rather than on two copies of it: a tree worth examining for one is
-// worth examining for the other, and a placeholder tree is neither's business.
-fun jniLibsHoldsRealBinary(): Boolean =
-    file("src/main/jniLibs/arm64-v8a").listFiles()
-        ?.any { it.name.endsWith(".so") && it.length() >= jniLibsStubCeiling } == true
+// Asked by the jniLibs packaging gates below, so they arm and skip together on
+// one answer rather than on copies of it. Lives in a plain object taking a File
+// so task onlyIf lambdas never capture the Gradle script instance under
+// configuration cache.
+object PackagingChecks {
+    fun jniLibsHoldsRealBinary(jniLibsDir: File, stubCeiling: Long): Boolean =
+        jniLibsDir.listFiles()
+            ?.any { it.name.endsWith(".so") && it.length() >= stubCeiling } == true
+}
 
 // Every binary in jniLibs, checked where it is packaged rather than only where
 // it was downloaded.
@@ -1182,6 +1216,9 @@ fun jniLibsHoldsRealBinary(): Boolean =
 val verifyBundledBinaries = tasks.register<Exec>("verifyBundledBinaries") {
     group = "verification"
     description = "Checks every bundled binary in jniLibs can load on Android."
+
+    val jniLibsDir = appJniLibsDir
+    val stubCeiling = jniLibsStubCeiling
 
     workingDir = rootProject.projectDir.parentFile
     commandLine(
@@ -1216,7 +1253,7 @@ val verifyBundledBinaries = tasks.register<Exec>("verifyBundledBinaries") {
     // mean distinguishing a truncated binary from the placeholder by content
     // rather than size, and that trade is not worth failing the three jobs that
     // legitimately write a placeholder.
-    onlyIf { jniLibsHoldsRealBinary() }
+    onlyIf { PackagingChecks.jniLibsHoldsRealBinary(jniLibsDir, stubCeiling) }
 
     failOnExit(
         "A bundled binary in jniLibs cannot load on Android.\n" +
@@ -1314,11 +1351,12 @@ val verifyRequiredBinaries = tasks.register("verifyRequiredBinaries") {
     group = "verification"
     description = "Checks every binary the app resolves by name is in jniLibs."
 
-    val jniLibsDir = file("src/main/jniLibs/arm64-v8a")
+    val jniLibsDir = appJniLibsDir
+    val stubCeiling = jniLibsStubCeiling
     val required = requiredJniLibs
     val producers = jniLibProducers
 
-    onlyIf { jniLibsHoldsRealBinary() }
+    onlyIf { PackagingChecks.jniLibsHoldsRealBinary(jniLibsDir, stubCeiling) }
 
     doLast {
         val missing = required.filterNot { File(jniLibsDir, it).isFile }
@@ -1358,13 +1396,16 @@ val verifyBundledShellPaths = tasks.register<Exec>("verifyBundledShellPaths") {
     group = "verification"
     description = "Checks no bundled binary names Termux's prefix as its shell."
 
+    val jniLibsDir = appJniLibsDir
+    val stubCeiling = jniLibsStubCeiling
+
     workingDir = rootProject.projectDir.parentFile
     commandLine(
         "python3", "scripts/patch-default-shell.py",
         "--check", "android/app/src/main/jniLibs/arm64-v8a",
     )
 
-    onlyIf { jniLibsHoldsRealBinary() }
+    onlyIf { PackagingChecks.jniLibsHoldsRealBinary(jniLibsDir, stubCeiling) }
 
     failOnExit(
         "A bundled binary names a shell inside Termux's data directory.\n" +
@@ -1404,6 +1445,15 @@ val verifyBundledShellPaths = tasks.register<Exec>("verifyBundledShellPaths") {
 val checkPackOverlap = tasks.register<Exec>("checkPackOverlap") {
     group = "verification"
     description = "Checks no asset pack ships a file the base module already ships."
+
+    val projectRootDir = androidDir
+
+    // The same question of every pack, found the way check-pack-overlap.py finds
+    // them, so a pack added later is covered here without this line being edited.
+    fun anyPackHoldsPayload(): Boolean =
+        projectRootDir.listFiles()
+            ?.any { it.isDirectory && it.name.startsWith("toolchain_") &&
+                File(it, "src/main/assets/usr").isDirectory } == true
 
     workingDir = rootProject.projectDir.parentFile
     commandLine("python3", "scripts/check-pack-overlap.py")
@@ -1476,11 +1526,12 @@ val verifyPythonPlatform = tasks.register<Exec>("verifyPythonPlatform") {
     description = "Checks the bundled Python extension answers Linux on this platform."
 
     val extensions = File(projectDir, "src/main/assets/extensions")
+    val isStubAssets = stubAssets
 
     workingDir = rootProject.projectDir.parentFile
     commandLine("python3", "scripts/patch-python-platform.py", "--check", "missing")
 
-    onlyIf { !stubAssets.get() }
+    onlyIf { !isStubAssets.get() }
 
     doFirst {
         val tree = extensions.listFiles()
@@ -1491,7 +1542,7 @@ val verifyPythonPlatform = tasks.register<Exec>("verifyPythonPlatform") {
                     "Run scripts/download-extensions.sh before packaging, or pass " +
                     "-Pvscodroid.stubAssets=true for a stub-asset build."
             )
-        commandLine(
+        (this as Exec).commandLine(
             "python3", "scripts/patch-python-platform.py", "--check",
             "android/app/src/main/assets/extensions/${tree.name}",
         )
@@ -1529,11 +1580,12 @@ val verifyVenvHome = tasks.register<Exec>("verifyVenvHome") {
     description = "Checks the bundled venv records a home the interpreter can start from."
 
     val usrLib = File(projectDir, "src/main/assets/usr/lib")
+    val isStubAssets = stubAssets
 
     workingDir = rootProject.projectDir.parentFile
     commandLine("python3", "scripts/patch-venv-home.py", "--check", "missing")
 
-    onlyIf { !stubAssets.get() }
+    onlyIf { !isStubAssets.get() }
 
     doFirst {
         val stdlib = usrLib.listFiles()
@@ -1547,7 +1599,7 @@ val verifyVenvHome = tasks.register<Exec>("verifyVenvHome") {
                     "-Pvscodroid.stubAssets=true for a stub-asset build."
             )
         }
-        commandLine(
+        (this as Exec).commandLine(
             "python3", "scripts/patch-venv-home.py", "--check",
             "android/app/src/main/assets/usr/lib/${stdlib.name}/venv/__init__.py",
         )
@@ -1574,10 +1626,12 @@ val verifyNlsParity = tasks.register<Exec>("verifyNlsParity") {
     group = "verification"
     description = "Checks translated NLS bundles cover all supported locales and match the server key count."
 
+    val isStubAssets = stubAssets
+
     workingDir = rootProject.projectDir.parentFile
     commandLine("python3", "scripts/verify-nls-parity.py")
 
-    onlyIf { !stubAssets.get() }
+    onlyIf { !isStubAssets.get() }
 
     failOnExit(
         "The translated string bundles in android/app/src/main/assets/nls/ do not\n" +
@@ -1588,19 +1642,6 @@ val verifyNlsParity = tasks.register<Exec>("verifyNlsParity") {
             "or pass -Pvscodroid.stubAssets=true for a stub-asset build."
     )
 }
-
-fun rubyPackHoldsPayload(): Boolean =
-    File(rootProject.projectDir, "toolchain_ruby/src/main/assets/usr").isDirectory
-
-fun cppPackHoldsPayload(): Boolean =
-    File(rootProject.projectDir, "toolchain_cpp/src/main/assets/usr").isDirectory
-
-// The same question of every pack, found the way check-pack-overlap.py finds
-// them, so a pack added later is covered here without this line being edited.
-fun anyPackHoldsPayload(): Boolean =
-    rootProject.projectDir.listFiles()
-        ?.any { it.isDirectory && it.name.startsWith("toolchain_") &&
-            File(it, "src/main/assets/usr").isDirectory } == true
 
 // The same question asked of the Ruby asset pack, which is in neither jniLibs
 // nor the app module's assets.
@@ -1620,6 +1661,11 @@ fun anyPackHoldsPayload(): Boolean =
 val verifyRubyPackShellPaths = tasks.register<Exec>("verifyRubyPackShellPaths") {
     group = "verification"
     description = "Checks no file in the Ruby asset pack names Termux's prefix as its shell."
+
+    val projectRootDir = androidDir
+
+    fun rubyPackHoldsPayload(): Boolean =
+        File(projectRootDir, "toolchain_ruby/src/main/assets/usr").isDirectory
 
     workingDir = rootProject.projectDir.parentFile
     commandLine(
@@ -1663,6 +1709,11 @@ val verifyCppPackShellPaths = tasks.register<Exec>("verifyCppPackShellPaths") {
     group = "verification"
     description = "Checks no file in the C/C++ asset pack names Termux's prefix as its shell."
 
+    val projectRootDir = androidDir
+
+    fun cppPackHoldsPayload(): Boolean =
+        File(projectRootDir, "toolchain_cpp/src/main/assets/usr").isDirectory
+
     workingDir = rootProject.projectDir.parentFile
     commandLine(
         "python3", "scripts/patch-default-shell.py",
@@ -1688,20 +1739,6 @@ val verifyCppPackShellPaths = tasks.register<Exec>("verifyCppPackShellPaths") {
 }
 
 
-// Lint's own tasks read the asset directories by path rather than through the
-// source set, so naming the task above does not reach them and they have to be
-// told separately. Two do it today, `generateReleaseLintVitalReportModel` and
-// `lintVitalAnalyzeRelease`, and AGP has moved that set between versions, so
-// this matches the family rather than the two names: a task added later would
-// otherwise fail the build at validation, and only in the release graph.
-//
-// That graph is the one least exercised. `release.yml` runs `assembleRelease`
-// at tag time, `r8.yml` runs `optimizeReleaseResources` and `lintVitalRelease`
-// against a stub tree on a weekly cron and when its watched paths change, and
-// no other workflow runs a release task at all.
-tasks.matching { it.name.contains("Lint") || it.name.contains("lint") }
-    .configureEach { dependsOn(bundleNotices) }
-
 // A dependency of the merge, not of the package or the assemble: the point is
 // to stop the wrong tree getting into an APK rather than to describe one that
 // already did.
@@ -1720,7 +1757,6 @@ val packagingGates = listOf(
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
     .configureEach {
         dependsOn(packagingGates)
-        dependsOn(bundleNotices)
     }
 
 // The same set, by name, so the graph can be asked whether they are in it.
@@ -1743,12 +1779,9 @@ tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
 // `optimizeReleaseResources lintVitalRelease` carries none either, so neither
 // pays for this and neither can be failed by it.
 //
-// ⚠️ `gradle.taskGraph.whenReady` is not supported with Gradle's configuration
-// cache, which is off here: gradle.properties sets only jvmargs and the AGP
-// flags, and every build prints the "Consider enabling configuration cache"
-// hint. Whoever turns it on has to move this to a build service or flow action.
-// The question being asked is about the graph, so leaving that unexplained is
-// the failure mode, not the assertion itself.
+// Captures only plain serializable values (projectPrefix, packagingGateNames,
+// File paths and ceiling) ahead of the listener so it remains compatible with
+// Gradle's configuration cache.
 // Derived, not restated. What that changes, said plainly because it cuts both
 // ways: the two lists can no longer disagree, so "wired but not verified" and
 // "verified but not wired" both stop being possible states rather than becoming
@@ -1758,7 +1791,11 @@ tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
 // named. What it can no longer see is a gate deleted from `packagingGates`
 // outright, because that deletes it from both sides at once. The alarm above is
 // what covers the detachment case that used to be argued for the second list.
+val projectPrefix = "${project.path}:"
 val packagingGateNames = packagingGates.map { it.name }
+val jniLibsDirForGraph = appJniLibsDir
+val stubCeilingForGraph = jniLibsStubCeiling
+val serverMainForGraph = file("src/main/assets/vscode-reh/out/server-main.js")
 
 gradle.taskGraph.whenReady {
     // This project's tasks only. The gates named below are this project's, so a
@@ -1768,8 +1805,7 @@ gradle.taskGraph.whenReady {
     // holds exactly one, :app:mergeReleaseAssets, and the asset packs bring
     // generateAssetPackManifest instead), so this scopes the question rather
     // than filtering anything out yet.
-    val prefix = "${project.path}:"
-    val here = allTasks.filter { it.path.startsWith(prefix) }
+    val here = allTasks.filter { it.path.startsWith(projectPrefix) }
     val packaging = here.map { it.name }
         .filter { it.startsWith("merge") && it.endsWith("Assets") }
 
@@ -1863,8 +1899,8 @@ gradle.taskGraph.whenReady {
     // halves are placeholders together and neither is this check's business.
     // Real binaries beside no server tree is a half-prepared tree, and that
     // mixture is what no gate in this file can see.
-    if (jniLibsHoldsRealBinary() &&
-        !file("src/main/assets/vscode-reh/out/server-main.js").isFile
+    if (PackagingChecks.jniLibsHoldsRealBinary(jniLibsDirForGraph, stubCeilingForGraph) &&
+        !serverMainForGraph.isFile
     ) {
         throw GradleException(
             "This build packages an asset tree (${packaging.joinToString(", ")}) " +
@@ -1955,6 +1991,8 @@ finalizedGates.forEach { (producer, gate) ->
     }
 }
 
+val finalizedGateNames = finalizedGates.map { (producer, gate) -> producer to gate.name }
+
 // What this catches, exactly: the producer runs and its gate does not. That is
 // a gate excluded with `-x`, a gate deleted from this file with its producer
 // left behind, and any edit to the `finalizedBy` wiring above that stops the
@@ -1978,11 +2016,10 @@ finalizedGates.forEach { (producer, gate) ->
 // registered further up this file, and a lambda cannot capture a val declared
 // after it. Gradle accepts any number of these listeners.
 gradle.taskGraph.whenReady {
-    val prefix = "${project.path}:"
-    val present = allTasks.filter { it.path.startsWith(prefix) }.map { it.name }.toSet()
-    val detached = finalizedGates
-        .filter { (producer, gate) -> producer in present && gate.name !in present }
-        .map { (producer, gate) -> "  ${gate.name}, which should follow $producer" }
+    val present = allTasks.filter { it.path.startsWith(projectPrefix) }.map { it.name }.toSet()
+    val detached = finalizedGateNames
+        .filter { (producer, gateName) -> producer in present && gateName !in present }
+        .map { (producer, gateName) -> "  $gateName, which should follow $producer" }
     if (detached.isNotEmpty()) {
         throw GradleException(
             "This build runs a task that a verification gate is attached to, and the " +
