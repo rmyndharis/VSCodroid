@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A dotfile or `~/.vscodroid/data/Machine/settings.json` that links into a missing folder is left alone, without the app's text, until a later launch or setup can write it.
 - A one-letter suggestion picked over a word that a keyboard reopened, such as `I` over `is`, is typed after the word on every pick, where from the seventh in a row it replaced the word, because a stale letter from the keyboard looks the same.
+- Rebased the Code-OSS server to `1.141.2` with hardened deferred-render IME EditContext synchronization.
 
 ### Fixed
 
@@ -126,6 +127,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SSH key generation and lookup bridge methods now strip trailing public key comments before returning keys over the workbench channel.
 - PtyHost worker threads close their message port on disconnect and honor immediate `SIGKILL` escalation instead of stalling three seconds on teardown.
 - Extension host reconnections clear failed or closed paused pipe sockets instead of locking out subsequent worker dials.
+
+### Security
+
+- Replaced `'unsafe-inline'` in the webview pre-frame CSP with an exact SHA-256 script digest verified during packaging, and dropped wildcard `127.0.0.1` ports from the web worker iframe CSP.
 
 ## [1.10.1] - 2026-11-21
 
