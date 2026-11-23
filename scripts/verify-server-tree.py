@@ -9,6 +9,9 @@ other gate and only show up on a device.
     verify-server-tree.py <tree>
 """
 
+import base64
+import hashlib
+from html.parser import HTMLParser
 import json
 import os
 import pathlib
@@ -351,6 +354,82 @@ def check_language_detection(tree):
         check(False, label, str(error))
         return
     check(result.returncode == 0, label, (result.stdout + result.stderr).strip())
+
+
+class _WebviewCspParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.csp_contents = []
+        self.inline_scripts = []
+        self._in_inline_script = False
+        self._buf = []
+
+    def handle_starttag(self, tag, attrs):
+        name = tag.lower()
+        attr_map = {k.lower(): (v or "") for k, v in attrs}
+        if name == "meta" and attr_map.get("http-equiv", "").strip().lower() == "content-security-policy":
+            if "content" in attr_map:
+                self.csp_contents.append(attr_map["content"])
+        elif name == "script" and "src" not in attr_map:
+            self._in_inline_script = True
+            self._buf = []
+
+    def handle_endtag(self, tag):
+        if tag.lower() == "script" and self._in_inline_script:
+            self.inline_scripts.append("".join(self._buf))
+            self._in_inline_script = False
+            self._buf = []
+
+    def handle_data(self, data):
+        if self._in_inline_script:
+            self._buf.append(data)
+
+
+def check_webview_pre_csp(tree):
+    """Verify webview pre/index.html pins its inline script by exact SHA-256 without 'unsafe-inline'."""
+    rel = "out/vs/workbench/contrib/webview/browser/pre/index.html"
+    path = tree / rel
+    try:
+        html = path.read_text(encoding="utf-8")
+    except OSError as e:
+        check(False, f"{rel} is readable", str(e))
+        return
+
+    parser = _WebviewCspParser()
+    parser.feed(html)
+    parser.close()
+
+    script_src_tokens = None
+    for policy in parser.csp_contents:
+        for directive in policy.split(";"):
+            parts = directive.strip().split()
+            if parts and parts[0].lower() == "script-src":
+                script_src_tokens = parts[1:]
+                break
+        if script_src_tokens is not None:
+            break
+
+    if script_src_tokens is None:
+        check(False, "webview pre/index.html CSP script-src omits 'unsafe-inline'",
+              "no <meta http-equiv=\"Content-Security-Policy\"> script-src directive found")
+        check(False, "webview pre/index.html CSP script-src SHA-256 matches inline script",
+              "no <meta http-equiv=\"Content-Security-Policy\"> script-src directive found")
+        return
+
+    lower_tokens = [tok.lower() for tok in script_src_tokens]
+    check("'unsafe-inline'" not in lower_tokens,
+          "webview pre/index.html CSP script-src omits 'unsafe-inline'",
+          "script-src permits 'unsafe-inline'; pin the inline script by exact SHA-256 in patch 0005")
+
+    expected_hashes = [
+        f"'sha256-{base64.b64encode(hashlib.sha256(body.encode('utf-8')).digest()).decode('ascii')}'"
+        for body in parser.inline_scripts
+    ]
+    declared_hashes = [tok for tok in script_src_tokens if tok.startswith("'sha256-") and tok.endswith("'")]
+    ok_hashes = bool(expected_hashes) and set(expected_hashes) == set(declared_hashes)
+    check(ok_hashes,
+          "webview pre/index.html CSP script-src SHA-256 matches inline script",
+          f"expected {expected_hashes or ['<no inline script>']}, found {declared_hashes or ['<none>']}")
 
 
 def main(tree):
@@ -719,6 +798,7 @@ def main(tree):
               "extendWorkbenchPage in assets/server.js to match the page")
 
     check_default_theme(tree)
+    check_webview_pre_csp(tree)
 
     # The Mobile CSS block is appended to the packaged workbench.css at server
     # build time, and on 2026-08-15 its content changed (the Accounts/Manage
@@ -1104,6 +1184,58 @@ def self_test() -> int:
                     print(f"  FAIL   self-test: {label} rename was not detected")
                     return 1
     print("  ok     self-test: xterm timer, composition end and composition send member renames are refused")
+    with tempfile.TemporaryDirectory() as tmp:
+        tree = pathlib.Path(tmp)
+        pre_index = tree / "out/vs/workbench/contrib/webview/browser/pre/index.html"
+        pre_index.parent.mkdir(parents=True)
+        script_body = "\n\t\tconst disableServiceWorker = true;\n\t"
+        good_hash = base64.b64encode(hashlib.sha256(script_body.encode("utf-8")).digest()).decode("ascii")
+        bad_hash = base64.b64encode(hashlib.sha256(b"different").digest()).decode("ascii")
+        csp_cases = (
+            (
+                "unsafe-inline",
+                f"<head><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline' 'self';\"></head>"
+                f"<body><script type=\"module\">{script_body}</script></body>",
+                ("FAIL    webview pre/index.html CSP script-src omits 'unsafe-inline'",),
+            ),
+            (
+                "wrong hash",
+                f"<head><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'sha256-{bad_hash}' 'self';\"></head>"
+                f"<body><script type=\"module\">{script_body}</script></body>",
+                (
+                    "ok      webview pre/index.html CSP script-src omits 'unsafe-inline'",
+                    "FAIL    webview pre/index.html CSP script-src SHA-256 matches inline script",
+                ),
+            ),
+            (
+                "valid hash",
+                f"<head><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'sha256-{good_hash}' 'self';\"></head>"
+                f"<body><script type=\"module\">{script_body}</script></body>",
+                (
+                    "ok      webview pre/index.html CSP script-src omits 'unsafe-inline'",
+                    "ok      webview pre/index.html CSP script-src SHA-256 matches inline script",
+                ),
+            ),
+        )
+        for case_name, html, wants in csp_cases:
+            pre_index.write_text(html, encoding="utf-8")
+            out = io.StringIO()
+            failed = False
+            with contextlib.redirect_stdout(out):
+                check_webview_pre_csp(tree)
+            text = out.getvalue()
+            for want in wants:
+                if want not in text:
+                    print(f"  FAIL   self-test: webview pre/index.html CSP case {case_name!r} missing {want!r}:\n{text}")
+                    return 1
+            if case_name == "valid hash" and failed:
+                print(f"  FAIL   self-test: webview pre/index.html valid hash case failed:\n{text}")
+                return 1
+            if case_name != "valid hash" and not failed:
+                print(f"  FAIL   self-test: webview pre/index.html {case_name!r} case unexpectedly passed:\n{text}")
+                return 1
+    failed = False
+    print("  ok     self-test: webview pre/index.html CSP rejects unsafe-inline and wrong hashes and accepts valid hashes")
     return 0
 
 

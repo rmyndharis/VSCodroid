@@ -1693,7 +1693,7 @@ flowchart TD
   P --> P2["0002 user data path: accept Android"]
   P --> P3["0003 Pty Host as a worker_thread"]
   P --> P4["0004 Extension Host as a worker_thread"]
-  P --> P5["0005 webview: disable the service worker, relax its CSP"]
+  P --> P5["0005 webview: disable the service worker and pin patched script by SHA-256"]
   P --> P6["0006 OAuth callback relayed into the app over intent://"]
   P --> P8["0008 activity bar overflow sized from live height"]
   P --> P9["0009 marketplace: request the alpine target on Android"]

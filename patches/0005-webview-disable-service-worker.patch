@@ -1,4 +1,4 @@
-Disable the webview service worker, and relax its CSP to match.
+Disable the webview service worker and pin the patched inline script by SHA-256.
 
 A webview runs in a cross-origin iframe. Android's WebView will let a
 ServiceWorkerClient intercept the worker script, but activation never completes
@@ -7,50 +7,43 @@ webview stays blank indefinitely. Resources are served through
 shouldInterceptRequest on the Kotlin side instead, so the worker has nothing to
 do here even when it does start.
 
-The CSP change is a consequence, not a preference. script-src pins the inline
-script by sha256, and patching that script changes its digest. Planning recorded
-it as unverified whether the build recomputes the hash; it does not: nothing
-under build/ touches it, and the value is byte-identical between the source file
-and the packaged output. Left alone, the patched script would be blocked and
-every webview would be blank for a different reason than before.
-
-'unsafe-inline' is narrower here than it sounds: default-src stays 'none',
-frame-src stays 'self', and the only inline script in the document is the one
-shipped with it.
+The CSP update matches the patched script digest without relaxing script-src to
+'unsafe-inline'. Nothing under build/ recomputes this hash (the packaged
+pre/index.html is copied verbatim from source), so script-src pins the exact
+base64(sha256(utf8(scriptBody))) digest of the patched inline <script>:
+'sha256-el/TS/5fBUMnU8ReiHF6R2lXHp9nt5L5kVHHNXSr188='. scripts/verify-server-tree.py recomputes the inline script
+digest and rejects either 'unsafe-inline' or any hash drift.
 
 The explanatory comment sits outside the <meta> element. An earlier revision put
 it between the tag name and its attributes, which breaks the element: the browser
 stops parsing it as a tag and renders content="default-src 'none'; ..." as
-visible text at the top of every webview, with no CSP applied at all. It was
-caught on screen: the webviews rendered, but only because the policy had
-silently gone missing.
+visible text at the top of every webview, with no CSP applied at all.
 
 diff --git a/src/vs/workbench/contrib/webview/browser/pre/index.html b/src/vs/workbench/contrib/webview/browser/pre/index.html
-index 42c7c01..b54597e 100644
+index 42c7c01a..3e5be9a2 100644
 --- a/src/vs/workbench/contrib/webview/browser/pre/index.html
 +++ b/src/vs/workbench/contrib/webview/browser/pre/index.html
-@@ -4,8 +4,12 @@
+@@ -4,8 +4,11 @@
  <head>
  	<meta charset="UTF-8">
  
-+	<!-- script-src is 'unsafe-inline' rather than a hash because the inline script
-+	     below is patched, which changes its digest. Nothing in the build recomputes
-+	     this value, verified by comparing source against packaged output, so leaving
-+	     the hash would block the script and blank every webview. -->
++	<!-- script-src pins the patched inline script below by its exact SHA-256 digest
++	     because nothing in the build recomputes this value. Keep this comment
++	     outside <meta> so the browser still parses the policy element. -->
  	<meta http-equiv="Content-Security-Policy"
 -		content="default-src 'none'; script-src 'sha256-FFQoOVVa2tOE3uqUvirwaMNT20TZmrHcL2aaOjJ8BUo=' 'self'; frame-src 'self'; style-src 'unsafe-inline';">
-+		content="default-src 'none'; script-src 'unsafe-inline' 'self'; frame-src 'self'; style-src 'unsafe-inline';">
++		content="default-src 'none'; script-src 'sha256-el/TS/5fBUMnU8ReiHF6R2lXHp9nt5L5kVHHNXSr188=' 'self'; frame-src 'self'; style-src 'unsafe-inline';">
  
  	<!-- Disable pinch zooming -->
  	<meta name="viewport"
-@@ -33,7 +37,12 @@
+@@ -33,7 +36,12 @@
  		const ID = searchParams.get('id');
  		const webviewOrigin = searchParams.get('origin');
  		const onElectron = searchParams.get('platform') === 'electron';
 -		const disableServiceWorker = searchParams.has('disableServiceWorker');
 +		// Always disabled on Android. The WebView will let its ServiceWorkerClient
 +		// intercept the worker script, but activation never completes in the
-+		// cross-origin iframe a webview runs in -- controllerchange does not fire, so
++		// cross-origin iframe a webview runs in: controllerchange does not fire, so
 +		// workerReady never resolves and the webview stays blank forever. Resources
 +		// are served through shouldInterceptRequest on the Kotlin side instead.
 +		const disableServiceWorker = true;

@@ -97,7 +97,8 @@
 # extensionHostProcess.js, which no row named. Without it every extension dies
 # at the first WebSocket drop, and the server half alone would still pass.
 0004 extHost reconnect|out/vs/workbench/api/node/extensionHostProcess.js|could not reattach to the server
-0005 webview csp|out/vs/workbench/contrib/webview/browser/pre/index.html|script-src 'unsafe-inline'
+0005 webview csp|out/vs/workbench/contrib/webview/browser/pre/index.html|script-src 'sha256-el/TS/5fBUMnU8ReiHF6R2lXHp9nt5L5kVHHNXSr188='
+0005 webview service worker disabled|out/vs/workbench/contrib/webview/browser/pre/index.html|const disableServiceWorker = true;
 0006 callback relay|out/vs/code/browser/workbench/callback.html|intent://callback
 0006 callback URI decoding|out/vs/code/browser/workbench/callback.html|const path = params.get('vscode-path')
 0006 callback top-document check|out/vs/code/browser/workbench/callback.html|window.top === window.self
