@@ -110,6 +110,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `NOTICE.md` gives numpy's licence as BSD 3-Clause with parts under 0BSD, MIT, Zlib and CC0 1.0, not BSD 2-Clause, and `LEGAL_NOTICES.md` quotes the expression the wheel declares.
 - The user guide explains the 800 MB setup asks for as the files plus their allocation on disk and a small margin, not working room, and the README calls its core size the files' own.
 - The README and the user guide no longer quote unmeasured figures: 400-700 MB of memory for the app, and the Antigravity engine's download, unpacked and memory sizes.
+- Updating `ms-python.python` from Open VSX no longer breaks Python environment activation or shell detection on Android.
+- Device-folder synchronization no longer clobbers concurrent mirror files, exhausts cursors on deep trees, or drops edits when inotify overflows.
+- Uninstalling an optional toolchain on Play Store builds now releases its asset pack instead of reinstalling it on the next launch, and partial uninstalls or aborted cross-root upgrades leave toolchain metadata consistent.
+- Downloads no longer report contradictory outcomes or keep partial files when completion races an active write or open destination picker.
+- WebView port switching, main-frame virtual CDN navigation, workspace resource roots, and loopback proxying now track active server restarts and reject unauthorized main-frame or non-read requests.
+- Closing or recreating the app now dismisses all modal dialogs, unblocks forced-removal confirmations, and shuts down the bridge disk executor.
+- Right status bar items remain reachable with TalkBack and hardware keyboards, portrait Welcome shortcuts wrap without clipping, and `AlertDialog` buttons meet WCAG 2.1 AA contrast in light and dark modes.
+- Backward selections in lent keyboard contexts, cancelled `ExtraKeyRow` multi-touch gestures, and `LongPressPopup` inset clamping and rounded corners now behave reliably.
+- Bundled extensions clear pending bridge timers on reply and deactivation, restrict Run File to local workspace schemes, avoid `NaN%` storage readings, and prefer resolved LAN addresses when advising dev-server binds.
 
 ## [1.10.1] - 2026-11-21
 
