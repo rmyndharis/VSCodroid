@@ -135,6 +135,73 @@ shutil.copytree(source, destination, dirs_exist_ok=True)
             for identifier, version, _ in pins:
                 assert_runtime_tree(assets / f"{identifier}-{version}")
 
+    def test_nested_dotfiles_rename_children_before_parents(self):
+        with tempfile.TemporaryDirectory(prefix="vscodroid-ext-dotfiles-") as temporary:
+            root = Path(temporary)
+            scripts = root / "scripts"
+            scripts.mkdir()
+            downloader = scripts / "download-extensions.sh"
+            shutil.copyfile(ROOT / "scripts/download-extensions.sh", downloader)
+            shutil.copyfile(ROOT / "scripts/check-extension.py", scripts / "check-extension.py")
+            for helper in ("patch-python-platform.py", "check-bundled-extensions.py"):
+                (scripts / helper).write_text("raise SystemExit(0)\n")
+            shutil.copyfile(ROOT / "VSCODE_VERSION", root / "VSCODE_VERSION")
+
+            pins = re.findall(
+                r'^    "([^"@]+)@([^"#]+)#([0-9a-f]{64})"',
+                downloader.read_text(), re.MULTILINE,
+            )
+            self.assertTrue(pins)
+            work = root / "toolchains/extensions"
+            work.mkdir(parents=True)
+            assets = root / "android/app/src/main/assets/extensions"
+            assets.mkdir(parents=True)
+            manifest = json.dumps({"main": "dist/extension.js", "engines": {"vscode": "^1.0.0"}})
+            for identifier, version, digest in pins:
+                name = f"{identifier}-{version}"
+                (work / f"{name}.json").write_text(json.dumps({
+                    "version": version, "preRelease": False,
+                    "files": {"download": "https://invalid.example/fixture.vsix"},
+                }))
+                (work / f"{name}.sha256").write_text(digest)
+                with zipfile.ZipFile(work / f"{name}.vsix", "w") as archive:
+                    archive.writestr("extension/package.json", manifest)
+                    archive.writestr("extension/dist/extension.js", "exports.activate = function () {};\n")
+                    archive.writestr("extension/.hidden/.inner", "inner fixture\n")
+                    archive.writestr("extension/.hidden/sub/.leaf", "leaf fixture\n")
+                    archive.writestr("extension/.topfile", "top fixture\n")
+
+            commands = root / "bin"
+            commands.mkdir()
+
+            def command(name, body):
+                path = commands / name
+                path.write_text("#!/usr/bin/env python3\n" + body)
+                path.chmod(0o755)
+
+            command("curl", "raise SystemExit('network access is forbidden in this test')\n")
+            command("sha256sum", """import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+print(path.with_suffix('.sha256').read_text().strip() + '  ' + str(path))
+""")
+            command("unzip", """import sys, zipfile
+with zipfile.ZipFile(sys.argv[3]) as archive:
+    archive.extractall(sys.argv[sys.argv.index('-d') + 1])
+""")
+            environment = dict(os.environ, PATH=f"{commands}{os.pathsep}{os.environ['PATH']}")
+            result = subprocess.run(
+                ["bash", str(downloader)], cwd=root, env=environment,
+                capture_output=True, text=True, timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            for identifier, version, _ in pins:
+                tree = assets / f"{identifier}-{version}"
+                self.assertEqual((tree / "_hidden/_inner").read_text(), "inner fixture\n")
+                self.assertEqual((tree / "_hidden/sub/_leaf").read_text(), "leaf fixture\n")
+                self.assertEqual((tree / "_topfile").read_text(), "top fixture\n")
+                self.assertFalse((tree / ".hidden").exists())
+                self.assertFalse((tree / ".topfile").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

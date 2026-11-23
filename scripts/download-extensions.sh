@@ -371,7 +371,8 @@ for EXT_SPEC in "${EXTENSIONS[@]}"; do
     fi
     rm -rf "$TEMP_EXTRACT"
 
-    # Remove dotfiles that AAPT would strip from assets
+    # Remove dotfiles that AAPT would strip from assets. Traverse depth-first so
+    # nested entries such as .hidden/.inner are renamed before their parent dir.
     DOTFILES_FOUND=0
     while IFS= read -r dotfile; do
         DOTFILES_FOUND=1
@@ -380,7 +381,7 @@ for EXT_SPEC in "${EXTENSIONS[@]}"; do
         NEWNAME="${BASENAME#.}"
         echo "  Renaming dotfile: $BASENAME -> _${NEWNAME}"
         mv "$dotfile" "$DIRNAME/_${NEWNAME}"
-    done < <(find "$DEST_DIR" -name '.*' -not -name '.' -not -name '..')
+    done < <(find "$DEST_DIR" -depth -mindepth 1 -name '.*' -not -name '.' -not -name '..')
 
     if [ "$DOTFILES_FOUND" -eq 0 ]; then
         echo "  No dotfiles found (OK)"

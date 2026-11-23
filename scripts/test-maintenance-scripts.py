@@ -2004,6 +2004,48 @@ class BuildAndDeviceScriptsTest(unittest.TestCase):
         self.assertIn("index 0", exited)
         self.assertFalse(dest.exists())
 
+    # -- verify-nls-parity.py --------------------------------------------
+
+    def test_nls_parity_gate_checks_all_locales_and_message_counts(self):
+        script = SOURCE / "scripts/verify-nls-parity.py"
+        self.assertTrue(script.is_file(), "scripts/verify-nls-parity.py does not exist")
+        self_test = run([sys.executable, "-I", str(script), "--self-test"], self.root)
+        self.assertEqual(0, self_test["status"], self_test)
+
+        builder = self.load("fixture_nls_locales", SOURCE / "scripts/build-nls-bundles.py")
+        server_out = self.root / "nls-case/vscode-reh/out"
+        nls_dir = self.root / "nls-case/nls"
+        write(server_out / "nls.messages.json", json.dumps(["One", "Two", "Three"]))
+        write(server_out / "nls.keys.json", json.dumps([["vs/a", ["k1", "k2"]], ["vs/b", ["k3"]]]))
+        for locale in builder.LOCALES:
+            write(nls_dir / f"{locale}.json", json.dumps(["1", "2", "3"]))
+
+        ok = run([sys.executable, "-I", str(script),
+                  "--server-out", str(server_out), "--nls-dir", str(nls_dir)], self.root)
+        self.assertEqual(0, ok["status"], ok)
+
+        # Length mismatch in one locale must fail loudly.
+        write(nls_dir / "fr.json", json.dumps(["1", "2"]))
+        short = run([sys.executable, "-I", str(script),
+                     "--server-out", str(server_out), "--nls-dir", str(nls_dir)], self.root)
+        self.assertNotEqual(0, short["status"], short)
+        self.assertIn("fr.json", short["stdout"] + short["stderr"])
+
+        # Missing locale must fail loudly.
+        (nls_dir / "fr.json").unlink()
+        missing = run([sys.executable, "-I", str(script),
+                       "--server-out", str(server_out), "--nls-dir", str(nls_dir)], self.root)
+        self.assertNotEqual(0, missing["status"], missing)
+        self.assertIn("fr.json", missing["stdout"] + missing["stderr"])
+
+        # Extra stale locale bundle must fail loudly.
+        write(nls_dir / "fr.json", json.dumps(["1", "2", "3"]))
+        write(nls_dir / "xx-stale.json", json.dumps(["1", "2", "3"]))
+        stale = run([sys.executable, "-I", str(script),
+                     "--server-out", str(server_out), "--nls-dir", str(nls_dir)], self.root)
+        self.assertNotEqual(0, stale["status"], stale)
+        self.assertIn("xx-stale.json", stale["stdout"] + stale["stderr"])
+
     # -- build-docs-site.py ----------------------------------------------
 
     def test_docs_site_escapes_labels_once_and_drops_a_trailing_unreleased_section(self):
