@@ -13,6 +13,7 @@
  */
 
 const assert = require('assert');
+const dns = require('dns');
 const fs = require('fs');
 const http = require('http');
 const net = require('net');
@@ -924,6 +925,172 @@ async function main() {
     }
     wsOrigin.close();
 
+    // --- self-loop requests targeting this proxy are refused --------------
+    // Pointing the proxy back at its own listener through loopback would
+    // consume two sockets per hop until the connection cap is exhausted.
+    for (const host of ['127.0.0.1', 'localhost', 'sub.localhost', 'sub.localhost.']) {
+        const selfHttp = await proxiedGet(proxyPort, `http://${host}:${proxyPort}/`, goodCredentials);
+        assert.strictEqual(
+            selfHttp.status, 403,
+            `a plain-HTTP self-loop to ${host}:${proxyPort} was not refused: ${selfHttp.status}`,
+        );
+    }
+    for (const authority of [
+        `127.0.0.1:${proxyPort}`,
+        `localhost:${proxyPort}`,
+        `sub.localhost:${proxyPort}`,
+        `sub.localhost.:${proxyPort}`,
+        `[::1]:${proxyPort}`,
+        `[::ffff:127.0.0.1]:${proxyPort}`,
+    ]) {
+        const selfConnect = await rawExchangeUntilClose(
+            proxyPort,
+            `CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\n` +
+                `Proxy-Authorization: Basic ${Buffer.from(goodCredentials).toString('base64')}\r\n\r\n`,
+        );
+        assert.match(
+            selfConnect.received, /^HTTP\/1\.1 403 /,
+            `a CONNECT self-loop to ${authority} was not refused: ${JSON.stringify(selfConnect.received)}`,
+        );
+        assert.ok(selfConnect.sawFin, `a refused self-loop CONNECT to ${authority} did not close`);
+    }
+    for (const host of ['127.0.0.1', 'sub.localhost', 'sub.localhost.']) {
+        const selfUpgrade = await rawExchangeUntilClose(
+            proxyPort,
+            `GET http://${host}:${proxyPort}/socket HTTP/1.1\r\nHost: ${host}:${proxyPort}\r\n` +
+                `Upgrade: websocket\r\nConnection: Upgrade\r\n` +
+                `Proxy-Authorization: Basic ${Buffer.from(goodCredentials).toString('base64')}\r\n\r\n`,
+        );
+        assert.match(
+            selfUpgrade.received, /^HTTP\/1\.1 403 /,
+            `an upgrade self-loop to ${host}:${proxyPort} was not refused: ${JSON.stringify(selfUpgrade.received)}`,
+        );
+        assert.ok(selfUpgrade.sawFin, `a refused self-loop upgrade to ${host}:${proxyPort} did not close`);
+    }
+
+    // A non-loopback hostname that resolves via DNS to 127.0.0.1 on the proxy
+    // port must also be rejected before connect(2) across all three legs, while
+    // resolving the same name to another port remains allowed.
+    {
+        const origLookup = dns.lookup;
+        dns.lookup = function (hostname, options, callback) {
+            const opts = typeof options === 'function' ? {} : (options || {});
+            const cb = typeof options === 'function' ? options : callback;
+            if (hostname === 'loopback.test') {
+                if (opts && opts.all) {
+                    process.nextTick(() => cb(null, [{ address: '127.0.0.1', family: 4 }]));
+                } else {
+                    process.nextTick(() => cb(null, '127.0.0.1', 4));
+                }
+                return;
+            }
+            return origLookup.apply(this, arguments);
+        };
+        try {
+            const dnsHttp = await proxiedGet(proxyPort, `http://loopback.test:${proxyPort}/`, goodCredentials);
+            assert.strictEqual(
+                dnsHttp.status, 403,
+                `a DNS-resolved loopback plain-HTTP self-loop was not refused: ${dnsHttp.status}`,
+            );
+            const dnsConnect = await rawExchangeUntilClose(
+                proxyPort,
+                `CONNECT loopback.test:${proxyPort} HTTP/1.1\r\nHost: loopback.test:${proxyPort}\r\n` +
+                    `Proxy-Authorization: Basic ${Buffer.from(goodCredentials).toString('base64')}\r\n\r\n`,
+            );
+            assert.match(
+                dnsConnect.received, /^HTTP\/1\.1 403 /,
+                `a DNS-resolved loopback CONNECT self-loop was not refused: ${JSON.stringify(dnsConnect.received)}`,
+            );
+            assert.ok(dnsConnect.sawFin, 'a refused DNS-resolved CONNECT self-loop did not close');
+            const dnsUpgrade = await rawExchangeUntilClose(
+                proxyPort,
+                `GET http://loopback.test:${proxyPort}/socket HTTP/1.1\r\nHost: loopback.test:${proxyPort}\r\n` +
+                    `Upgrade: websocket\r\nConnection: Upgrade\r\n` +
+                    `Proxy-Authorization: Basic ${Buffer.from(goodCredentials).toString('base64')}\r\n\r\n`,
+            );
+            assert.match(
+                dnsUpgrade.received, /^HTTP\/1\.1 403 /,
+                `a DNS-resolved loopback upgrade self-loop was not refused: ${JSON.stringify(dnsUpgrade.received)}`,
+            );
+            assert.ok(dnsUpgrade.sawFin, 'a refused DNS-resolved upgrade self-loop did not close');
+            const otherPort = await proxiedGet(proxyPort, `http://loopback.test:${originPort}/`, goodCredentials);
+            assert.strictEqual(
+                otherPort.status, 200,
+                `a DNS-resolved loopback host on a non-proxy port was wrongly rejected: ${otherPort.status}`,
+            );
+        } finally {
+            dns.lookup = origLookup;
+        }
+    }
+
+    // --- 0-byte clean EOF on upgrade returns 502 --------------------------
+    // An upstream that accepts TCP and closes cleanly without writing a
+    // response status must surface as 502 Bad Gateway rather than an empty
+    // EOF on the client socket.
+    const emptyUpgradeOrigin = net.createServer((socket) => {
+        socket.on('error', () => {});
+        socket.once('data', () => socket.end());
+    });
+    const emptyUpgradePort = await listen(emptyUpgradeOrigin);
+    const emptyUpgrade = await rawExchangeUntilClose(
+        proxyPort,
+        `GET http://127.0.0.1:${emptyUpgradePort}/socket HTTP/1.1\r\nHost: 127.0.0.1:${emptyUpgradePort}\r\n` +
+            `Upgrade: websocket\r\nConnection: Upgrade\r\n` +
+            `Proxy-Authorization: Basic ${Buffer.from(goodCredentials).toString('base64')}\r\n\r\n`,
+    );
+    emptyUpgradeOrigin.close();
+    assert.match(
+        emptyUpgrade.received, /^HTTP\/1\.1 502 /,
+        `an upgrade upstream that closed cleanly with 0 bytes gave ${JSON.stringify(emptyUpgrade.received)} instead of 502`,
+    );
+    assert.ok(emptyUpgrade.sawFin, 'a 502 after 0-byte upgrade EOF did not close');
+
+    // --- TCP keepalive is enabled on established tunnels and upgrades -----
+    // Idle timeouts are cleared once a tunnel or upgrade is established, so
+    // TCP keepalive is what detects a silently vanished peer on mobile links.
+    {
+        const origKeepAlive = net.Socket.prototype.setKeepAlive;
+        const keepAliveCalls = [];
+        net.Socket.prototype.setKeepAlive = function (enable, initialDelay) {
+            keepAliveCalls.push({ enable, initialDelay });
+            return origKeepAlive.call(this, enable, initialDelay);
+        };
+        try {
+            keepAliveCalls.length = 0;
+            const kaConnect = await rawExchange(
+                proxyPort,
+                `${connectHead}Proxy-Authorization: Basic ${Buffer.from(goodCredentials).toString('base64')}\r\n\r\n`,
+            );
+            assert.match(kaConnect, /^HTTP\/1\.1 200 /, 'keepalive probe CONNECT failed');
+            assert.ok(
+                keepAliveCalls.filter((c) => c.enable === true && c.initialDelay === 30000).length >= 2,
+                `CONNECT did not enable 30s TCP keepalive on both sockets: ${JSON.stringify(keepAliveCalls)}`,
+            );
+
+            keepAliveCalls.length = 0;
+            const kaUpgradeOrigin = http.createServer((_req, res) => res.writeHead(426).end());
+            kaUpgradeOrigin.on('upgrade', (_req, socket) => {
+                socket.on('error', () => {});
+                socket.end('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n');
+            });
+            const kaUpgradePort = await listen(kaUpgradeOrigin);
+            const kaUpgrade = await rawExchange(
+                proxyPort,
+                `GET http://127.0.0.1:${kaUpgradePort}/socket HTTP/1.1\r\nHost: 127.0.0.1:${kaUpgradePort}\r\n` +
+                    `Upgrade: websocket\r\nConnection: Upgrade\r\n` +
+                    `Proxy-Authorization: Basic ${Buffer.from(goodCredentials).toString('base64')}\r\n\r\n`,
+            );
+            kaUpgradeOrigin.close();
+            assert.match(kaUpgrade, /^HTTP\/1\.1 101 /, 'keepalive probe upgrade failed');
+            assert.ok(
+                keepAliveCalls.filter((c) => c.enable === true && c.initialDelay === 30000).length >= 2,
+                `upgrade did not enable 30s TCP keepalive on both sockets: ${JSON.stringify(keepAliveCalls)}`,
+            );
+        } finally {
+            net.Socket.prototype.setKeepAlive = origKeepAlive;
+        }
+    }
+
     // --- a flood of unauthenticated sockets is bounded --------------------
     // The token defends what the proxy will do and nothing about the socket
     // itself, and every app on the device can reach this port. Each half-open
@@ -964,9 +1131,11 @@ async function main() {
     // flood below can be built and probed inside one sweep interval; a reclaim
     // it observes therefore has to be the sweep and cannot be a race.
     const SWEEP_MS = 1500;
+    const HALF_CLOSE_MS = 200;
     const shortProxy = proxyWithConstants({
         UPSTREAM_TIMEOUT_MS: SHORT_MS,
         HEADER_PHASE_MS: SWEEP_MS,
+        HALF_CLOSE_GRACE_MS: HALF_CLOSE_MS,
     });
     const shortEnv = await shortProxy.start(log);
     assert.ok(shortEnv.HTTPS_PROXY, 'the copy with the shortened timeout never bound');
@@ -1142,6 +1311,90 @@ async function main() {
             'own default collects them, so one app can lock every other client out at will',
     );
     holders.forEach((socket) => socket.destroy());
+
+    // --- clean upstream FIN must not leak half-open server sockets --------
+    // http.Server constructs client sockets with allowHalfOpen. When an
+    // upstream closes cleanly (FIN), pipe() ends the client socket's writable
+    // side, but a client that never sends its own FIN leaves the server-side
+    // socket open forever unless the proxy bounds the half-close window.
+    {
+        const connectFinOrigin = net.createServer((socket) => {
+            socket.on('error', () => {});
+            socket.end('BYE-CONNECT');
+        });
+        const connectFinPort = await listen(connectFinOrigin);
+
+        const upgradeFinOrigin = net.createServer((socket) => {
+            socket.on('error', () => {});
+            socket.once('data', () => {
+                socket.end(
+                    'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\nBYE-UPGRADE',
+                );
+            });
+        });
+        const upgradeFinPort = await listen(upgradeFinOrigin);
+
+        const authHeader = `Proxy-Authorization: Basic ${Buffer.from(shortCredentials).toString('base64')}`;
+        const HALF_OPEN_COUNT = 12;
+        const halfOpenBaseline = liveSockets();
+        const halfOpenClients = [];
+
+        const openHalfClosed = (request, marker) =>
+            new Promise((resolve, reject) => {
+                // allowHalfOpen keeps the client socket from auto-sending FIN when
+                // the proxy finishes its write half, reproducing a peer that stalls
+                // in CLOSE_WAIT/FIN_WAIT_2.
+                const socket = new net.Socket({ allowHalfOpen: true });
+                let received = '';
+                let done = false;
+                const finish = () => {
+                    if (!done) {
+                        done = true;
+                        resolve(received);
+                    }
+                };
+                socket.on('data', (chunk) => { received += chunk; });
+                socket.on('end', finish);
+                socket.on('error', (err) => {
+                    if (!done) {
+                        done = true;
+                        reject(err);
+                    }
+                });
+                socket.connect(shortPort, '127.0.0.1', () => {
+                    halfOpenClients.push(socket);
+                    socket.write(request);
+                });
+                setTimeout(() => finish(), 2000).unref();
+            }).then((received) => {
+                assert.ok(
+                    received.includes(marker),
+                    `buffered upstream bytes were lost on clean FIN: ${JSON.stringify(received)}`,
+                );
+            });
+
+        for (let i = 0; i < HALF_OPEN_COUNT; i++) {
+            await openHalfClosed(
+                `CONNECT 127.0.0.1:${connectFinPort} HTTP/1.1\r\nHost: 127.0.0.1:${connectFinPort}\r\n${authHeader}\r\n\r\n`,
+                'BYE-CONNECT',
+            );
+            await openHalfClosed(
+                `GET http://127.0.0.1:${upgradeFinPort}/socket HTTP/1.1\r\nHost: 127.0.0.1:${upgradeFinPort}\r\n` +
+                    `Upgrade: websocket\r\nConnection: Upgrade\r\n${authHeader}\r\n\r\n`,
+                'BYE-UPGRADE',
+            );
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 3 * HALF_CLOSE_MS));
+        const leakedHalfOpen = liveSockets() - halfOpenBaseline - halfOpenClients.length;
+        halfOpenClients.forEach((socket) => socket.destroy());
+        connectFinOrigin.close();
+        upgradeFinOrigin.close();
+        assert.ok(
+            leakedHalfOpen <= 0,
+            `${leakedHalfOpen} server-side sockets remained open ${3 * HALF_CLOSE_MS} ms after clean upstream FIN`,
+        );
+    }
 
     // --- the token must not escape into any log ---------------------------
     // Both instances log through the same collector, so both credentials are

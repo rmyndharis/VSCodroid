@@ -59,6 +59,7 @@
 const http = require('http');
 const https = require('https');
 const net = require('net');
+const dns = require('dns');
 const crypto = require('crypto');
 const { URL } = require('url');
 
@@ -95,6 +96,19 @@ const UPSTREAM_TIMEOUT_MS = 30_000;
  * expires.
  */
 const HEADER_PHASE_MS = 5_000;
+
+/**
+ * How long a half-open client socket may stay open after the upstream closes
+ * cleanly. http.Server builds sockets with allowHalfOpen, so ending our write
+ * half waits indefinitely for a client FIN that a stalled peer never sends.
+ */
+const HALF_CLOSE_GRACE_MS = 5_000;
+
+/**
+ * Initial delay before TCP keepalive probes begin on established CONNECT and
+ * upgrade sockets, whose inactivity timeout is cleared once spliced.
+ */
+const TUNNEL_KEEPALIVE_MS = 30_000;
 
 /**
  * Headers that address this proxy and must not travel on to the origin.
@@ -239,6 +253,91 @@ function start(log) {
      */
     const closeWith = (socket, response) => socket.end(response, () => socket.destroy());
 
+    function isLoopbackAddress(address) {
+        if (typeof address !== 'string') {
+            return false;
+        }
+        const normalized = address.toLowerCase();
+        return (
+            normalized === '127.0.0.1' ||
+            normalized === '::1' ||
+            normalized === '::ffff:127.0.0.1' ||
+            normalized === '::ffff:7f00:1' ||
+            normalized === '0.0.0.0' ||
+            normalized === '::'
+        );
+    }
+
+    function isLoopbackHost(host) {
+        const normalized = host.toLowerCase();
+        return (
+            isLoopbackAddress(normalized) ||
+            normalized === 'localhost' ||
+            normalized === 'localhost.' ||
+            normalized.endsWith('.localhost') ||
+            normalized.endsWith('.localhost.')
+        );
+    }
+
+    function isSelfTarget(server, host, port) {
+        const addr = server.address();
+        return Boolean(addr && Number(port) === addr.port && isLoopbackHost(host));
+    }
+
+    function selfPortLookup(server, port) {
+        const addr = server.address();
+        if (!addr || Number(port) !== addr.port) {
+            return undefined;
+        }
+        return (hostname, options, callback) => {
+            const cb = typeof options === 'function' ? options : callback;
+            const onLookup = (err, address, family) => {
+                if (err) {
+                    cb(err);
+                    return;
+                }
+                if (Array.isArray(address)) {
+                    if (address.some((entry) => entry && isLoopbackAddress(entry.address))) {
+                        const loopErr = new Error(`self-loop resolved to loopback on port ${addr.port}`);
+                        loopErr.code = 'ESELFLOOP';
+                        cb(loopErr);
+                        return;
+                    }
+                    cb(null, address);
+                    return;
+                }
+                if (isLoopbackAddress(address)) {
+                    const loopErr = new Error(`self-loop resolved to ${address} on port ${addr.port}`);
+                    loopErr.code = 'ESELFLOOP';
+                    cb(loopErr);
+                    return;
+                }
+                cb(null, address, family);
+            };
+            if (typeof options === 'function') {
+                dns.lookup(hostname, onLookup);
+            } else {
+                dns.lookup(hostname, options, onLookup);
+            }
+        };
+    }
+
+    function finishClient(clientSocket) {
+        if (clientSocket.destroyed) {
+            return;
+        }
+        if (!clientSocket.writableEnded) {
+            clientSocket.end();
+        }
+        const timer = setTimeout(() => {
+            if (!clientSocket.destroyed) {
+                clientSocket.destroy();
+            }
+        }, HALF_CLOSE_GRACE_MS);
+        timer.unref();
+        clientSocket.once('close', () => clearTimeout(timer));
+    }
+
     return new Promise((resolve) => {
         let settled = false;
         const done = (env) => {
@@ -339,14 +438,25 @@ function start(log) {
             // servername by hand is not the way out either, because passing an
             // IP literal there fails the handshake outright.
             const secure = target.protocol === 'https:';
+            const host = bareHost(target.hostname);
+            const port = Number(target.port) || (secure ? 443 : 80);
+            if (isSelfTarget(server, host, port)) {
+                req.on('error', () => {});
+                res.on('error', () => {});
+                log('warn', `dns-proxy: refused self-loop request to ${host}:${port}`);
+                res.writeHead(403, { Connection: 'close' }).end();
+                return;
+            }
+            const lookup = selfPortLookup(server, port);
             const upstream = (secure ? https : http).request(
                 {
                     // Brackets off, or an IPv6 literal reaches DNS as text.
                     // The CONNECT leg below has always done this; this leg
                     // never did, so http://[::1]:8080/ came back 502 with
                     // ENOTFOUND naming an address rather than a name.
-                    host: bareHost(target.hostname),
-                    port: target.port || (secure ? 443 : 80),
+                    host,
+                    port,
+                    ...(lookup ? { lookup, agent: false } : {}),
                     method: req.method,
                     path: target.pathname + target.search,
                     // Host follows the absolute URI and never the client's own
@@ -407,6 +517,15 @@ function start(log) {
             upstream.setTimeout(UPSTREAM_TIMEOUT_MS, () =>
                 upstream.destroy(new Error(`no response within ${UPSTREAM_TIMEOUT_MS} ms`)));
             upstream.on('error', (err) => {
+                if (err.code === 'ESELFLOOP') {
+                    log('warn', `dns-proxy: refused self-loop request to ${host}:${port}`);
+                    if (res.headersSent) {
+                        res.destroy();
+                        return;
+                    }
+                    res.writeHead(403, { Connection: 'close' }).end();
+                    return;
+                }
                 log('warn', `dns-proxy: ${target.hostname} failed: ${reason(err)}`);
                 // An upstream that dies mid-response has already had its status
                 // relayed; writeHead would then throw ERR_HTTP_HEADERS_SENT,
@@ -543,17 +662,33 @@ function start(log) {
                 closeWith(clientSocket, 'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
                 return;
             }
+            if (isSelfTarget(server, host, port)) {
+                log('warn', `dns-proxy: refused self-loop CONNECT to ${host}:${port}`);
+                closeWith(clientSocket, 'HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+                return;
+            }
+            if (clientSocket.destroyed) {
+                return;
+            }
             // Whether the 200 has gone out. It is the only thing separating a
             // tunnel that could not be built from one that broke, and this leg
             // had nothing recording it, the plain-HTTP leg beside it has
             // res.headersSent for the identical question.
             let established = false;
-            upstream = net.connect(port, host, () => {
+            let upstreamFailed = false;
+            const lookup = selfPortLookup(server, port);
+            upstream = net.connect({ port, host, ...(lookup ? { lookup } : {}) }, () => {
+                if (clientSocket.destroyed) {
+                    upstream.destroy();
+                    return;
+                }
                 established = true;
                 // Same bound as the plain-HTTP leg, and cleared at the same
                 // point: a tunnel is expected to sit idle for minutes at a time,
                 // so only the dial is timed.
                 upstream.setTimeout(0);
+                upstream.setKeepAlive(true, TUNNEL_KEEPALIVE_MS);
+                clientSocket.setKeepAlive(true, TUNNEL_KEEPALIVE_MS);
                 clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
                 if (head && head.length) {
                     upstream.write(head);
@@ -564,6 +699,12 @@ function start(log) {
             upstream.setTimeout(UPSTREAM_TIMEOUT_MS, () =>
                 upstream.destroy(new Error(`no answer within ${UPSTREAM_TIMEOUT_MS} ms`)));
             upstream.on('error', (err) => {
+                upstreamFailed = true;
+                if (!established && err.code === 'ESELFLOOP') {
+                    log('warn', `dns-proxy: refused self-loop CONNECT to ${host}:${port}`);
+                    closeWith(clientSocket, 'HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+                    return;
+                }
                 if (established) {
                     // Nothing but tunnel bytes may follow a 2xx to CONNECT
                     // (RFC 9110 9.3.6), and this handler outlives the handshake:
@@ -580,6 +721,18 @@ function start(log) {
                 }
                 log('warn', `dns-proxy: CONNECT ${host}:${port} failed: ${reason(err)}`);
                 closeWith(clientSocket, 'HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
+            });
+            upstream.on('close', () => {
+                if (clientSocket.destroyed) {
+                    return;
+                }
+                if (!established) {
+                    if (!upstreamFailed) {
+                        closeWith(clientSocket, 'HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
+                    }
+                    return;
+                }
+                finishClient(clientSocket);
             });
         });
 
@@ -641,8 +794,25 @@ function start(log) {
                 closeWith(clientSocket, 'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
                 return;
             }
+            const host = bareHost(target.hostname);
             const port = Number(target.port) || 80;
-            upstream = net.connect(port, bareHost(target.hostname), () => {
+            if (isSelfTarget(server, host, port)) {
+                log('warn', `dns-proxy: refused self-loop upgrade to ${host}:${port}`);
+                closeWith(clientSocket, 'HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+                return;
+            }
+            if (clientSocket.destroyed) {
+                return;
+            }
+            let upstreamFailed = false;
+            const lookup = selfPortLookup(server, port);
+            upstream = net.connect({ port, host, ...(lookup ? { lookup } : {}) }, () => {
+                if (clientSocket.destroyed) {
+                    upstream.destroy();
+                    return;
+                }
+                upstream.setKeepAlive(true, TUNNEL_KEEPALIVE_MS);
+                clientSocket.setKeepAlive(true, TUNNEL_KEEPALIVE_MS);
                 const lines = [`${req.method} ${target.pathname}${target.search} HTTP/1.1`, `Host: ${target.host}`];
                 for (let i = 0; i < req.rawHeaders.length; i += 2) {
                     // The same list the plain-HTTP leg deletes from, read from
@@ -674,7 +844,7 @@ function start(log) {
                 // accepts TCP and then says nothing: the plain-HTTP leg
                 // answered 502 and logged the bound, while the identical ws://
                 // upgrade was still open six seconds later with no byte written
-                // to the client and nothing logged -- a descriptor pinned at
+                // to the client and nothing logged, a descriptor pinned at
                 // each end plus one of the maxConnections slots, for the life
                 // of the process.
                 //
@@ -685,12 +855,21 @@ function start(log) {
                     upstream.setTimeout(0);
                     established = true;
                 });
-                upstream.pipe(clientSocket);
+                // end: false keeps clientSocket writable if the origin closes
+                // cleanly with 0 bytes so the close handler can reply 502;
+                // established tunnels are ended and bounded in the same handler.
+                upstream.pipe(clientSocket, { end: false });
                 clientSocket.pipe(upstream);
             });
             upstream.setTimeout(UPSTREAM_TIMEOUT_MS, () =>
                 upstream.destroy(new Error(`no answer within ${UPSTREAM_TIMEOUT_MS} ms`)));
             upstream.on('error', (err) => {
+                upstreamFailed = true;
+                if (!established && err.code === 'ESELFLOOP') {
+                    log('warn', `dns-proxy: refused self-loop upgrade to ${host}:${port}`);
+                    closeWith(clientSocket, 'HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+                    return;
+                }
                 if (established) {
                     // Past the splice nothing but the origin's bytes may follow,
                     // for the reason the CONNECT handler above spells out.
@@ -700,6 +879,19 @@ function start(log) {
                 }
                 log('warn', `dns-proxy: upgrade ${target.host} failed: ${reason(err)}`);
                 closeWith(clientSocket, 'HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
+            });
+            upstream.on('close', () => {
+                if (clientSocket.destroyed) {
+                    return;
+                }
+                if (!established) {
+                    if (!upstreamFailed) {
+                        log('warn', `dns-proxy: upgrade ${target.host} closed before responding`);
+                        closeWith(clientSocket, 'HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
+                    }
+                    return;
+                }
+                finishClient(clientSocket);
             });
         });
 
