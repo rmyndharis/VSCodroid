@@ -52,7 +52,7 @@ class RendererDeathNoteTest {
             Thread()
         }
         val client = VSCodroidWebViewClient(
-            allowedPort = 13337,
+            allowedPort = { 13337 },
             resourceRules = noResourceRules(),
             openFolder = { null },
             connectionToken = { null },

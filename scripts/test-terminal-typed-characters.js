@@ -967,4 +967,45 @@ row('not covered (not seen in 10 of 10 taps): a compositionend delivered after t
     }
 });
 assert.equal(failures.length, 0, `terminal key boundaries failed: ${failures.join(', ')}`);
+
+// Fast-path guard: normal timers outside terminal events must not stringify callbacks or filter ended.
+{
+    const sandbox = {
+        addEventListener() {},
+        setTimeout() { return 1; },
+        clearTimeout() {},
+    };
+    sandbox.window = sandbox;
+    const ctx = vm.createContext(sandbox);
+    vm.runInContext(script, ctx);
+    const counts = vm.runInContext(`
+        (function() {
+            var toStringCalls = 0;
+            var filterCalls = 0;
+            var origToString = Function.prototype.toString;
+            var origFilter = Array.prototype.filter;
+            Function.prototype.toString = function() {
+                toStringCalls++;
+                return origToString.apply(this, arguments);
+            };
+            Array.prototype.filter = function() {
+                filterCalls++;
+                return origFilter.apply(this, arguments);
+            };
+            try {
+                var id1 = window.setTimeout(function normalZeroTimer() {}, 0);
+                var id2 = window.setTimeout(function normalDelayedTimer() {}, 50);
+                window.clearTimeout(id1);
+                window.clearTimeout(id2);
+            } finally {
+                Function.prototype.toString = origToString;
+                Array.prototype.filter = origFilter;
+            }
+            return { toStringCalls: toStringCalls, filterCalls: filterCalls };
+        })();
+    `, ctx);
+    assert.equal(counts.toStringCalls, 0, `normal timers invoked Function.prototype.toString ${counts.toStringCalls} times`);
+    assert.equal(counts.filterCalls, 0, `clearTimeout filtered empty ended array ${counts.filterCalls} times`);
+}
+
 console.log('ok: terminal input event orders, negative control, deletion, cancellation and pass-through');

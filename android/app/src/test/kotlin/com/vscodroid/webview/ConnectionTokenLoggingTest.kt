@@ -279,7 +279,7 @@ class ConnectionTokenLoggingTest {
     @Test
     fun `the page lifecycle callbacks do not log the token`() {
         val client = VSCodroidWebViewClient(
-            allowedPort = 41234,
+            allowedPort = { 41234 },
             resourceRules = noResourceRules(),
             openFolder = { null },
             connectionToken = { token },
@@ -348,7 +348,7 @@ class ConnectionTokenLoggingTest {
         every { request.isForMainFrame } returns true
 
         val client = VSCodroidWebViewClient(
-            allowedPort = 41234,
+            allowedPort = { 41234 },
             resourceRules = noResourceRules(),
             openFolder = { null },
             connectionToken = { token },
@@ -449,7 +449,7 @@ class ConnectionTokenLoggingTest {
     fun `redacting the log does not redact the page-loaded callback`() {
         var seen: String? = null
         val client = VSCodroidWebViewClient(
-            allowedPort = 41234,
+            allowedPort = { 41234 },
             resourceRules = noResourceRules(),
             openFolder = { null },
             connectionToken = { token },

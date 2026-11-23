@@ -39,4 +39,43 @@ class DialogLifetimeGuardsTest {
             "the warning is also marked as given before the dialog is shown:\n$check"
         }
     }
+
+    @Test
+    fun `all modal dialogs are tracked and dismissed on destroy`() {
+        val destroy = code("override fun onDestroy(")
+        assertTrue(destroy.contains("dismissActiveDialogs()")) {
+            "onDestroy must dismiss tracked modal dialogs to prevent leaked windows:\n$destroy"
+        }
+        assertTrue(code("private fun openSafFolder(").contains("trackDialog(dialog)")) {
+            "openSafFolder sync dialog is not tracked for teardown dismissal"
+        }
+        assertTrue(code("private fun confirmForcedRemoval(").contains("trackDialog(")) {
+            "confirmForcedRemoval dialog is not tracked for teardown dismissal"
+        }
+        assertTrue(code("private fun showWithReachableButtons(").contains("trackDialog(")) {
+            "showWithReachableButtons does not track About and Licenses dialogs for teardown dismissal"
+        }
+        val licenseTexts = code("private fun showLicenseTextsDialog(")
+        assertTrue(Regex("""trackDialog\(""").findAll(licenseTexts).count() >= 2) {
+            "both chooser and nested dialogs in showLicenseTextsDialog must be tracked:\n$licenseTexts"
+        }
+        assertTrue(code("private fun checkWebViewVersion(").contains("trackDialog(")) {
+            "checkWebViewVersion dialog is not tracked for teardown dismissal"
+        }
+    }
+
+    @Test
+    fun `onDestroy unblocks pending forced removal confirmation latches`() {
+        val confirm = code("private fun confirmForcedRemoval(")
+        val destroy = code("override fun onDestroy(")
+        assertTrue(confirm.contains("removalLatches()") && confirm.contains("latches.add(answered)")) {
+            "confirmForcedRemoval does not register its latch for teardown release:\n$confirm"
+        }
+        assertTrue(confirm.contains("latches.remove(answered)")) {
+            "confirmForcedRemoval does not unregister its latch after waiting:\n$confirm"
+        }
+        assertTrue(destroy.contains("pendingRemovalLatches") && destroy.contains("it.countDown()")) {
+            "onDestroy does not count down pending forced removal latches:\n$destroy"
+        }
+    }
 }

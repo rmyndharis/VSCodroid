@@ -206,7 +206,7 @@ class ServerReadinessCallSiteTest {
         every { Uri.encode(any()) } answers { firstArg() }
         mockkObject(VSCodroidWebViewClient.Companion)
         every {
-            VSCodroidWebViewClient.setupServiceWorkerInterception(any(), any(), any(), any(), any(), any())
+            VSCodroidWebViewClient.setupServiceWorkerInterception(any(), any(), any(), any(), any(), any(), any())
         } just Runs
         every { Logger.d(any(), any()) } just Runs
         every { service.getConnectionToken() } returns "token"
@@ -285,5 +285,40 @@ class ServerReadinessCallSiteTest {
         now = 750_000L
         runReal("handleResumeFromBackground")
         assertEquals(listOf("reload"), events)
+    }
+
+    @Test
+    fun `a server restart on a new port updates client routing and page callbacks`() {
+        assertTrue(
+            java.lang.reflect.Modifier.isVolatile(MainActivity::class.java.getDeclaredField("serverPort").modifiers),
+            "serverPort must be @Volatile so off-main interception threads observe port updates",
+        )
+        val client = installWebViewClient(13337)
+        var tokenInjections = 0
+        every { activity["injectBridgeToken"]() } answers { tokenInjections++ }
+
+        setField("serverPort", 14444)
+        setField("backgroundedAt", 1_000L)
+        now = 390_000L
+
+        val uri = mockk<Uri>(relaxed = true)
+        every { uri.scheme } returns "http"
+        every { uri.host } returns "127.0.0.1"
+        every { uri.port } returns 14444
+        every { uri.path } returns "/"
+        every { uri.toString() } returns "http://127.0.0.1:14444/"
+        val req = mockk<android.webkit.WebResourceRequest>(relaxed = true)
+        every { req.url } returns uri
+        every { req.isForMainFrame } returns true
+
+        assertEquals(
+            false,
+            client.shouldOverrideUrlLoading(webView, req),
+            "client treated the restarted server's new port as an external URL",
+        )
+        client.onPageStarted(webView, "http://127.0.0.1:14444/", null)
+        assertEquals(390_000L, backgroundedAt(), "onNavigationStarted ignored the restarted server's new port")
+        client.onPageFinished(webView, "http://127.0.0.1:14444/")
+        assertEquals(1, tokenInjections, "onPageLoaded did not inject the bridge token for the restarted server's new port")
     }
 }

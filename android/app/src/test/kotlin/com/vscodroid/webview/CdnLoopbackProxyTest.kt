@@ -5,6 +5,8 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import com.vscodroid.service.mockEditorGateway
 import com.vscodroid.util.Logger
+import io.mockk.ConstantMatcher
+import io.mockk.EqMatcher
 import io.mockk.Runs
 import io.mockk.every
 import io.mockk.just
@@ -14,10 +16,14 @@ import io.mockk.mockkObject
 import io.mockk.mockkStatic
 import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import java.net.InetAddress
+import java.net.ServerSocket
+import kotlin.concurrent.thread
 
 /**
  * The CDN arm fetches from the app's own server at `127.0.0.1:<port>`, and that address is on the phone, so the
@@ -86,6 +92,70 @@ class CdnLoopbackProxyTest {
 
                 assertNull(proxy.target, "the request for the app's own server went to the proxy: ${proxy.target}")
                 assertNotNull(server.target, "the request never reached the app's own server")
+            }
+        }
+    }
+
+    @Test
+    fun `methods outside GET and HEAD are refused with 405 without contacting localhost`() {
+        every { anyConstructed<WebResourceResponse>().statusCode } returns 0
+        every {
+            constructedWith<WebResourceResponse>(
+                ConstantMatcher<Any>(true),
+                ConstantMatcher<Any>(true),
+                EqMatcher(405),
+                ConstantMatcher<Any>(true),
+                ConstantMatcher<Any>(true),
+                ConstantMatcher<Any>(true),
+            ).statusCode
+        } returns 405
+
+        Recorder().use { server ->
+            val req = request()
+            every { req.method } returns "POST"
+
+            val response = VSCodroidWebViewClient.interceptCdnRequest(
+                req, server.port, { token }, emptyList(), emptyList(), { null },
+                tokenWaitMs = 0,
+            )
+
+            assertNotNull(response)
+            assertNull(server.target, "a POST CDN request reached the local server: ${server.target}")
+            assertEquals(405, response?.statusCode, "unsupported methods must answer 405")
+        }
+    }
+
+    @Test
+    fun `a 3xx redirect from localhost is not followed by the CDN proxy`() {
+        Recorder().use { redirectTarget ->
+            ServerSocket(0, 0, InetAddress.getByName("127.0.0.1")).use { redirector ->
+                val worker = thread(name = "cdn-redirect-stub", isDaemon = true) {
+                    redirector.accept().use { client ->
+                        val reader = client.getInputStream().bufferedReader()
+                        while (!reader.readLine().isNullOrEmpty()) { }
+                        val location = "http://127.0.0.1:${redirectTarget.port}/redirected"
+                        client.getOutputStream().apply {
+                            write(
+                                ("HTTP/1.1 302 Found\r\nLocation: $location\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                                    .toByteArray()
+                            )
+                            flush()
+                        }
+                    }
+                }
+                try {
+                    val response = VSCodroidWebViewClient.interceptCdnRequest(
+                        request(), redirector.localPort, { token }, emptyList(), emptyList(), { null },
+                        tokenWaitMs = 0,
+                    )
+                    assertNotNull(response)
+                    assertNull(
+                        redirectTarget.target,
+                        "HttpURLConnection followed a redirect from localhost to ${redirectTarget.target}",
+                    )
+                } finally {
+                    worker.join(5_000)
+                }
             }
         }
     }

@@ -261,7 +261,7 @@ class ExternalUrlHandoffTest {
         every { view.context } returns context
 
         client = VSCodroidWebViewClient(
-            allowedPort = ALLOWED_PORT,
+            allowedPort = { ALLOWED_PORT },
             resourceRules = noResourceRules(),
             openFolder = { null },
             connectionToken = { null },
@@ -713,7 +713,7 @@ class ExternalUrlHandoffTest {
         assertTrue(callbackSecretWouldMatch(SIGN_IN_REQUEST_ID, SIGN_IN_SECRET))
         assertFalse(callbackSecretWouldMatch(SIGN_IN_REQUEST_ID, null))
         assertFalse(callbackSecretWouldMatch(SIGN_IN_REQUEST_ID, "b".repeat(32)))
-        verify(exactly = 3) { context.startActivity(any()) }
+        verify(exactly = 2) { context.startActivity(any()) }
     }
 
     @Test
@@ -1304,5 +1304,42 @@ class ExternalUrlHandoffTest {
 
         verify(exactly = 1) { context.startActivity(any()) }
         assertEquals(0, declined, "a subframe's navigation lifted the page's curtain")
+    }
+
+    @Test
+    fun `a main-frame navigation to a webview CDN host is declined without launching a browser`() {
+        val cdn = "https://0f7c2b1a.vscode-cdn.net/stable/deadbeef/out/index.html"
+        val handled = client.shouldOverrideUrlLoading(
+            view,
+            request("https", "0f7c2b1a.vscode-cdn.net", -1, cdn, fromMainFrame = true, path = "/stable/deadbeef/out/index.html"),
+        )
+
+        assertTrue(handled, "a main-frame navigation to *.vscode-cdn.net was allowed to replace the workbench")
+        assertEquals(1, declined, "a declined main-frame CDN navigation must lift the leave curtain")
+        verify(exactly = 0) { context.startActivity(any()) }
+        assertTrue(announced.isEmpty(), "declining a main-frame CDN load is not a failed hand-off: $announced")
+
+        val subframeHandled = client.shouldOverrideUrlLoading(
+            view,
+            request("https", "0f7c2b1a.vscode-cdn.net", -1, cdn, fromMainFrame = false, path = "/stable/deadbeef/out/index.html"),
+        )
+        assertFalse(subframeHandled, "a subframe webview host under *.vscode-cdn.net must still load")
+    }
+
+    @Test
+    fun `an unissued sign-in address after bootstrap completes is refused with SignInRefused`() {
+        val unissued = "https://github.com/login/oauth/authorize?client_id=abc" +
+            "&state=http%253A%252F%252F127.0.0.1%253A13337%252Fcallback" +
+            "%253Fvscode-reqid%253D999%2526vscodroid-nonce%253D" + "f".repeat(32)
+
+        val handled = client.shouldOverrideUrlLoading(
+            view,
+            request("https", "github.com", -1, unissued, fromMainFrame = true),
+        )
+
+        assertTrue(handled)
+        verify(exactly = 0) { context.startActivity(any()) }
+        assertEquals(listOf("https" to "SignInRefused"), announced)
+        assertNull(AuthTabWindow.armedAt("999"))
     }
 }

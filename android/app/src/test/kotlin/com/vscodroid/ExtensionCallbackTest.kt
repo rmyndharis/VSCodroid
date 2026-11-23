@@ -69,15 +69,12 @@ class ExtensionCallbackTest {
     }
 
     @Test
-    fun `the scheme and host are matched exactly`() {
-        // Android lower-cases the scheme and host of an intent URI before it is
-        // matched against a filter, so a comparison that stayed
-        // case-insensitive would be granting nothing and hiding the fact that
-        // the platform already normalised. Stated so the exact match is not
-        // "loosened" later by someone assuming it has to be.
-        assertFalse(isExtensionCallback("VSCodroid", "callback"))
-        assertFalse(isExtensionCallback("vscodroid", "Callback"))
+    fun `the scheme and host are matched case-insensitively while rejecting whitespace`() {
+        assertTrue(isExtensionCallback("VSCodroid", "callback"))
+        assertTrue(isExtensionCallback("vscodroid", "Callback"))
+        assertTrue(isExtensionCallback("VSCODROID", "CALLBACK"))
         assertFalse(isExtensionCallback("vscodroid ", "callback"))
+        assertFalse(isExtensionCallback("vscodroid", " callback"))
     }
 }
 

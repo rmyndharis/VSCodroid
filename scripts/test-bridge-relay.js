@@ -912,14 +912,21 @@ async function main() {
         assert.ok(blocked.result, address);
     }
     for (const address of [
+        'http://127.0.0.1:13337',
+        'HTTP://127.0.0.1:13337',
+        'http://127.0.0.1:13337?ew=true',
+        'http://127.0.0.1:13337#frag',
         'HTTP://127.0.0.1:13337/',
         'HTTP://127.0.0.1:13337/?folder=CaseSensitive%2FPath#Fragment',
     ]) {
         const own = windowOpen('', address);
-        assert.strictEqual(own.calls.navigated, address);
-        assert.strictEqual(own.calls.bridge, 0);
-        assert.strictEqual(own.calls.orig, 0);
+        assert.strictEqual(own.calls.navigated, address, `bare/root same-origin URL did not navigate in place: ${address}`);
+        assert.strictEqual(own.calls.bridge, 0, `same-origin URL reached bridge: ${address}`);
+        assert.strictEqual(own.calls.orig, 0, `same-origin URL fell through to orig: ${address}`);
     }
+    const otherPortPrefix = windowOpen('', 'http://127.0.0.1:133370/');
+    assert.strictEqual(otherPortPrefix.calls.bridge, 1, 'different port sharing prefix must still reach bridge');
+    assert.strictEqual(otherPortPrefix.calls.navigated, null);
     const upperExternal = windowOpen('', 'HTTPS://example.com/Path?Query=Case#Fragment');
     assert.strictEqual(upperExternal.calls.bridge, 1);
     assert.strictEqual(upperExternal.calls.url, 'HTTPS://example.com/Path?Query=Case#Fragment');

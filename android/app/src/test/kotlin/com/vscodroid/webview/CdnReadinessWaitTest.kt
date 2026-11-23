@@ -288,7 +288,7 @@ class CdnReadinessWaitTest {
             EditorGateway.instance.bind(server.port)
             val readyAt = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(300)
             val client = VSCodroidWebViewClient(
-                allowedPort = server.port,
+                allowedPort = { server.port },
                 resourceRules = noResourceRules(),
                 openFolder = { null },
                 connectionToken = { if (System.nanoTime() >= readyAt) token else null },
@@ -324,7 +324,7 @@ class CdnReadinessWaitTest {
             EditorGateway.instance.bind(server.port)
             val readyAt = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(300)
             VSCodroidWebViewClient.setupServiceWorkerInterception(
-                server.port, { emptyList() }, { emptyList() }, { null },
+                { server.port }, { emptyList() }, { emptyList() }, { null },
             ) { if (System.nanoTime() >= readyAt) token else null }
             assertTrue(registered.isCaptured, "no ServiceWorkerClient was registered")
 

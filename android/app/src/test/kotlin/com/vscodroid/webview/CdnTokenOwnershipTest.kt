@@ -101,7 +101,7 @@ class CdnTokenOwnershipTest {
             gateway.bind(server.port)
             gateway.release(server.port)
             val client = VSCodroidWebViewClient(
-                allowedPort = server.port,
+                allowedPort = { server.port },
                 resourceRules = noResourceRules(),
                 openFolder = { null },
                 connectionToken = { token },
@@ -132,7 +132,7 @@ class CdnTokenOwnershipTest {
             gateway.bind(server.port)
             gateway.release(server.port)
             VSCodroidWebViewClient.setupServiceWorkerInterception(
-                server.port, { emptyList() }, { emptyList() }, { null },
+                { server.port }, { emptyList() }, { emptyList() }, { null },
             ) { token }
             assertTrue(registered.isCaptured, "no ServiceWorkerClient was registered")
 
@@ -159,5 +159,30 @@ class CdnTokenOwnershipTest {
 
         assertEquals(2, calls, "the client's entries into the CDN arm are no longer these two")
         assertEquals(calls, bound, "an entry into the CDN arm hands the token over outside tokenWhileBound")
+    }
+
+    @Test
+    fun `port zero fails closed on CDN requests without returning null or forwarding`() {
+        Recorder().use { server ->
+            gateway.bind(server.port)
+            var currentPort = 0
+            val client = VSCodroidWebViewClient(
+                allowedPort = { currentPort },
+                resourceRules = noResourceRules(),
+                openFolder = { null },
+                connectionToken = { token },
+                onCrash = {},
+                onPageLoaded = {},
+                onRetryServer = {},
+            )
+
+            val closed = client.shouldInterceptRequest(mockk(relaxed = true), request())
+            assertNotNull(closed, "port <= 0 must return a closed response rather than null to the real CDN")
+            assertNull(server.target, "port <= 0 must not forward to any loopback listener")
+
+            currentPort = server.port
+            client.shouldInterceptRequest(mockk(relaxed = true), request())
+            assertTrue(server.target != null, "live port supplier must route to the active port once updated")
+        }
     }
 }
