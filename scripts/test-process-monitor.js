@@ -14,6 +14,7 @@
  */
 
 const assert = require('assert');
+const { spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -191,7 +192,7 @@ function checkLabelCoverage(snapshot) {
  */
 function checkCommandNames(snapshot, byPid) {
     const expected = new Map([
-        [process.pid, 'libnode.so server.js'],
+        [process.pid, 'libnode.so server-main.js'],
         [1001, 'libnode.so server-main.js'],
         [1007, 'libnode.so bootstrap-fork --type=fileWatcher'],
         [1029, 'libnode.so bootstrap-fork --type=agentHost'],
@@ -212,6 +213,8 @@ function checkCommandNames(snapshot, byPid) {
         [1071, 'linker64'],
         [1072, 'linker64'],
         [1073, 'clangd'],
+        [1074, 'libnode.so server.js'],
+        [1076, 'libnode.so server-main.js'],
     ]);
     for (const [pid, want] of expected) {
         const got = byPid.get(pid);
@@ -420,6 +423,92 @@ function checkSnapshotIsReplacedWhole(baseTmp) {
     );
 }
 
+/**
+ * When preloaded into server-main.js via VSCODROID_PROCESS_MONITOR=1, the
+ * monitor removes both its env flag and its --require option (in joined and
+ * two-token forms) from process.execArgv so forked helpers and worker_threads
+ * never inherit it and duplicate writes.
+ */
+function checkPreloadStripsItself(baseTmp) {
+    const out = fs.mkdtempSync(path.join(baseTmp, 'preload-strip-'));
+    const noopPreload = path.join(out, 'noop.js');
+    fs.writeFileSync(noopPreload, "'use strict';\n");
+
+    const script = 'process.stdout.write(JSON.stringify({ ' +
+        'flag: process.env.VSCODROID_PROCESS_MONITOR ?? null, ' +
+        'execArgv: process.execArgv ' +
+        '}));';
+
+    for (const [label, args] of [
+        ['joined', [`--require=${noopPreload}`, `--require=${MONITOR}`]],
+        ['split', [`--require=${noopPreload}`, '--require', MONITOR]],
+    ]) {
+        const res = spawnSync(process.execPath, [...args, '-e', script], {
+            encoding: 'utf8',
+            env: { ...process.env, TMPDIR: out, VSCODROID_PROCESS_MONITOR: '1' },
+            timeout: 10_000,
+        });
+        assert.strictEqual(res.status, 0, `${label} preload exited ${res.status}: ${res.stderr}`);
+        const jsonLine = res.stdout.trim().split('\n').pop();
+        const observed = JSON.parse(jsonLine);
+        assert.strictEqual(
+            observed.flag, null,
+            `${label} preload left VSCODROID_PROCESS_MONITOR in process.env: ${JSON.stringify(observed)}`,
+        );
+        assert.deepStrictEqual(
+            observed.execArgv.filter((arg) => arg.includes('process-monitor') || arg === '--require'),
+            [],
+            `${label} preload left its --require option in process.execArgv: ${JSON.stringify(observed.execArgv)}`,
+        );
+        assert.ok(
+            observed.execArgv.some((arg) => arg.includes('noop.js')),
+            `${label} preload stripped an unrelated sibling preload: ${JSON.stringify(observed.execArgv)}`,
+        );
+    }
+}
+
+/**
+ * A bootstrap server.js reached through a symlinked directory (such as Android
+ * /data/user/0 vs /data/data) still classifies as 'bootstrap', while an
+ * unrelated server.js on disk stays 'unknown'.
+ */
+function checkSymlinkedBootstrapPath(baseTmp) {
+    const root = fs.mkdtempSync(path.join(baseTmp, 'symlink-bootstrap-'));
+    const realServerDir = path.join(root, 'Real-Server');
+    const linkServerDir = path.join(root, 'Link-Server');
+    const userProjectDir = path.join(root, 'User-App');
+    fs.mkdirSync(realServerDir, { recursive: true });
+    fs.mkdirSync(userProjectDir, { recursive: true });
+    fs.symlinkSync(realServerDir, linkServerDir);
+
+    const monitorCopy = path.join(realServerDir, 'process-monitor.js');
+    fs.copyFileSync(MONITOR, monitorCopy);
+    fs.writeFileSync(path.join(realServerDir, 'server.js'), "'use strict';\n");
+    fs.writeFileSync(path.join(userProjectDir, 'server.js'), "'use strict';\n");
+
+    const relocated = require(monitorCopy);
+    const proc = path.join(root, 'proc');
+    writeProc(proc, 2101, [NODE, '--max-old-space-size=512', path.join(linkServerDir, 'server.js'), '--host=127.0.0.1']);
+    writeProc(proc, 2102, [NODE, path.join(userProjectDir, 'server.js')]);
+
+    const out = path.join(root, 'tmp');
+    fs.mkdirSync(out);
+    process.env.TMPDIR = out;
+    relocated.start({ procRoot: proc });
+    relocated.stop();
+
+    const snapshot = JSON.parse(fs.readFileSync(path.join(out, 'vscodroid-processes.json'), 'utf8'));
+    const type = (pid) => (snapshot.tree.find((e) => e.pid === pid) || {}).type;
+    assert.strictEqual(
+        type(2101), 'bootstrap',
+        `symlinked bootstrap server.js was labelled ${type(2101)} instead of bootstrap`,
+    );
+    assert.strictEqual(
+        type(2102), 'unknown',
+        `unrelated user server.js was labelled ${type(2102)} instead of unknown`,
+    );
+}
+
 function main() {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vscodroid-monitor-'));
     const proc = path.join(tmp, 'proc');
@@ -444,22 +533,23 @@ function main() {
  * The body of main(), split out only so the kill stub above wraps all of it.
  */
 function run(tmp, proc, signals) {
-    // The monitor runs inside this very process, so its own pid has to be one
-    // of the fixture entries for the count to mean anything.
-    writeProc(proc, process.pid, [NODE, '--max-old-space-size=512', '/data/user/0/com.vscodroid/files/server/server.js', '--host=127.0.0.1']);
+    // The monitor runs inside the editor server (server-main.js), so its own
+    // pid carries the server-main.js command line and must be classified as
+    // 'server' rather than 'bootstrap'.
+    writeProc(proc, process.pid, [
+        NODE, HEAP,
+        `--require=${SRV}/dns-proxy.js`,
+        `--require=${SRV}/process-monitor.js`,
+        `--require=${SRV}/platform-fix.js`,
+        `${REH}/out/server-main.js`, '--host', '127.0.0.1',
+    ]);
 
     const cases = [
         // pid, argv, the type the snapshot must carry
-        // The command line assets/server.js really forks, preload and heap
-        // ceiling included. It used to be the entry point and its host alone,
-        // which resembles nothing the app launches and let the preload's spelling
-        // decide what this row is called: `--require` and the path as two tokens
-        // makes the path the first non-option argument, so scriptArgument() picks
-        // it up and checkCommandNames() below reads `libnode.so dns-proxy.js` for
-        // the editor server. The type is unaffected either way, which is why only
-        // a fixture carrying the option can hold the naming.
-        [1001, [NODE, HEAP, `--require=${SRV}/dns-proxy.js`,
-            `${REH}/out/server-main.js`, '--host', '127.0.0.1'], 'server'],
+        // The command line assets/server.js really forks, preloads and heap
+        // ceiling included.
+        [1001, [NODE, HEAP, `--require=${SRV}/dns-proxy.js`, `--require=${SRV}/process-monitor.js`,
+            `--require=${SRV}/platform-fix.js`, `${REH}/out/server-main.js`, '--host', '127.0.0.1'], 'server'],
         [1002, [NODE, `${REH}/extensions/css-language-features/server/dist/node/cssServerMain.js`, '--node-ipc'], 'langserver'],
         [1003, [NODE, `${REH}/extensions/json-language-features/server/dist/node/jsonServerMain.js`, '--node-ipc'], 'langserver'],
         [1004, ['/data/data/com.vscodroid/lib/arm64/libbash.so', '-l'], 'terminal'],
@@ -676,6 +766,13 @@ function run(tmp, proc, signals) {
         // program's real path after it (modifyExecArgs in termux-exec), so argv[0] already names the program.
         // Read from that source, not measured on a device.
         [1073, ['clangd', `${FILES}/usr/bin/clangd`, '--log=error'], 'langserver'],
+        // The bootstrap server.js beside process-monitor.js is still classified
+        // as 'bootstrap' while it is alive, whereas a user's own server.js stays
+        // 'unknown'.
+        [1074, [NODE, '--max-old-space-size=512', `${SRV}/server.js`, '--host=127.0.0.1'], 'bootstrap'],
+        [1075, [NODE, `${FILES}/home/projects/app/server.js`], 'unknown'],
+        // Two-token --require form still resolves server-main.js as 'server'.
+        [1076, [NODE, HEAP, '--require', `${SRV}/process-monitor.js`, `${REH}/out/server-main.js`, '--host', '127.0.0.1'], 'server'],
     ];
     for (const [pid, argv] of cases) {
         writeProc(proc, pid, argv);
@@ -718,9 +815,14 @@ function run(tmp, proc, signals) {
     assert.deepStrictEqual(signals, [], `the first scan signalled ${JSON.stringify(signals)}`);
 
     // Android's phantom accounting is per-UID and counts the process this code
-    // runs inside, which ProcessBuilder launched like any other. Skipping it
-    // reported one fewer than the limit is measured against.
-    assert.ok(byPid.has(process.pid), 'the bootstrap process the monitor runs in was not counted');
+    // runs inside (server-main.js) like any other. Skipping it would report one
+    // fewer than the limit is measured against, and hardcoding process.pid as
+    // 'bootstrap' would mislabel server-main.js.
+    assert.ok(byPid.has(process.pid), 'the editor server process the monitor runs in was not counted');
+    assert.strictEqual(
+        byPid.get(process.pid).type, 'server',
+        `the monitor's own process (server-main.js) was labelled ${byPid.get(process.pid).type}`,
+    );
 
     assert.strictEqual(snapshot.total, snapshot.tree.length, 'total disagrees with the tree it summarises');
     assert.strictEqual(snapshot.budget.current, snapshot.total, 'budget.current disagrees with total');
@@ -903,6 +1005,8 @@ function run(tmp, proc, signals) {
     checkSnapshotSurvivesReclaim(tmp, proc);
     checkSnapshotIsReplacedWhole(tmp);
     const moved = checkRehAnchorFollowsTheTree(tmp);
+    checkSymlinkedBootstrapPath(tmp);
+    checkPreloadStripsItself(tmp);
 
     assert.deepStrictEqual(
         signals, [],
