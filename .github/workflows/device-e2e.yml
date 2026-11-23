@@ -1,0 +1,279 @@
+name: Device E2E
+
+# Runs the on-device instrumented suite (via scripts/device-test.sh --instrumented)
+# and an optional R8-minified APK boot smoke check on a self-hosted ARM64 runner.
+#
+# Why workflow_dispatch on self-hosted hardware only:
+# The app ships arm64-v8a native binaries exclusively (`abiFilters += "arm64-v8a"`),
+# so the target must be an arm64 Android device or hardware-accelerated arm64
+# emulator. GitHub-hosted runners cannot accelerate an arm64 Android guest
+# (measured in android/app/src/androidTest/README.md):
+#   - ubuntu-latest (x86_64): KVM only accelerates x86_64 guests;
+#   - ubuntu-24.04-arm (aarch64): no /dev/kvm exposed;
+#   - macos-15 (Apple silicon): nested VM without HVF (`HV_UNSUPPORTED`).
+#
+# Supply runner_label as a JSON array of labels matching your self-hosted arm64
+# machine with KVM/HVF or an attached arm64 Android device. Checkout uses
+# `clean: false` so pre-staged gitignored assets (`assets/vscode-reh`, `assets/usr`,
+# `jniLibs/arm64-v8a/*.so`) survive across runs on the self-hosted runner.
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_label:
+        description: 'JSON array of self-hosted runner labels (default: ["self-hosted", "arm64"])'
+        required: false
+        type: string
+        default: '["self-hosted", "arm64"]'
+      device_serial:
+        description: "Optional adb serial (e.g. emulator-5554); leave blank when one target is attached"
+        required: false
+        type: string
+        default: ""
+      fetch_assets:
+        description: "Run scripts/build-all.sh if pre-staged assets are absent on the runner"
+        required: false
+        type: boolean
+        default: false
+      run_release_smoke:
+        description: "Also build, install and boot-smoke an R8-minified release APK"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  device-e2e:
+    name: ARM64 Device E2E
+    runs-on: ${{ fromJSON(inputs.runner_label) }}
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Keep gitignored pre-staged asset trees intact on the self-hosted runner.
+          clean: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          java-version: "17"
+          distribution: "temurin"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-provider: external
+
+      - name: Cache the Gradle user home
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-home-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle/**') }}
+          restore-keys: |
+            gradle-home-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Prepare or verify pre-staged assets
+        env:
+          FETCH_ASSETS: ${{ inputs.fetch_assets }}
+        run: |
+          set -euo pipefail
+          LIBNODE="android/app/src/main/jniLibs/arm64-v8a/libnode.so"
+          SERVER_MAIN="android/app/src/main/assets/vscode-reh/out/server-main.js"
+          USR_DIR="android/app/src/main/assets/usr"
+          ASSETS_OK=true
+          if [ ! -f "$LIBNODE" ] || [ "$(wc -c < "$LIBNODE" | tr -d ' ')" -lt 1000 ]; then
+            ASSETS_OK=false
+          fi
+          if [ ! -f "$SERVER_MAIN" ] || [ ! -d "$USR_DIR" ]; then
+            ASSETS_OK=false
+          fi
+          if [ "$ASSETS_OK" = "true" ]; then
+            echo "Pre-staged asset tree verified."
+          elif [ "$FETCH_ASSETS" = "true" ]; then
+            echo "Pre-staged assets absent; preparing assets with scripts/build-all.sh."
+            bash scripts/build-all.sh
+          else
+            echo "::error::Pre-staged assets are missing ($LIBNODE, $SERVER_MAIN or $USR_DIR)."
+            echo "Prepare the runner workspace with scripts/build-all.sh (or dispatch with fetch_assets=true)."
+            exit 1
+          fi
+
+      - name: Clear logcat on target device
+        env:
+          DEVICE_SERIAL: ${{ inputs.device_serial }}
+        run: |
+          set -euo pipefail
+          ADB=(adb)
+          if [ -n "$DEVICE_SERIAL" ]; then
+            ADB=(adb -s "$DEVICE_SERIAL")
+          else
+            ATTACHED=$(adb devices 2>/dev/null | awk 'NR>1 && $2=="device" {print $1}')
+            COUNT=$(printf '%s\n' "$ATTACHED" | grep -c . || true)
+            if [ "$COUNT" -eq 1 ]; then
+              ADB=(adb -s "$ATTACHED")
+            fi
+          fi
+          "${ADB[@]}" logcat -c || true
+
+      - name: Run instrumented tests on ARM64 target
+        env:
+          DEVICE_SERIAL: ${{ inputs.device_serial }}
+        run: |
+          set -euo pipefail
+          # Delegate to scripts/device-test.sh --instrumented so device boot,
+          # arm64 ABI, multi-device selection, asset preconditions, Gradle test
+          # execution and android/app/build/reports/device-run.txt are all
+          # enforced consistently. Never export an empty ANDROID_SERIAL.
+          ARGS=(--instrumented)
+          if [ -n "$DEVICE_SERIAL" ]; then
+            ARGS+=(--device "$DEVICE_SERIAL")
+          fi
+          bash scripts/device-test.sh "${ARGS[@]}"
+
+      - name: Run optional R8-minified APK boot smoke check
+        if: ${{ inputs.run_release_smoke }}
+        env:
+          DEVICE_SERIAL: ${{ inputs.device_serial }}
+        run: |
+          set -euo pipefail
+          bash scripts/device-test.sh --self-check
+
+          # Use a throwaway PKCS12 keystore under RUNNER_TEMP when no signing
+          # config is provisioned on the runner so validateSigningRelease and
+          # adb install succeed on an R8-minified release build.
+          SMOKE_KEYSTORE=""
+          cleanup_keystore() {
+            if [ -n "$SMOKE_KEYSTORE" ] && [ -f "$SMOKE_KEYSTORE" ]; then
+              rm -f "$SMOKE_KEYSTORE"
+            fi
+          }
+          trap cleanup_keystore EXIT
+
+          if [ ! -f android/signing.properties ] && [ -z "${VSCODROID_KEYSTORE_FILE:-}" ]; then
+            SMOKE_KEYSTORE="${RUNNER_TEMP:-/tmp}/smoke-release.jks"
+            SMOKE_PASS=$(python3 -c 'import secrets; print(secrets.token_hex(16))')
+            rm -f "$SMOKE_KEYSTORE"
+            keytool -genkeypair \
+              -keystore "$SMOKE_KEYSTORE" \
+              -storetype PKCS12 \
+              -alias vscodroid-smoke \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 1 \
+              -storepass "$SMOKE_PASS" \
+              -keypass "$SMOKE_PASS" \
+              -dname "CN=VSCodroid Smoke,OU=CI,O=VSCodroid,L=Local,ST=Local,C=US"
+            export VSCODROID_KEYSTORE_FILE="$SMOKE_KEYSTORE"
+            export VSCODROID_KEYSTORE_PASSWORD="$SMOKE_PASS"
+            export VSCODROID_KEY_ALIAS="vscodroid-smoke"
+            export VSCODROID_KEY_PASSWORD="$SMOKE_PASS"
+          fi
+
+          (cd android && ./gradlew :app:assembleRelease)
+          python3 scripts/verify-r8-keeps.py
+          APK="android/app/build/outputs/apk/release/app-release.apk"
+
+          ADB=(adb)
+          if [ -n "$DEVICE_SERIAL" ]; then
+            ADB=(adb -s "$DEVICE_SERIAL")
+          else
+            ATTACHED=$(adb devices 2>/dev/null | awk 'NR>1 && $2=="device" {print $1}')
+            COUNT=$(printf '%s\n' "$ATTACHED" | grep -c . || true)
+            if [ "$COUNT" -ne 1 ]; then
+              echo "::error::Expected 1 attached device when device_serial is unset; found $COUNT."
+              exit 1
+            fi
+            ADB=(adb -s "$ATTACHED")
+          fi
+
+          dismiss_blocking_dialogs() {
+            "${ADB[@]}" shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1 || return 0
+            DIALOG_XML=$("${ADB[@]}" shell cat /sdcard/ui.xml 2>/dev/null | tr -d '\r') || return 0
+            for BUTTON in Allow Skip; do
+              BOUNDS=$(printf '%s\n' "$DIALOG_XML" \
+                | grep -o "text=\"$BUTTON\"[^>]*bounds=\"\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]\"" \
+                | grep -o 'bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | head -1 || true)
+              [ -z "$BOUNDS" ] && continue
+              COORDS=$(printf '%s\n' "$BOUNDS" | tr -cd '0-9,][' | tr '][' ' ' | tr ',' ' ')
+              set -- $COORDS
+              [ $# -lt 4 ] && continue
+              "${ADB[@]}" shell input tap $(( ($1 + $3) / 2 )) $(( ($2 + $4) / 2 )) >/dev/null 2>&1 || true
+            done
+          }
+
+          # Stop and uninstall any previous smoke-signed install to avoid signature mismatch.
+          "${ADB[@]}" shell am force-stop com.vscodroid >/dev/null 2>&1 || true
+          "${ADB[@]}" uninstall com.vscodroid >/dev/null 2>&1 || true
+          "${ADB[@]}" install -r "$APK"
+          "${ADB[@]}" shell am force-stop com.vscodroid >/dev/null 2>&1 || true
+          "${ADB[@]}" shell pm clear com.vscodroid
+          # Grant POST_NOTIFICATIONS on API 33+ so the permission prompt does not stall first launch.
+          "${ADB[@]}" shell pm grant com.vscodroid android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true
+          "${ADB[@]}" logcat -c || true
+          "${ADB[@]}" shell am start -n com.vscodroid/com.vscodroid.SplashActivity
+
+          # Budget 360s to cover first-run asset extraction (up to 300s) plus server startup.
+          READY=0
+          for _ in $(seq 1 180); do
+            LOG=$("${ADB[@]}" logcat -d -s VSCodroid.NodeService:I VSCodroid.ProcessManager:I AndroidRuntime:E 2>/dev/null || true)
+            if printf '%s\n' "$LOG" | grep -qE "FATAL EXCEPTION|ClassNotFoundException|NoSuchMethodError|VerifyError|IncompatibleClassChangeError"; then
+              echo "::error::R8-minified APK crashed during boot smoke check."
+              printf '%s\n' "$LOG"
+              exit 1
+            fi
+            if printf '%s\n' "$LOG" | grep -qF "Max restarts exceeded"; then
+              echo "::error::R8-minified APK exhausted server restarts during boot smoke check."
+              printf '%s\n' "$LOG"
+              exit 1
+            fi
+            if printf '%s\n' "$LOG" | grep -qF "Server is ready on port"; then
+              READY=1
+              break
+            fi
+            dismiss_blocking_dialogs
+            sleep 2
+          done
+          if [ "$READY" -ne 1 ]; then
+            echo "::error::R8-minified APK did not report server readiness within 360s."
+            exit 1
+          fi
+          echo "R8-minified APK boot smoke check passed."
+
+      - name: Cleanup throwaway keystore and capture device logcat
+        if: always()
+        env:
+          DEVICE_SERIAL: ${{ inputs.device_serial }}
+        run: |
+          rm -f "${RUNNER_TEMP:-/tmp}/smoke-release.jks"
+          mkdir -p android/app/build/reports
+          ADB=(adb)
+          if [ -n "$DEVICE_SERIAL" ]; then
+            ADB=(adb -s "$DEVICE_SERIAL")
+          else
+            ATTACHED=$(adb devices 2>/dev/null | awk 'NR>1 && $2=="device" {print $1}')
+            COUNT=$(printf '%s\n' "$ATTACHED" | grep -c . || true)
+            if [ "$COUNT" -eq 1 ]; then
+              ADB=(adb -s "$ATTACHED")
+            fi
+          fi
+          "${ADB[@]}" logcat -d > android/app/build/reports/device-e2e-logcat.txt 2>&1 || true
+
+      - name: Upload JUnit XML and logcat artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: device-e2e-results
+          path: |
+            android/app/build/outputs/androidTest-results/connected/
+            android/app/build/reports/androidTests/connected/
+            android/app/build/reports/device-e2e-logcat.txt
+            android/app/build/reports/device-run.txt
+          retention-days: 14
+          if-no-files-found: ignore

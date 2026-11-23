@@ -21,10 +21,13 @@ name: Shrinker
 # catch regressions on pull requests as well as pushes to main. assets/ is read
 # by none of the three and is stubbed out below anyway.
 #
-# What it catches is these gates FAILING, not their being WRONG. A reflectively
-# reached member that no keep rule covers is removed silently, and this job is
-# green for it; only running a minified build on a device finds that, and no CI
-# here can. See android/app/src/androidTest/README.md.
+# In addition to failing when R8, resource shrinking or lintVital fails, this
+# workflow runs scripts/verify-r8-keeps.py against the generated seeds.txt and
+# mapping.txt to verify manifest components, @JavascriptInterface methods,
+# VSCodroidApp and app Throwable subclasses survived unstripped and unrenamed.
+# Full runtime verification of a minified build still requires an ARM64 device
+# or emulator (see .github/workflows/device-e2e.yml and
+# android/app/src/androidTest/README.md).
 
 on:
   schedule:
@@ -46,6 +49,7 @@ on:
       - "android/gradle.properties"
       - "android/gradle/wrapper/gradle-wrapper.properties"
       - ".github/workflows/r8.yml"
+      - "scripts/verify-r8-keeps.py"
       # The code and resources the shrinkers and lintVital run over. assets/ is
       # read by none of the three, and the tree stubbed out below is what this
       # job builds against anyway.
@@ -68,6 +72,7 @@ on:
       # for the first time at tag time.
       - "android/gradle/wrapper/gradle-wrapper.properties"
       - ".github/workflows/r8.yml"
+      - "scripts/verify-r8-keeps.py"
       - "android/app/src/main/kotlin/**"
       - "android/app/src/main/res/**"
       - "android/app/src/main/AndroidManifest.xml"
@@ -190,6 +195,15 @@ jobs:
       - name: Run the release-only gates
         working-directory: android
         run: ./gradlew :app:optimizeReleaseResources :app:lintVitalRelease -Pvscodroid.stubAssets=true
+
+      # Verify R8 keep rules against the generated seeds.txt and mapping.txt so
+      # a stripped or renamed @JavascriptInterface method, manifest component,
+      # Application class or app Throwable subclass fails CI rather than
+      # surfacing only on a minified release install.
+      - name: Verify R8 keep rules against seeds and mapping
+        run: |
+          python3 scripts/verify-r8-keeps.py --self-test
+          python3 scripts/verify-r8-keeps.py
 
       # R8's own record of what it kept and removed. Worth having on the failing
       # run, since the mapping is what turns a release-build stack trace back into
