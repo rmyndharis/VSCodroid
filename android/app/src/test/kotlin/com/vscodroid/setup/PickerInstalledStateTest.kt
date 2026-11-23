@@ -1,5 +1,6 @@
 package com.vscodroid.setup
 
+import com.vscodroid.SourceScan
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.File
@@ -39,47 +40,15 @@ class PickerInstalledStateTest {
      * [PickerAccessibilityWiringTest]: one commented brace widened a body from
      * 1877 characters to 5295.
      */
-    private fun bodyOf(signature: String): String {
-        assertTrue(
-            source.isFile,
-            "${source.path} is not at ${source.absolutePath}; this test would " +
-                "otherwise pass by reading nothing",
-        )
-        val text = source.readText()
-        val start = text.indexOf(signature)
-        assertTrue(start >= 0, "no function matching `$signature` in ${source.name}")
-        var i = text.indexOf('{', start)
-        assertTrue(i >= 0, "no body follows `$signature` in ${source.name}")
-        val open = i
-        var depth = 0
-        while (i < text.length) {
-            when {
-                text.startsWith("//", i) -> while (i < text.length && text[i] != '\n') i++
-                text.startsWith("/*", i) -> {
-                    i += 2
-                    while (i < text.length && !text.startsWith("*/", i)) i++
-                    i += 2
-                }
-                text[i] == '{' -> { depth++; i++ }
-                text[i] == '}' -> {
-                    depth--
-                    if (depth == 0) return text.substring(open, i + 1)
-                    i++
-                }
-                else -> i++
-            }
-        }
-        error("unbalanced braces after `$signature` in ${source.name}")
-    }
+    private fun bodyOf(signature: String): String =
+        SourceScan.body(SourceScan.read(source.path), signature)
 
     /**
      * Comments dropped, so prose about the read cannot satisfy a search for it.
      * The comment beside the call names it at length, which is exactly the shape
      * that passes while the call is gone.
      */
-    private fun code(body: String) = body
-        .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), " ")
-        .replace(Regex("""//[^\n]*"""), " ")
+    private fun code(body: String) = SourceScan.withoutComments(body)
 
     @Test
     fun `the first-run picker is told what is already installed`() {

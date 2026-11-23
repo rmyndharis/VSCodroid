@@ -44,7 +44,7 @@ class ListEditKeeperWiringTest {
 
     @Test
     fun `the row is read before layout and scrolled after it`() {
-        val script = SourceScan.body(mainActivity(), "private fun injectListEditKeeper(")
+        val script = SourceScan.scriptBody(mainActivity(), "private fun injectListEditKeeper(")
         listOf(
             "addEventListener('resize'" to "the keyboard reaches the workbench as a resize; " +
                 "without this listener nothing runs",

@@ -43,7 +43,7 @@ class CaretDragWiringTest {
 
     @Test
     fun `the touch is taken before the editor hears it and the move can be cancelled`() {
-        val script = SourceScan.body(mainActivity(), "private fun injectCaretDrag(")
+        val script = SourceScan.scriptBody(mainActivity(), "private fun injectCaretDrag(")
         assertTrue(
             script.contains("window.addEventListener('touchmove'") &&
                 script.contains("}, { capture: true, passive: false });"),
@@ -59,7 +59,7 @@ class CaretDragWiringTest {
 
     @Test
     fun `the caret is moved with the editor's own tap`() {
-        val script = SourceScan.body(mainActivity(), "private fun injectCaretDrag(")
+        val script = SourceScan.scriptBody(mainActivity(), "private fun injectCaretDrag(")
         assertTrue(
             script.contains("'-monaco-gesturetap'"),
             "the caret is moved by the editor's tap, which the keyboard guard also listens for " +
@@ -70,8 +70,8 @@ class CaretDragWiringTest {
     @Test
     fun `the keyboard guard reads the mark the script leaves on a taken drag`() {
         val source = mainActivity()
-        val guard = SourceScan.body(source, "private fun injectKeyboardGuard(")
-        val script = SourceScan.body(source, "private fun injectCaretDrag(")
+        val guard = SourceScan.scriptBody(source, "private fun injectKeyboardGuard(")
+        val script = SourceScan.scriptBody(source, "private fun injectCaretDrag(")
         assertTrue(
             script.contains("window.__vscodroidCaretDragged = true;"),
             "the script no longer marks the touch it takes, so the guard cannot tell a drag of " +
@@ -107,7 +107,7 @@ class CaretDragWiringTest {
                 "scripts/package-assets.sh to check the names against the shipped bundle",
         )
         val bundle = workbench.readText()
-        val script = SourceScan.body(mainActivity(), "private fun injectCaretDrag(")
+        val script = SourceScan.scriptBody(mainActivity(), "private fun injectCaretDrag(")
         val selectors = Regex("""(?:querySelector(?:All)?|closest)\('([^']+)'\)""")
             .findAll(script).joinToString(" ") { it.groupValues[1] }
         val classes = Regex("""\.([a-zA-Z][\w-]*)""")

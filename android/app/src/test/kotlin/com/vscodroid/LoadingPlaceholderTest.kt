@@ -63,9 +63,8 @@ class LoadingPlaceholderTest {
         // The setup one is what a launch shows; the retry one is what both error
         // pages' controls reach, and it is the copy a user sees only after
         // something has already gone wrong.
-        val calls = source.lines().filter { line ->
-            val code = line.substringBefore("//")
-            code.contains(".loadData(")
+        val calls = SourceScan.withoutComments(source).lines().filter { line ->
+            line.contains(".loadData(")
         }
 
         assertEquals(

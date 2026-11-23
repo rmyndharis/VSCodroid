@@ -1,5 +1,6 @@
 package com.vscodroid.setup
 
+import com.vscodroid.SourceScan
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -125,25 +126,7 @@ class LaunchRepairWiringTest {
      * the end would contain every name for entirely the wrong reason.
      */
     private fun bodyOf(declaration: String, bounds: IntRange): String {
-        check(source.isFile) {
-            "SplashActivity.kt not found at ${source.absolutePath}, this test would " +
-                "otherwise pass by looking at nothing"
-        }
-        val text = source.readText()
-        val start = text.indexOf(declaration)
-        check(start >= 0) { "$declaration is gone from SplashActivity.kt" }
-
-        val open = text.indexOf('{', start)
-        var depth = 0
-        var i = open
-        while (i < text.length) {
-            if (text[i] == '{') depth++
-            if (text[i] == '}') depth--
-            if (depth == 0) break
-            i++
-        }
-        check(depth == 0) { "no closing brace found for $declaration" }
-        val body = text.substring(open, i + 1)
+        val body = SourceScan.body(SourceScan.read(source.path), declaration)
         check(body.length in bounds) {
             "extracted ${body.length} characters of $declaration, which means the extraction " +
                 "is wrong rather than the code"
@@ -160,9 +143,7 @@ class LaunchRepairWiringTest {
      * repairs anyway, matching raw text would find every one of them in a file
      * that calls none.
      */
-    private fun code(body: String) = body
-        .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), " ")
-        .replace(Regex("""//[^\n]*"""), " ")
+    private fun code(body: String) = SourceScan.withoutComments(body)
 
     private fun guardedLines(body: String) =
         body.lines().map { it.trim() }.filter { it.startsWith("repair(") }

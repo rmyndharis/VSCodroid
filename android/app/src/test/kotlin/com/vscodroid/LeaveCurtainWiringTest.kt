@@ -57,7 +57,7 @@ class LeaveCurtainWiringTest {
 
     @Test
     fun `the script covers the page for a leave and gives it back`() {
-        val script = SourceScan.body(mainActivity(), "private fun injectLeaveCurtain(")
+        val script = SourceScan.scriptBody(mainActivity(), "private fun injectLeaveCurtain(")
         listOf(
             "'beforeunload'" to "the event the workbench dismantles itself in; any other " +
                 "event is too late, because the dismantled page is painted by the next frame",
@@ -92,7 +92,7 @@ class LeaveCurtainWiringTest {
     fun `a navigation the client declines is told to the page under the name the script listens for`() {
         val source = mainActivity()
         val event = "vscodroid-navigation-declined"
-        val script = SourceScan.body(source, "private fun injectLeaveCurtain(")
+        val script = SourceScan.scriptBody(source, "private fun injectLeaveCurtain(")
         assertTrue(
             script.contains("addEventListener('$event', lower)"),
             "the curtain script no longer lowers on `$event`, so a link handed to another app " +

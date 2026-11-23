@@ -87,7 +87,7 @@ class KeyboardGuardWiringTest {
      */
     @Test
     fun `a long press is not a tap`() {
-        val guard = SourceScan.body(mainActivity(), "private fun injectKeyboardGuard(")
+        val guard = SourceScan.scriptBody(mainActivity(), "private fun injectKeyboardGuard(")
         val up = guard.substring(guard.indexOf("addEventListener('pointerup'").also {
             assertTrue(it >= 0, "the guard no longer decides on pointerup")
         })
@@ -121,7 +121,7 @@ class KeyboardGuardWiringTest {
      */
     @Test
     fun `a composing editor keeps its word`() {
-        val guard = SourceScan.body(mainActivity(), "private fun injectKeyboardGuard(")
+        val guard = SourceScan.scriptBody(mainActivity(), "private fun injectKeyboardGuard(")
         for (name in listOf("editContext", "'compositionstart'", "'compositionend'")) {
             assertTrue(
                 guard.contains(name),
@@ -129,7 +129,7 @@ class KeyboardGuardWiringTest {
                     "apart and flips inputmode under a word being typed, which duplicates it.",
             )
         }
-        val apply = SourceScan.body(guard, "function apply(element)")
+        val apply = SourceScan.jsBody(guard, "function apply(element)")
         val skip = apply.indexOf("composing")
         assertTrue(
             skip >= 0 && skip < apply.indexOf("inputmode"),
@@ -158,7 +158,7 @@ class KeyboardGuardWiringTest {
      */
     @Test
     fun `the composing state ends with focus and a new word is aiming at text`() {
-        val guard = SourceScan.body(mainActivity(), "private fun injectKeyboardGuard(")
+        val guard = SourceScan.scriptBody(mainActivity(), "private fun injectKeyboardGuard(")
 
         val focusout = guard.indexOf("addEventListener('focusout'")
         assertTrue(
@@ -169,7 +169,7 @@ class KeyboardGuardWiringTest {
                 "apply() for good, and tapping its text never raises the keyboard again.",
         )
 
-        val started = SourceScan.body(guard, "function composeStarted(element)")
+        val started = SourceScan.jsBody(guard, "function composeStarted(element)")
         for (name in listOf("composing.add(element)", "document.activeElement", "'none'", "aimedAtText = true")) {
             assertTrue(
                 started.contains(name),
@@ -208,7 +208,7 @@ class KeyboardGuardWiringTest {
     @Test
     fun `the keyboard going away restores the hold`() {
         val source = mainActivity()
-        val guard = SourceScan.body(source, "private fun injectKeyboardGuard(")
+        val guard = SourceScan.scriptBody(source, "private fun injectKeyboardGuard(")
         assertTrue(
             guard.contains("window.__vscodroidKeyboardDismissed = function"),
             "the guard no longer defines __vscodroidKeyboardDismissed, so a keyboard put away " +
@@ -300,13 +300,13 @@ class KeyboardGuardWiringTest {
             ready.indexOf("!targetView.hasWindowFocus()") < ready.indexOf("targetView.clearFocus()"),
             "native input is released only to a view that has the focus",
         )
-        val guard = SourceScan.withoutComments(SourceScan.body(mainActivity(), "private fun injectKeyboardGuard()"))
+        val guard = SourceScan.scriptBody(mainActivity(), "private fun injectKeyboardGuard()")
         assertTrue(
             guard.contains("scheduleCompositionTurnFinish()"),
             "same-text composition events during a turn must schedule immediate completion",
         )
         assertFalse(
-            SourceScan.body(guard, "function composeStarted(").contains("compositionTurn = null"),
+            SourceScan.jsBody(guard, "function composeStarted(").contains("compositionTurn = null"),
             "a keyboard reopening a composition during a turn must not cancel turn recovery",
         )
     }
@@ -315,7 +315,7 @@ class KeyboardGuardWiringTest {
     fun `a scroll is not a tap`() {
         // Inside the guard: the same names appear in other scripts of the file, so a search of the
         // whole of it stays green with the guard back on pointerdown.
-        val guard = SourceScan.body(mainActivity(), "private fun injectKeyboardGuard()")
+        val guard = SourceScan.scriptBody(mainActivity(), "private fun injectKeyboardGuard()")
 
         for (decides in listOf(
             "document.addEventListener('pointerup'",
@@ -333,7 +333,7 @@ class KeyboardGuardWiringTest {
     @Test
     fun `the guard aims at the element this workbench actually focuses`() {
         // The guard's own selectors: another script of the file names the element as well.
-        val source = SourceScan.body(mainActivity(), "private fun injectKeyboardGuard()")
+        val source = SourceScan.scriptBody(mainActivity(), "private fun injectKeyboardGuard()")
 
         assertTrue(
             source.contains(".native-edit-context"),
@@ -577,7 +577,7 @@ class KeyboardGuardWiringTest {
                 .containsMatchIn(activity),
             "keyboardDismissal must pass byPerson=true and the gesture's wall-clock timestamp (System.currentTimeMillis() - ageMs) via onExplicitDismissed while keeping unflagged onDismissed for default dismissals",
         )
-        val guard = SourceScan.body(activity, "private fun injectKeyboardGuard(")
+        val guard = SourceScan.scriptBody(activity, "private fun injectKeyboardGuard(")
         assertTrue(
             guard.contains("Date.now()") &&
                 guard.contains("gestureAtMs < textFocusedWallAt") &&

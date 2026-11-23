@@ -57,7 +57,7 @@ class ComposingEnterWiringTest {
 
     @Test
     fun `a composing Enter is replaced outside the editor and the terminal only`() {
-        val script = SourceScan.body(mainActivity(), "private fun injectComposingEnter(")
+        val script = SourceScan.scriptBody(mainActivity(), "private fun injectComposingEnter(")
         listOf(
             "e.isComposing" to "the one thing that tells Gboard's Enter from any other; " +
                 "without it every Enter is replaced",

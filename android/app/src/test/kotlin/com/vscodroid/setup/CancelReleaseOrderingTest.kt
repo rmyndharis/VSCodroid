@@ -1,5 +1,6 @@
 package com.vscodroid.setup
 
+import com.vscodroid.SourceScan
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -32,28 +33,9 @@ class CancelReleaseOrderingTest {
      * what turns a formatting change that broke that assumption into a failure
      * rather than a silent widening.
      */
-    private fun cancelBody(): String {
-        assertTrue(
-            manager.isFile,
-            "${manager.absolutePath} is missing; this test would otherwise pass by reading nothing",
-        )
-        // Block comments come out before anything is searched for. The `(?m)^\s*`
-        // anchors below already refuse a call disabled with `//`, and one whose
-        // whole line is wrapped in `/* */`; what they cannot refuse is a block
-        // comment opened on one line and closed on another, because the call then
-        // sits on a line of its own that carries no marker and the anchor matches
-        // it exactly as it matches live code. Measured: with the call wrapped that
-        // way and nothing else changed, both cases here passed. Nothing else in
-        // the suite covers this one, either: the race needs a real delivery, so
-        // there is no behavioural test to fall back on.
-        val text = manager.readText()
-            .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), "")
-        val start = text.indexOf("fun cancel(packName: String)")
-        assertTrue(start >= 0, "ToolchainManager has no cancel(packName)")
-        val end = text.indexOf("\n    }\n", start)
-        assertTrue(end > start, "cancel has no closing brace at member indentation")
-        return text.substring(start, end)
-    }
+    private fun cancelBody(): String = SourceScan.withoutComments(
+        SourceScan.body(SourceScan.read(manager.path), "fun cancel(packName: String)"),
+    )
 
     @Test
     fun `the pack release is queued behind whatever the io executor is running`() {

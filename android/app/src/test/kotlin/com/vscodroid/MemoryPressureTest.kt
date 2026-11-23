@@ -92,9 +92,7 @@ class MemoryPressureHandlerScriptTest {
      * them there. [SourceScan] owns the extraction and the ceiling it carries.
      */
     private val script: String by lazy {
-        SourceScan.withoutComments(
-            SourceScan.body(source, "private fun injectMemoryPressureHandler(")
-        )
+        SourceScan.scriptBody(source, "private fun injectMemoryPressureHandler(")
     }
 
     @Test

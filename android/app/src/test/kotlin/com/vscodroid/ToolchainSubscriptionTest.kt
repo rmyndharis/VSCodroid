@@ -287,19 +287,12 @@ class ToolchainScreenRetentionTest {
     private val file = File("src/main/kotlin/com/vscodroid/ToolchainActivity.kt")
 
     private val source by lazy {
-        assertTrue(
-            file.isFile,
-            "${file.path} is not at ${file.absolutePath}; this test would otherwise " +
-                "pass by reading nothing",
-        )
-        file.readText()
+        SourceScan.read(file.path)
     }
 
     /** Comments dropped: every rule here is argued in prose beside the line it governs. */
     private val code by lazy {
-        source
-            .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), " ")
-            .replace(Regex("""//[^\n]*"""), " ")
+        SourceScan.withoutComments(source)
     }
 
     /**
@@ -346,22 +339,7 @@ class ToolchainScreenRetentionTest {
     }
 
     /** The body of a declaration, by brace matching from it over comment-free source. */
-    private fun body(declaration: String): String {
-        val start = code.indexOf(declaration)
-        assertTrue(start >= 0, "`$declaration` is gone from ToolchainActivity.kt")
-        val open = code.indexOf('{', start)
-        var depth = 0
-        var i = open
-        while (i < code.length) {
-            if (code[i] == '{') depth += 1
-            if (code[i] == '}') {
-                depth -= 1
-                if (depth == 0) return code.substring(open, i + 1)
-            }
-            i += 1
-        }
-        throw AssertionError("Could not find the end of `$declaration` in ToolchainActivity.kt")
-    }
+    private fun body(declaration: String): String = SourceScan.body(code, declaration)
 
     /**
      * That a state report cannot put anything in front of a screen the user has

@@ -155,44 +155,10 @@ class DownloadStateWiringTest {
 
     private val source = File("src/main/kotlin/com/vscodroid/SplashActivity.kt")
 
-    private fun bodyOf(declaration: String): String {
-        check(source.isFile) {
-            "SplashActivity.kt not found at ${source.absolutePath}: this test would " +
-                "otherwise pass by looking at nothing"
-        }
-        val text = source.readText()
-        val start = text.indexOf(declaration)
-        check(start >= 0) {
-            "$declaration is gone from SplashActivity.kt; this guard names it, so " +
-                "renaming it means deciding again where its calls are pinned"
-        }
+    private fun bodyOf(declaration: String): String =
+        SourceScan.body(SourceScan.read(source.path), declaration)
 
-        val open = text.indexOf('{', start)
-        var depth = 0
-        var i = open
-        while (i < text.length) {
-            if (text[i] == '{') depth++
-            if (text[i] == '}') depth--
-            if (depth == 0) break
-            i++
-        }
-        check(depth == 0) { "no closing brace found for $declaration" }
-        return text.substring(open, i + 1)
-    }
-
-    /**
-     * The names are searched for in code, not in prose. Commenting the guard out --
-     * `// if (!isCurrentDownload(...))` -- leaves the characters in place, so matching
-     * raw text would report a disabled guard as a wired one, which is the failure this
-     * class exists to prevent rather than to demonstrate.
-     *
-     * Applied after the brace walk, not before: stripping first would take a `//` inside
-     * a string literal and the rest of its line with it, and losing a brace that way
-     * would truncate the span and fail a correct file.
-     */
-    private fun code(body: String) = body
-        .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), " ")
-        .replace(Regex("""//[^\n]*"""), " ")
+    private fun code(body: String) = SourceScan.withoutComments(body)
 
     @Test
     fun `handleDownloadState still consults both predicates`() {

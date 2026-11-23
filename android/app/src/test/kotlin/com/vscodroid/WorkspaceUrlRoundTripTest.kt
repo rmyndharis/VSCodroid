@@ -433,11 +433,9 @@ class WorkspaceUrlRoundTripTest {
      */
     @Test
     fun `a second window is this window`() {
-        val override = SourceScan.withoutComments(
-            SourceScan.body(
-                SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"),
-                "private fun injectWindowOpenOverride(",
-            ),
+        val override = SourceScan.scriptBody(
+            SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"),
+            "private fun injectWindowOpenOverride(",
         )
 
         val sameOrigin = override.indexOf("location.origin")

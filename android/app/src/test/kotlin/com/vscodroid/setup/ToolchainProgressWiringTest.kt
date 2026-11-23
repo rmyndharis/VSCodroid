@@ -1,16 +1,12 @@
 package com.vscodroid.setup
 
+import com.vscodroid.SourceScan
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
-import java.io.File
 
 class ToolchainProgressWiringTest {
-    private fun source(path: String): String {
-        val file = File("src/main/kotlin/com/vscodroid/$path")
-        assertTrue(file.isFile, "missing source: ${file.absolutePath}")
-        return file.readText().replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), "")
-            .replace(Regex("//[^\\n]*"), "")
-    }
+    private fun source(path: String): String =
+        SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/$path"))
 
     @Test
     fun `the Activity carries HTTP identity through its posted report and poll`() {

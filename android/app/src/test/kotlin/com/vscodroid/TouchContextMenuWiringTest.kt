@@ -32,6 +32,9 @@ class TouchContextMenuWiringTest {
     private fun body(declaration: String): String =
         SourceScan.body(mainActivity(), declaration)
 
+    private fun scriptBody(declaration: String): String =
+        SourceScan.scriptBody(mainActivity(), declaration)
+
     /**
      * One listener's own text, from [opener] to the next `addEventListener`. Several
      * listeners in the script share names (Escape, `stopImmediatePropagation`,
@@ -64,7 +67,7 @@ class TouchContextMenuWiringTest {
 
     @Test
     fun `focus is refused only out of an editing host, into a context view, on a coarse pointer`() {
-        val script = body("private fun injectTouchContextMenu(")
+        val script = scriptBody("private fun injectTouchContextMenu(")
         listOf(
             "native-edit-context" to "the element the workbench focuses for the caret; without it " +
                 "the gate matches nothing and every menu still bounces the keyboard",
@@ -103,7 +106,7 @@ class TouchContextMenuWiringTest {
             "the keyboard's state no longer reaches the page, so the focus refusal cannot tell a " +
                 "soft keyboard it must protect from a hardware one it must not get in the way of",
         )
-        val script = body("private fun injectTouchContextMenu(")
+        val script = scriptBody("private fun injectTouchContextMenu(")
         assertTrue(
             script.contains("extraKeyRow?.imeVisible") &&
                 script.indexOf("__vscodroidImeVisible = reported") < script.indexOf("__vscodroidTouchContextMenu) return"),
@@ -114,7 +117,7 @@ class TouchContextMenuWiringTest {
 
     @Test
     fun `a tap on a menubar item does not reach the menubar button`() {
-        val script = body("private fun injectTouchContextMenu(")
+        val script = scriptBody("private fun injectTouchContextMenu(")
         // The workbench delivers one tap to every gesture target containing the first
         // touch. The menu lives inside its button, so the tap that runs an item then
         // reopens the menu it closed, and after `File > New File...` that took focus
@@ -146,7 +149,7 @@ class TouchContextMenuWiringTest {
 
     @Test
     fun `the keyboard guard ignores a touch that landed in a context menu`() {
-        val guard = body("private fun injectKeyboardGuard(")
+        val guard = scriptBody("private fun injectKeyboardGuard(")
         // The editor's menu is built in a shadow root whose host is a child of the
         // editor, so a touch inside it retargets to a node that matches the guard's
         // own TEXT selector. Without this test the guard reads a tap on a menu item
@@ -176,7 +179,7 @@ class TouchContextMenuWiringTest {
 
     @Test
     fun `escape still reaches a menu that does not hold focus`() {
-        val script = body("private fun injectTouchContextMenu(")
+        val script = scriptBody("private fun injectTouchContextMenu(")
         val forwarder = listener(script, "addEventListener('keydown'")
         assertTrue(
             forwarder.contains("'Escape'") && forwarder.contains("stopImmediatePropagation") &&
@@ -189,7 +192,7 @@ class TouchContextMenuWiringTest {
 
     @Test
     fun `tapping away from a menu closes it`() {
-        val script = body("private fun injectTouchContextMenu(")
+        val script = scriptBody("private fun injectTouchContextMenu(")
         // The menu's own full-viewport dismiss layer closes nothing on this WebView,
         // measured with a real Android tap and again with a synthetic mouse press.
         // It only ever appeared to work because the tap was read as a tap on the file
@@ -226,8 +229,8 @@ class TouchContextMenuWiringTest {
 
     @Test
     fun `the shadow root gets the same keybinding rule as the page`() {
-        val menuScript = body("private fun injectTouchContextMenu(")
-        val pageCss = body("private fun injectTouchTargetCSS(")
+        val menuScript = scriptBody("private fun injectTouchContextMenu(")
+        val pageCss = scriptBody("private fun injectTouchTargetCSS(")
         assertTrue(
             pageCss.contains(KEYBINDING_RULE),
             "the page stylesheet no longer hides `.monaco-menu .keybinding` on a coarse pointer, " +
@@ -282,7 +285,7 @@ class TouchContextMenuWiringTest {
 
     @Test
     fun `titlebar dropdown with primary does not double-dispatch touch taps`() {
-        val script = body("private fun injectTouchContextMenu(")
+        val script = scriptBody("private fun injectTouchContextMenu(")
         val tap = listener(script, "'-monaco-gesturetap'")
         assertTrue(
             tap.contains("monaco-dropdown-with-primary") &&
@@ -297,7 +300,7 @@ class TouchContextMenuWiringTest {
 
     @Test
     fun `quick input box hover tooltip is suppressed on coarse pointers`() {
-        val script = body("private fun injectTouchContextMenu(")
+        val script = scriptBody("private fun injectTouchContextMenu(")
         val hover = listener(script, "addEventListener('mouseover'")
         assertTrue(
             hover.contains("COARSE") &&

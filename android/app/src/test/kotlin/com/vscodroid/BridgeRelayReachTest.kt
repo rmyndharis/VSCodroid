@@ -48,7 +48,7 @@ class BridgeRelayReachTest {
     private fun code(declaration: String): String =
         SourceScan.withoutComments(SourceScan.body(source, declaration))
 
-    private val relay by lazy { code("private fun injectBridgeRelay(") }
+    private val relay by lazy { SourceScan.scriptBody(source, "private fun injectBridgeRelay(") }
 
     @Test
     fun `the relay dispatcher is still what these cases are reading`() {

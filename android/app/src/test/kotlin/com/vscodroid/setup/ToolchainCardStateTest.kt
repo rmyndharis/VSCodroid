@@ -846,15 +846,7 @@ class ToolchainAdapterBoundaryTest {
      * Comments are stripped first: this file is named in the adapter's KDoc, and
      * a prose mention of a status must not be read as a decision.
      */
-    private fun code(): String {
-        check(source.isFile) {
-            "ToolchainPickerAdapter.kt not found at ${source.absolutePath}; this test would " +
-                "otherwise pass by looking at nothing"
-        }
-        return source.readText()
-            .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), " ")
-            .replace(Regex("""//[^\n]*"""), " ")
-    }
+    private fun code(): String = SourceScan.withoutComments(SourceScan.read(source.path))
 
     @Test
     fun `the adapter does not decide anything from a download status`() {

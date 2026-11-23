@@ -45,7 +45,7 @@ class FullScreenWiringTest {
 
     @Test
     fun `the script hands the request to the bridge and answers the workbench's own calls`() {
-        val script = SourceScan.body(mainActivity(), "private fun injectFullScreenShim(")
+        val script = SourceScan.scriptBody(mainActivity(), "private fun injectFullScreenShim(")
         listOf(
             "AndroidBridge.setFullScreen(t, next)" to "the request has to reach the bridge " +
                 "with the session token, or nothing on the device changes",

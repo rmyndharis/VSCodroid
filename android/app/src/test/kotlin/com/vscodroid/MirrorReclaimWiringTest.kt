@@ -30,54 +30,13 @@ class MirrorReclaimWiringTest {
     private val mainActivity = File("src/main/kotlin/com/vscodroid/MainActivity.kt")
     private val storageManager = File("src/main/kotlin/com/vscodroid/storage/SafStorageManager.kt")
 
-    /**
-     * The body of a named method, by brace matching from its declaration.
-     *
-     * Reading to the end of some fixed number of lines was the alternative and it is
-     * the shape that rots: a body that grows past the window stops being checked and
-     * nothing says so.
-     */
     private fun methodBody(
         name: String,
         file: File = mainActivity,
         declaration: String = "private fun $name(",
-    ): String {
-        val source = file.readText()
-        val start = source.indexOf(declaration)
-        assertTrue(start >= 0) {
-            "Could not find `$declaration` in ${file.path}. If it moved or " +
-                "was renamed, this test is measuring nothing; point it at the new name " +
-                "rather than deleting it."
-        }
-        val open = source.indexOf('{', start)
-        var depth = 0
-        for (i in open until source.length) {
-            when (source[i]) {
-                '{' -> depth++
-                '}' -> if (--depth == 0) return source.substring(open + 1, i)
-            }
-        }
-        error("Unbalanced braces after `private fun $name(`.")
-    }
+    ): String = SourceScan.body(SourceScan.read(file.path), declaration)
 
-    /**
-     * [body] with its comments blanked, so a name that survives only in prose or
-     * in a call somebody switched off cannot answer for a live one.
-     *
-     * Not optional here. Commenting a line out is how a call gets disabled while
-     * something is being debugged, and it leaves every character of that call in
-     * the file; the guard below asks whether a name is present, and raw text
-     * answers yes for the disabled call exactly as it does for the live one. The
-     * body it reads also explains the guard in prose, so the names are in reach
-     * of a search twice over.
-     *
-     * Applied to the extracted body rather than to the whole file: [methodBody]
-     * counts braces raw, and blanking a `//` inside a string literal elsewhere in
-     * this activity would take its closing brace with it and truncate the span.
-     */
-    private fun code(body: String) = body
-        .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), " ")
-        .replace(Regex("""//[^\n]*"""), " ")
+    private fun code(body: String) = SourceScan.withoutComments(body)
 
     @Test
     fun `the removal guard is given every piece of state that decides it`() {

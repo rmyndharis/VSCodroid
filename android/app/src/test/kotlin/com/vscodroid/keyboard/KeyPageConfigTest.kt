@@ -1,5 +1,6 @@
 package com.vscodroid.keyboard
 
+import com.vscodroid.SourceScan
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -438,9 +439,7 @@ class KeyPageConfigTest {
         fun `every key label fits inside the minimum key width at font scale 2_0`() {
             val buttonSource = File("src/main/kotlin/com/vscodroid/keyboard/ExtraKeyButton.kt")
             assertTrue(buttonSource.isFile, "ExtraKeyButton.kt not found at ${buttonSource.absolutePath}")
-            val stripped = buttonSource.readText()
-                .replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), "")
-                .replace(Regex("//[^\\n]*"), "")
+            val stripped = SourceScan.withoutComments(SourceScan.read(buttonSource.path))
                 .replace(Regex("\\s+"), " ")
             assertTrue(
                 stripped.contains(

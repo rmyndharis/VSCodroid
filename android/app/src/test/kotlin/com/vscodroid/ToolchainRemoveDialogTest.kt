@@ -30,33 +30,11 @@ class ToolchainRemoveDialogTest {
      * satisfied by the discussion.
      */
     private val code: String by lazy {
-        assertTrue(
-            activity.isFile,
-            "${activity.path} is not at ${activity.absolutePath}; this test would " +
-                "otherwise pass by reading nothing",
-        )
-        activity.readText()
-            .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), " ")
-            .replace(Regex("""//[^\n]*"""), " ")
+        SourceScan.withoutComments(SourceScan.read(activity.path))
     }
 
     /** The body of a declaration, by brace matching from it. */
-    private fun body(declaration: String): String {
-        val start = code.indexOf(declaration)
-        assertTrue(start >= 0, "`$declaration` is gone from ToolchainActivity.kt")
-        val open = code.indexOf('{', start)
-        var depth = 0
-        var i = open
-        while (i < code.length) {
-            if (code[i] == '{') depth += 1
-            if (code[i] == '}') {
-                depth -= 1
-                if (depth == 0) return code.substring(open, i + 1)
-            }
-            i += 1
-        }
-        throw AssertionError("Could not find the end of `$declaration` in ToolchainActivity.kt")
-    }
+    private fun body(declaration: String): String = SourceScan.body(code, declaration)
 
     /**
      * The premise, and it is not decoration: if this screen ever declares

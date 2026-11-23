@@ -14,9 +14,10 @@ class PreservedDeviceNameTest {
 
     @Test
     fun `one name and a batch count use different notices`() {
-        val source = File("src/main/kotlin/com/vscodroid/MainActivity.kt").readText()
-        val listener = source.substringAfter("safManager.onDeviceCopiesPreserved {")
-            .substringBefore("// The same silence")
+        val source = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt")
+        val listener = SourceScan.withoutComments(
+            SourceScan.body(source, "safManager.onDeviceCopiesPreserved {"),
+        )
         assertTrue(listener.contains("preservedDeviceNameForNotice(copies.single().name)"))
         assertTrue(listener.contains("R.plurals.saf_device_copies_preserved, copies.size, copies.size"))
         assertTrue(listener.contains("Toast.LENGTH_LONG"))
@@ -51,9 +52,10 @@ class PreservedDeviceNameTest {
 
     @Test
     fun `one local name and a batch count use different notices`() {
-        val source = File("src/main/kotlin/com/vscodroid/MainActivity.kt").readText()
-        val listener = source.substringAfter("safManager.onLocalCopiesPreserved {")
-            .substringBefore("setupWebView()")
+        val source = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt")
+        val listener = SourceScan.withoutComments(
+            SourceScan.body(source, "safManager.onLocalCopiesPreserved {"),
+        )
         assertTrue(listener.contains("preservedLocalNameForNotice(copies.single().name)"))
         assertTrue(listener.contains("R.string.saf_local_copy_preserved"))
         assertTrue(listener.contains("getQuantityString"))
