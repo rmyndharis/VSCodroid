@@ -1,0 +1,22 @@
+{
+  "Answers from other devices on this network, select to copy": "Bu ağdaki diğer cihazlara yanıt verir, kopyalamak için seçin",
+  "Answers on localhost alone, so other devices cannot reach it. If this is your server, restart it bound to 0.0.0.0 (exposes the server on every active network interface): Vite `--host 0.0.0.0`, Next.js `-H 0.0.0.0`, Node `server.listen(port, \"0.0.0.0\")`, Python `--bind 0.0.0.0`.": "Yalnızca localhost üzerinde yanıt verir, bu nedenle diğer cihazlar ulaşamaz. Bu sizin sunucunuzsa 0.0.0.0 adresine bağlı olarak yeniden başlatın (sunucuyu etkin tüm ağ arayüzlerinde erişilebilir yapar): Vite `--host 0.0.0.0`, Next.js `-H 0.0.0.0`, Node `server.listen(port, \"0.0.0.0\")`, Python `--bind 0.0.0.0`.",
+  "Answers on localhost alone, so other devices cannot reach it. If this is your server, restart it bound to {0} (this network only): Vite `--host {0}`, Next.js `-H {0}`, Node `server.listen(port, \"{0}\")`, Python `--bind {0}`.": "Yalnızca localhost üzerinde yanıt verir, bu nedenle diğer cihazlar ulaşamaz. Bu sizin sunucunuzsa {0} adresine bağlı olarak yeniden başlatın (yalnızca bu ağ): Vite `--host {0}`, Next.js `-H {0}`, Node `server.listen(port, \"{0}\")`, Python `--bind {0}`.",
+  "Checked {0} common dev-server ports and found nothing listening": "{0} yaygın geliştirme sunucusu bağlantı noktası denetlendi, dinleyen bir sunucu bulunamadı",
+  "Copied {0}, open it on the other device.": "{0} kopyalandı, diğer cihazda açın.",
+  "Enter a port number between 1 and 65535.": "1 ile 65535 arasında bir bağlantı noktası numarası girin.",
+  "Enter a port number…": "Bağlantı noktası numarası girin…",
+  "Looking for dev servers…": "Geliştirme sunucuları aranıyor…",
+  "Nothing is listening on port {0}. Start the server, then run this again.": "{0} bağlantı noktasında dinleyen hiçbir şey yok. Sunucuyu başlatın ve bunu yeniden çalıştırın.",
+  "Nothing reachable from other devices was found": "Diğer cihazlardan ulaşılabilen bir sunucu bulunamadı",
+  "Pick an address to copy, then open it on the other device": "Kopyalamak için bir adres seçin, ardından diğer cihazda açın",
+  "Port {0} answers this device only. Restart the server bound to 0.0.0.0 (this exposes it on every active network interface) and run this again.": "{0} bağlantı noktası yalnızca bu cihaza yanıt veriyor. Sunucuyu 0.0.0.0 adresine bağlı olarak yeniden başlatın (etkin tüm ağ arayüzlerinde erişilebilir yapar) ve bunu yeniden çalıştırın.",
+  "Port {0} answers this device only. Restart the server bound to {1} and run this again.": "{0} bağlantı noktası yalnızca bu cihaza yanıt veriyor. Sunucuyu {1} adresine bağlı olarak yeniden başlatın ve bunu yeniden çalıştırın.",
+  "Serve on Network": "Ağda yayınla",
+  "That server only answers this device. Restart the server bound to 0.0.0.0 (this exposes it on every active network interface) and run this again.": "Bu sunucu yalnızca bu cihaza yanıt veriyor. Sunucuyu 0.0.0.0 adresine bağlı olarak yeniden başlatın (etkin tüm ağ arayüzlerinde erişilebilir yapar) ve bunu yeniden çalıştırın.",
+  "That server only answers this device. Restart the server bound to {0} and run this again.": "Bu sunucu yalnızca bu cihaza yanıt veriyor. Sunucuyu {0} adresine bağlı olarak yeniden başlatın ve bunu yeniden çalıştırın.",
+  "This device is not on a network right now. Connect to Wi-Fi, then run this again.": "Bu cihaz şu anda bir ağa bağlı değil. Wi-Fi'ye bağlanın ve bunu yeniden çalıştırın.",
+  "Which port is your server on?": "Sunucunuz hangi bağlantı noktasında çalışıyor?",
+  "Your server is on a port this command does not check by default": "Sunucunuz bu komutun varsayılan olarak denetlemediği bir bağlantı noktasında çalışıyor",
+  "port {0}, this device only": "bağlantı noktası {0}, yalnızca bu cihaz"
+}

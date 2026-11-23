@@ -1,0 +1,22 @@
+{
+  "Answers from other devices on this network, select to copy": "Odpovídá ostatním zařízením v této síti, výběrem zkopírujete",
+  "Answers on localhost alone, so other devices cannot reach it. If this is your server, restart it bound to 0.0.0.0 (exposes the server on every active network interface): Vite `--host 0.0.0.0`, Next.js `-H 0.0.0.0`, Node `server.listen(port, \"0.0.0.0\")`, Python `--bind 0.0.0.0`.": "Odpovídá pouze na localhostu, takže se k němu ostatní zařízení nedostanou. Pokud je to váš server, restartujte ho s vazbou na 0.0.0.0 (zpřístupní server na každém aktivním síťovém rozhraní): Vite `--host 0.0.0.0`, Next.js `-H 0.0.0.0`, Node `server.listen(port, \"0.0.0.0\")`, Python `--bind 0.0.0.0`.",
+  "Answers on localhost alone, so other devices cannot reach it. If this is your server, restart it bound to {0} (this network only): Vite `--host {0}`, Next.js `-H {0}`, Node `server.listen(port, \"{0}\")`, Python `--bind {0}`.": "Odpovídá pouze na localhostu, takže se k němu ostatní zařízení nedostanou. Pokud je to váš server, restartujte ho s vazbou na {0} (pouze tato síť): Vite `--host {0}`, Next.js `-H {0}`, Node `server.listen(port, \"{0}\")`, Python `--bind {0}`.",
+  "Checked {0} common dev-server ports and found nothing listening": "Zkontrolováno {0} běžných portů vývojových serverů, na žádném nic nenaslouchá",
+  "Copied {0}, open it on the other device.": "Zkopírováno {0}, otevřete tuto adresu na druhém zařízení.",
+  "Enter a port number between 1 and 65535.": "Zadejte číslo portu mezi 1 a 65535.",
+  "Enter a port number…": "Zadat číslo portu…",
+  "Looking for dev servers…": "Hledají se vývojové servery…",
+  "Nothing is listening on port {0}. Start the server, then run this again.": "Na portu {0} nic nenaslouchá. Spusťte server a zkuste to znovu.",
+  "Nothing reachable from other devices was found": "Nebylo nalezeno nic dostupného z jiných zařízení",
+  "Pick an address to copy, then open it on the other device": "Vyberte adresu ke zkopírování a pak ji otevřete na druhém zařízení",
+  "Port {0} answers this device only. Restart the server bound to 0.0.0.0 (this exposes it on every active network interface) and run this again.": "Port {0} odpovídá jen tomuto zařízení. Restartujte server s vazbou na 0.0.0.0 (tím ho zpřístupníte na každém aktivním síťovém rozhraní) a spusťte tento příkaz znovu.",
+  "Port {0} answers this device only. Restart the server bound to {1} and run this again.": "Port {0} odpovídá jen tomuto zařízení. Restartujte server s vazbou na {1} a spusťte tento příkaz znovu.",
+  "Serve on Network": "Sdílet v síti",
+  "That server only answers this device. Restart the server bound to 0.0.0.0 (this exposes it on every active network interface) and run this again.": "Tento server odpovídá jen tomuto zařízení. Restartujte server s vazbou na 0.0.0.0 (tím ho zpřístupníte na každém aktivním síťovém rozhraní) a spusťte tento příkaz znovu.",
+  "That server only answers this device. Restart the server bound to {0} and run this again.": "Tento server odpovídá jen tomuto zařízení. Restartujte server s vazbou na {0} a spusťte tento příkaz znovu.",
+  "This device is not on a network right now. Connect to Wi-Fi, then run this again.": "Toto zařízení teď není připojené k síti. Připojte se k Wi-Fi a spusťte tento příkaz znovu.",
+  "Which port is your server on?": "Na kterém portu běží váš server?",
+  "Your server is on a port this command does not check by default": "Váš server běží na portu, který tento příkaz ve výchozím nastavení nekontroluje",
+  "port {0}, this device only": "port {0}, pouze toto zařízení"
+}

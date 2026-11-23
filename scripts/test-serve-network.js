@@ -31,11 +31,55 @@ const path = require('path');
 const Module = require('module');
 
 // The extension requires 'vscode' at load time, which only exists inside the
-// extension host. Same stub approach as test-bridge-relay.js; nothing in the
-// functions under test touches it.
+// extension host. Same stub approach as test-bridge-relay.js, with l10n.t
+// reading the extension's real l10n bundles when a non-English locale is active.
+let activeLocale = 'en';
+const registeredCommands = new Map();
+const uiEvents = { info: [], warning: [], picks: [], progress: [], clipboard: [] };
+let nextPick = () => undefined;
+let nextInput = () => undefined;
+function translate(message, ...args) {
+    let text = message;
+    if (activeLocale !== 'en') {
+        const bundle = path.join(path.dirname(extensionPath()), 'l10n', `bundle.l10n.${activeLocale}.json`);
+        if (fs.existsSync(bundle)) {
+            const entries = JSON.parse(fs.readFileSync(bundle, 'utf8'));
+            if (Object.prototype.hasOwnProperty.call(entries, message)) text = entries[message];
+        }
+    }
+    return text.replace(/\{(\d+)\}/g, (all, n) => (args[n] === undefined ? all : String(args[n])));
+}
+const vscodeStub = {
+    l10n: { t: translate },
+    ProgressLocation: { Window: 10 },
+    commands: {
+        registerCommand: (id, fn) => {
+            registeredCommands.set(id, fn);
+            return { dispose() {} };
+        },
+    },
+    window: {
+        showInformationMessage: async (message) => { uiEvents.info.push(message); },
+        showWarningMessage: async (message) => { uiEvents.warning.push(message); },
+        withProgress: async (options, task) => {
+            uiEvents.progress.push(options);
+            return task();
+        },
+        showQuickPick: async (items, options) => {
+            uiEvents.picks.push({ items, options });
+            return nextPick(items, options);
+        },
+        showInputBox: async (options) => nextInput(options),
+    },
+    env: {
+        clipboard: {
+            writeText: async (text) => { uiEvents.clipboard.push(text); },
+        },
+    },
+};
 const realLoad = Module._load;
 Module._load = function (request, ...rest) {
-    if (request === 'vscode') return {};
+    if (request === 'vscode') return vscodeStub;
     return realLoad.call(this, request, ...rest);
 };
 
@@ -254,6 +298,61 @@ function bindGuidancePrefersSpecificLanAddress() {
     assert.ok(!activateBody.includes('0.0.0.0'), 'activate() should not hardcode 0.0.0.0 outside the fallback helpers');
 }
 
+async function localizedRenderingChecks() {
+    const deBundle = JSON.parse(
+        fs.readFileSync(path.join(path.dirname(extensionPath()), 'l10n', 'bundle.l10n.de.json'), 'utf8'),
+    );
+    const jaBundle = JSON.parse(
+        fs.readFileSync(path.join(path.dirname(extensionPath()), 'l10n', 'bundle.l10n.ja.json'), 'utf8'),
+    );
+    const withWifi = [{ name: 'wlan0', address: LAN }];
+    const realIfaces = os.networkInterfaces;
+    try {
+        activeLocale = 'de';
+        const deDetail = ext.localOnlyDetail(withWifi);
+        assert.strictEqual(
+            deDetail,
+            deBundle['Answers on localhost alone, so other devices cannot reach it. If this is your server, restart it bound to {0} (this network only): Vite `--host {0}`, Next.js `-H {0}`, Node `server.listen(port, "{0}")`, Python `--bind {0}`.'].replace(/\{0\}/g, LAN),
+            'localOnlyDetail did not localize cleanly in German',
+        );
+        const deMsg = ext.localOnlyMessage(withWifi, 5173);
+        assert.strictEqual(
+            deMsg,
+            deBundle['Port {0} answers this device only. Restart the server bound to {1} and run this again.']
+                .replace('{0}', '5173')
+                .replace('{1}', LAN),
+            'localOnlyMessage did not localize cleanly in German',
+        );
+
+        activeLocale = 'ja';
+        const jaDetail = ext.localOnlyDetail([]);
+        assert.strictEqual(
+            jaDetail,
+            jaBundle['Answers on localhost alone, so other devices cannot reach it. If this is your server, restart it bound to 0.0.0.0 (exposes the server on every active network interface): Vite `--host 0.0.0.0`, Next.js `-H 0.0.0.0`, Node `server.listen(port, "0.0.0.0")`, Python `--bind 0.0.0.0`.'],
+            'fallback localOnlyDetail did not localize cleanly in Japanese',
+        );
+
+        // Drive the registered command in German with no network interfaces -> localized warning.
+        activeLocale = 'de';
+        for (const list of Object.values(uiEvents)) list.length = 0;
+        registeredCommands.clear();
+        ext.activate({ subscriptions: [] });
+        const cmd = registeredCommands.get('vscodroid.serveOnNetwork');
+        assert.ok(cmd, 'serveOnNetwork command was not registered');
+
+        os.networkInterfaces = () => ({ lo: [{ family: 'IPv4', internal: true, address: '127.0.0.1' }] });
+        await cmd();
+        assert.deepStrictEqual(
+            uiEvents.warning,
+            [deBundle['This device is not on a network right now. Connect to Wi-Fi, then run this again.']],
+            'offline warning was not localized in German',
+        );
+    } finally {
+        activeLocale = 'en';
+        os.networkInterfaces = realIfaces;
+    }
+}
+
 async function main() {
     await reachableWhenBothAnswer();
     await localOnlyWhenLanRefuses();
@@ -265,6 +364,7 @@ async function main() {
     candidatesMergeAndSort();
     defaultsAreSane();
     bindGuidancePrefersSpecificLanAddress();
+    await localizedRenderingChecks();
 
     say(
         `  ok     reachable/local-only split holds over ${ext.COMMON_DEV_PORTS.length} default ports, ` +

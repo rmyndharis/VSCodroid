@@ -1,0 +1,22 @@
+{
+  "Answers from other devices on this network, select to copy": "Отвечает другим устройствам в этой сети, выберите, чтобы скопировать",
+  "Answers on localhost alone, so other devices cannot reach it. If this is your server, restart it bound to 0.0.0.0 (exposes the server on every active network interface): Vite `--host 0.0.0.0`, Next.js `-H 0.0.0.0`, Node `server.listen(port, \"0.0.0.0\")`, Python `--bind 0.0.0.0`.": "Отвечает только на localhost, поэтому другие устройства не могут к нему подключиться. Если это ваш сервер, перезапустите его с привязкой к 0.0.0.0 (открывает сервер на всех активных сетевых интерфейсах): Vite `--host 0.0.0.0`, Next.js `-H 0.0.0.0`, Node `server.listen(port, \"0.0.0.0\")`, Python `--bind 0.0.0.0`.",
+  "Answers on localhost alone, so other devices cannot reach it. If this is your server, restart it bound to {0} (this network only): Vite `--host {0}`, Next.js `-H {0}`, Node `server.listen(port, \"{0}\")`, Python `--bind {0}`.": "Отвечает только на localhost, поэтому другие устройства не могут к нему подключиться. Если это ваш сервер, перезапустите его с привязкой к {0} (только эта сеть): Vite `--host {0}`, Next.js `-H {0}`, Node `server.listen(port, \"{0}\")`, Python `--bind {0}`.",
+  "Checked {0} common dev-server ports and found nothing listening": "Проверено {0} распространённых портов серверов разработки, ничего не слушает",
+  "Copied {0}, open it on the other device.": "Скопировано {0}, откройте этот адрес на другом устройстве.",
+  "Enter a port number between 1 and 65535.": "Введите номер порта от 1 до 65535.",
+  "Enter a port number…": "Ввести номер порта…",
+  "Looking for dev servers…": "Поиск серверов разработки…",
+  "Nothing is listening on port {0}. Start the server, then run this again.": "На порту {0} ничего не слушает. Запустите сервер и повторите команду.",
+  "Nothing reachable from other devices was found": "Ничего доступного с других устройств не найдено",
+  "Pick an address to copy, then open it on the other device": "Выберите адрес для копирования, затем откройте его на другом устройстве",
+  "Port {0} answers this device only. Restart the server bound to 0.0.0.0 (this exposes it on every active network interface) and run this again.": "Порт {0} отвечает только этому устройству. Перезапустите сервер с привязкой к 0.0.0.0 (это откроет его на всех активных сетевых интерфейсах) и выполните команду снова.",
+  "Port {0} answers this device only. Restart the server bound to {1} and run this again.": "Порт {0} отвечает только этому устройству. Перезапустите сервер с привязкой к {1} и выполните команду снова.",
+  "Serve on Network": "Открыть доступ по сети",
+  "That server only answers this device. Restart the server bound to 0.0.0.0 (this exposes it on every active network interface) and run this again.": "Этот сервер отвечает только этому устройству. Перезапустите сервер с привязкой к 0.0.0.0 (это откроет его на всех активных сетевых интерфейсах) и выполните команду снова.",
+  "That server only answers this device. Restart the server bound to {0} and run this again.": "Этот сервер отвечает только этому устройству. Перезапустите сервер с привязкой к {0} и выполните команду снова.",
+  "This device is not on a network right now. Connect to Wi-Fi, then run this again.": "Это устройство сейчас не подключено к сети. Подключитесь к Wi-Fi и выполните команду снова.",
+  "Which port is your server on?": "На каком порту запущен ваш сервер?",
+  "Your server is on a port this command does not check by default": "Ваш сервер запущен на порту, который эта команда по умолчанию не проверяет",
+  "port {0}, this device only": "порт {0}, только это устройство"
+}

@@ -1,0 +1,22 @@
+{
+  "Answers from other devices on this network, select to copy": "此網路上的其他裝置可以連線，選取即可複製",
+  "Answers on localhost alone, so other devices cannot reach it. If this is your server, restart it bound to 0.0.0.0 (exposes the server on every active network interface): Vite `--host 0.0.0.0`, Next.js `-H 0.0.0.0`, Node `server.listen(port, \"0.0.0.0\")`, Python `--bind 0.0.0.0`.": "僅在 localhost 上回應，因此其他裝置無法連線。如果這是你的伺服器，請將它繫結至 0.0.0.0 後重新啟動（會在所有作用中的網路介面上公開伺服器）：Vite `--host 0.0.0.0`、Next.js `-H 0.0.0.0`、Node `server.listen(port, \"0.0.0.0\")`、Python `--bind 0.0.0.0`。",
+  "Answers on localhost alone, so other devices cannot reach it. If this is your server, restart it bound to {0} (this network only): Vite `--host {0}`, Next.js `-H {0}`, Node `server.listen(port, \"{0}\")`, Python `--bind {0}`.": "僅在 localhost 上回應，因此其他裝置無法連線。如果這是你的伺服器，請將它繫結至 {0}（僅限目前網路）後重新啟動：Vite `--host {0}`、Next.js `-H {0}`、Node `server.listen(port, \"{0}\")`、Python `--bind {0}`。",
+  "Checked {0} common dev-server ports and found nothing listening": "已檢查 {0} 個常見的開發伺服器連接埠，未發現監聽中的服務",
+  "Copied {0}, open it on the other device.": "已複製 {0}，請在另一台裝置上開啟。",
+  "Enter a port number between 1 and 65535.": "請輸入 1 到 65535 之間的連接埠編號。",
+  "Enter a port number…": "輸入連接埠編號…",
+  "Looking for dev servers…": "正在尋找開發伺服器…",
+  "Nothing is listening on port {0}. Start the server, then run this again.": "連接埠 {0} 上沒有監聽中的服務。請先啟動伺服器，然後再執行一次。",
+  "Nothing reachable from other devices was found": "找不到可從其他裝置連線的服務",
+  "Pick an address to copy, then open it on the other device": "選擇要複製的位址，然後在另一台裝置上開啟",
+  "Port {0} answers this device only. Restart the server bound to 0.0.0.0 (this exposes it on every active network interface) and run this again.": "連接埠 {0} 僅回應本裝置。請將伺服器繫結至 0.0.0.0（這會在所有作用中的網路介面上公開它）後重新啟動，再執行一次。",
+  "Port {0} answers this device only. Restart the server bound to {1} and run this again.": "連接埠 {0} 僅回應本裝置。請將伺服器繫結至 {1} 後重新啟動，再執行一次。",
+  "Serve on Network": "在網路上提供服務",
+  "That server only answers this device. Restart the server bound to 0.0.0.0 (this exposes it on every active network interface) and run this again.": "該伺服器僅回應本裝置。請將伺服器繫結至 0.0.0.0（這會在所有作用中的網路介面上公開它）後重新啟動，再執行一次。",
+  "That server only answers this device. Restart the server bound to {0} and run this again.": "該伺服器僅回應本裝置。請將伺服器繫結至 {0} 後重新啟動，再執行一次。",
+  "This device is not on a network right now. Connect to Wi-Fi, then run this again.": "本裝置目前未連線到網路。請先連線至 Wi-Fi，然後再執行一次。",
+  "Which port is your server on?": "你的伺服器使用哪個連接埠？",
+  "Your server is on a port this command does not check by default": "你的伺服器使用此命令預設不會檢查的連接埠",
+  "port {0}, this device only": "連接埠 {0}，僅限本裝置"
+}

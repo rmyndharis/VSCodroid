@@ -1,0 +1,48 @@
+{
+  "name": "vscodroid-process-monitor",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "version": "1.4.7",
+  "publisher": "vscodroid",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "l10n": "./l10n",
+  "contributes": {
+    "commands": [
+      {
+        "command": "vscodroid.showProcesses",
+        "title": "%command.showProcesses%"
+      }
+    ],
+    "configuration": {
+      "title": "VSCodroid",
+      "properties": {
+        "vscodroid.server.heapCeilingMb": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": null,
+          "scope": "machine",
+          "minimum": 256,
+          "maximum": 1536,
+          "markdownDescription": "%config.server.heapCeilingMb%"
+        },
+        "vscodroid.antigravity.runEngine": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "markdownDescription": "%config.antigravity.runEngine%"
+        }
+      }
+    }
+  }
+}

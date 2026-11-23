@@ -1,0 +1,22 @@
+{
+  "Answers from other devices on this network, select to copy": "このネットワーク上の他のデバイスから接続できます。選択してコピー",
+  "Answers on localhost alone, so other devices cannot reach it. If this is your server, restart it bound to 0.0.0.0 (exposes the server on every active network interface): Vite `--host 0.0.0.0`, Next.js `-H 0.0.0.0`, Node `server.listen(port, \"0.0.0.0\")`, Python `--bind 0.0.0.0`.": "localhost のみで応答しているため、他のデバイスから接続できません。自分のサーバーであれば 0.0.0.0 にバインドして再起動してください (有効なすべてのネットワークインターフェースに公開されます): Vite `--host 0.0.0.0`, Next.js `-H 0.0.0.0`, Node `server.listen(port, \"0.0.0.0\")`, Python `--bind 0.0.0.0`。",
+  "Answers on localhost alone, so other devices cannot reach it. If this is your server, restart it bound to {0} (this network only): Vite `--host {0}`, Next.js `-H {0}`, Node `server.listen(port, \"{0}\")`, Python `--bind {0}`.": "localhost のみで応答しているため、他のデバイスから接続できません。自分のサーバーであれば {0} (このネットワークのみ) にバインドして再起動してください: Vite `--host {0}`, Next.js `-H {0}`, Node `server.listen(port, \"{0}\")`, Python `--bind {0}`。",
+  "Checked {0} common dev-server ports and found nothing listening": "一般的な開発サーバー用ポートを {0} 件確認しましたが、待ち受け中のサーバーはありませんでした",
+  "Copied {0}, open it on the other device.": "{0} をコピーしました。他のデバイスで開いてください。",
+  "Enter a port number between 1 and 65535.": "1 から 65535 までのポート番号を入力してください。",
+  "Enter a port number…": "ポート番号を入力…",
+  "Looking for dev servers…": "開発サーバーを探しています…",
+  "Nothing is listening on port {0}. Start the server, then run this again.": "ポート {0} で待ち受けているサーバーはありません。サーバーを起動してからもう一度実行してください。",
+  "Nothing reachable from other devices was found": "他のデバイスから接続できるサーバーは見つかりませんでした",
+  "Pick an address to copy, then open it on the other device": "コピーするアドレスを選び、他のデバイスで開いてください",
+  "Port {0} answers this device only. Restart the server bound to 0.0.0.0 (this exposes it on every active network interface) and run this again.": "ポート {0} はこのデバイスからのみ応答します。サーバーを 0.0.0.0 (有効なすべてのネットワークインターフェースに公開されます) にバインドして再起動し、もう一度実行してください。",
+  "Port {0} answers this device only. Restart the server bound to {1} and run this again.": "ポート {0} はこのデバイスからのみ応答します。サーバーを {1} にバインドして再起動し、もう一度実行してください。",
+  "Serve on Network": "ネットワークで公開",
+  "That server only answers this device. Restart the server bound to 0.0.0.0 (this exposes it on every active network interface) and run this again.": "そのサーバーはこのデバイスからのみ応答します。サーバーを 0.0.0.0 (有効なすべてのネットワークインターフェースに公開されます) にバインドして再起動し、もう一度実行してください。",
+  "That server only answers this device. Restart the server bound to {0} and run this again.": "そのサーバーはこのデバイスからのみ応答します。サーバーを {0} にバインドして再起動し、もう一度実行してください。",
+  "This device is not on a network right now. Connect to Wi-Fi, then run this again.": "このデバイスは現在ネットワークに接続されていません。Wi-Fi に接続してからもう一度実行してください。",
+  "Which port is your server on?": "サーバーはどのポートで動いていますか?",
+  "Your server is on a port this command does not check by default": "このコマンドが既定で確認しないポートでサーバーが動いている場合",
+  "port {0}, this device only": "ポート {0}、このデバイスのみ"
+}

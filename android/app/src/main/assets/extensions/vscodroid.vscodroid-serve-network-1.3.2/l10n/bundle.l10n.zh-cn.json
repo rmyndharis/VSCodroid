@@ -1,0 +1,22 @@
+{
+  "Answers from other devices on this network, select to copy": "此网络中的其他设备可以访问，选择即可复制",
+  "Answers on localhost alone, so other devices cannot reach it. If this is your server, restart it bound to 0.0.0.0 (exposes the server on every active network interface): Vite `--host 0.0.0.0`, Next.js `-H 0.0.0.0`, Node `server.listen(port, \"0.0.0.0\")`, Python `--bind 0.0.0.0`.": "仅在 localhost 上响应，因此其他设备无法访问。如果这是你的服务器，请将其绑定到 0.0.0.0 后重启（会在所有活动网络接口上公开服务器）：Vite `--host 0.0.0.0`、Next.js `-H 0.0.0.0`、Node `server.listen(port, \"0.0.0.0\")`、Python `--bind 0.0.0.0`。",
+  "Answers on localhost alone, so other devices cannot reach it. If this is your server, restart it bound to {0} (this network only): Vite `--host {0}`, Next.js `-H {0}`, Node `server.listen(port, \"{0}\")`, Python `--bind {0}`.": "仅在 localhost 上响应，因此其他设备无法访问。如果这是你的服务器，请将其绑定到 {0}（仅限当前网络）后重启：Vite `--host {0}`、Next.js `-H {0}`、Node `server.listen(port, \"{0}\")`、Python `--bind {0}`。",
+  "Checked {0} common dev-server ports and found nothing listening": "已检查 {0} 个常用开发服务器端口，未发现监听中的服务",
+  "Copied {0}, open it on the other device.": "已复制 {0}，请在另一台设备上打开。",
+  "Enter a port number between 1 and 65535.": "请输入 1 到 65535 之间的端口号。",
+  "Enter a port number…": "输入端口号…",
+  "Looking for dev servers…": "正在查找开发服务器…",
+  "Nothing is listening on port {0}. Start the server, then run this again.": "端口 {0} 上没有监听中的服务。请先启动服务器，然后再运行此命令。",
+  "Nothing reachable from other devices was found": "未找到可从其他设备访问的服务",
+  "Pick an address to copy, then open it on the other device": "选择一个地址以复制，然后在另一台设备上打开",
+  "Port {0} answers this device only. Restart the server bound to 0.0.0.0 (this exposes it on every active network interface) and run this again.": "端口 {0} 仅响应本设备。请将服务器绑定到 0.0.0.0（这会在所有活动网络接口上公开它）后重启，再运行此命令。",
+  "Port {0} answers this device only. Restart the server bound to {1} and run this again.": "端口 {0} 仅响应本设备。请将服务器绑定到 {1} 后重启，再运行此命令。",
+  "Serve on Network": "在网络上提供服务",
+  "That server only answers this device. Restart the server bound to 0.0.0.0 (this exposes it on every active network interface) and run this again.": "该服务器仅响应本设备。请将服务器绑定到 0.0.0.0（这会在所有活动网络接口上公开它）后重启，再运行此命令。",
+  "That server only answers this device. Restart the server bound to {0} and run this again.": "该服务器仅响应本设备。请将服务器绑定到 {0} 后重启，再运行此命令。",
+  "This device is not on a network right now. Connect to Wi-Fi, then run this again.": "本设备当前未连接到网络。请连接 Wi-Fi 后再运行此命令。",
+  "Which port is your server on?": "你的服务器运行在哪个端口？",
+  "Your server is on a port this command does not check by default": "你的服务器运行在此命令默认不会检查的端口上",
+  "port {0}, this device only": "端口 {0}，仅限本设备"
+}
