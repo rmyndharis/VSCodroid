@@ -1,6 +1,7 @@
 package com.vscodroid
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.File
@@ -14,8 +15,8 @@ import java.io.File
  * existed: renaming a key in the producer left the whole unit suite green.
  *
  * A missing identity or display field can describe the wrong folder or send a
- * removal without its hash. Every removal requires confirmation; the compatibility
- * field `reclaimable` no longer decides whether consent is needed.
+ * removal without its hash. Every removal requires explicit confirmation rather
+ * than a per-row eligibility flag.
  *
  * The producer is allowed to send more than is read: `lastOpened` is sent and
  * nothing uses it today. The direction that costs something is a key the
@@ -92,6 +93,9 @@ class DeviceFolderPayloadTest {
         }
         assertTrue(read.containsAll(required)) {
             "required field reads are missing from manageDeviceFolders: ${required - read}"
+        }
+        assertFalse("reclaimable" in sent) {
+            "dead field 'reclaimable' must not be emitted by deviceFolderCopiesAsJson"
         }
 
         assertEquals(

@@ -60,7 +60,7 @@ class MirrorReclaimGateTest : SafMirrorPairEnumerationFixture() {
     fun `a synchronized unused copy still requires destructive consent`() {
         val savedRecord = record.readBytes()
         assertTrue(SafSyncEngine(context).holdsOnlyVouchedCopies(mirror))
-        assertFalse(manager.listMirrors().single().reclaimable)
+        assertEquals(listOf(mirror.name), manager.listMirrors().map { it.hash })
 
         assertEquals(SafStorageManager.RECLAIM_REFUSED, manager.reclaimMirror(mirror.name, force = false))
         assertEquals(0, manager.sweepDiscardedMirrors())
@@ -72,7 +72,7 @@ class MirrorReclaimGateTest : SafMirrorPairEnumerationFixture() {
 
     @Test
     fun `a direct write after listing cannot be deleted by an unconfirmed request`() {
-        assertFalse(manager.listMirrors().single().reclaimable)
+        assertEquals(listOf(mirror.name), manager.listMirrors().map { it.hash })
         val unique = File(mirror, "terminal-only.txt")
         unique.writeText("UNIQUE TERMINAL BYTES")
 

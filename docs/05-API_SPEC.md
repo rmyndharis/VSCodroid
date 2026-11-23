@@ -491,10 +491,11 @@ fun listSafMirrors(authToken: String, replyId: String): String
 // return is an immediate refusal and starts no work.
 // Posted data: ordinary local copies of device folders, largest first.
 // [{"hash":"abc123def456","name":"MyProject","bytes":N,
-//   "lastOpened":1700000000,"granted":true,"reclaimable":false}]
+//   "lastOpened":1700000000,"granted":true}]
 // name and a non-zero lastOpened are absent after the recent entry is removed.
-// reclaimable remains false for compatibility. A snapshot cannot prove that
-// direct filesystem writes will not add unique files before removal commits.
+// Every ordinary copy requires explicit destructive confirmation via
+// reclaimSafMirror(..., force = true): a snapshot cannot prove that direct
+// filesystem writes will not add unique files before removal commits.
 // Revoked permissions do not remove ordinary copies or their sync records.
 // Sizing walks every copy; call asynchronously. Discarded entries are not listed.
 

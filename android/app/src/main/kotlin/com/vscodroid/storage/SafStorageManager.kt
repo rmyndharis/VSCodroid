@@ -731,8 +731,8 @@ class SafStorageManager(context: Context) {
     /**
      * Ordinary local copies, largest first, including copies without a live grant.
      *
-     * Each copy requires explicit confirmation because direct filesystem writes can
-     * happen after any snapshot check. The compatibility field `reclaimable` is false.
+     * Every ordinary copy requires explicit confirmation (`force = true`) before
+     * removal because direct filesystem writes can happen after any snapshot check.
      * Sizing walks the directories, so this must not run on the main thread.
      */
     fun listMirrors(): List<MirrorInfo> {
@@ -753,7 +753,6 @@ class SafStorageManager(context: Context) {
                 bytes = StorageManager.dirSize(dir),
                 lastOpened = named[dir.name]?.lastOpened ?: 0L,
                 granted = dir.name in granted,
-                reclaimable = false,
             )
         }.sortedByDescending { it.bytes }
     }
@@ -1665,9 +1664,9 @@ data class SafFolderInfo(
  * has no name anywhere in the app. That is precisely the mirror worth showing, so
  * the absence is carried rather than filled in with the hash.
  *
- * [reclaimable] remains false for compatibility with callers that use it to select
- * a destructive confirmation. Copies may contain files that never reached the device,
- * and direct writes can invalidate a snapshot before removal commits.
+ * Every ordinary copy requires explicit confirmation (`force = true`) before removal:
+ * copies may contain files that never reached the device, and direct writes can
+ * invalidate a snapshot before removal commits.
  */
 data class MirrorInfo(
     val hash: String,
@@ -1675,5 +1674,4 @@ data class MirrorInfo(
     val bytes: Long,
     val lastOpened: Long,
     val granted: Boolean,
-    val reclaimable: Boolean,
 )

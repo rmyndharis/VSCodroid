@@ -534,7 +534,6 @@ internal fun MainActivity.deviceFolderCopiesAsJson(): String =
                 put("bytes", mirror.bytes)
                 put("lastOpened", mirror.lastOpened)
                 put("granted", mirror.granted)
-                put("reclaimable", mirror.reclaimable)
             })
         }
     }.toString()
