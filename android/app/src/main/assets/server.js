@@ -676,15 +676,14 @@ if (!fs.existsSync(rehEntryPoint)) {
     // holds until the next page paints, what shows is the window behind the
     // view, so each colour the root is given is also posted to the app, which
     // gives that window the colour and the bars on it icons that read on it
-    // (addPageColorListener in VSCodroidWebView.kt). A theme change rewrites a
-    // style element in the head, so each change to the head reads the
-    // workbench's colours again. So does every change of the window title,
-    // which the workbench makes on each editor switch and change of dirty state,
-    // at the cost of that style read: storage is written on a load's first
-    // reading and then only when what it records changed, and a colour is
-    // posted only when it changed. Taking the colour as the page is left was
-    // tried and is too late: the keyboard starts to go down before the
-    // workbench navigates.
+    // (addPageColorListener in VSCodroidWebView.kt). A theme change adds,
+    // removes, or rewrites a style or link element in the head, so the observer
+    // ignores other head mutations such as window title updates and only reads
+    // the workbench's colours when a stylesheet element changes. Storage is
+    // written on a load's first reading and then only when what it records
+    // changed, and a colour is posted only when it changed. Taking the colour
+    // as the page is left was tried and is too late: the keyboard starts to go
+    // down before the workbench navigates.
     //
     // Twenty folders are kept, the most recently shown, so the record cannot grow
     // into the storage the workbench's sealed secrets share. A window whose
@@ -781,12 +780,26 @@ if (!fs.existsSync(rehEntryPoint)) {
                 '\t\t\t\t\t\tfor (var key in ids) { if (hex.test(info[key])) { colors[ids[key]] = info[key]; } }',
                 '\t\t\t\t\t\tsettings.initialColorTheme = { themeType: type, colors: colors };',
                 '\t\t\t\t\t}',
-                '\t\t\t\t\tvar written;',
-                '\t\t\t\t\tnew MutationObserver(function () {',
+                '\t\t\t\t\tvar written, synced = false;',
+                "\t\t\t\t\tvar tag = function (n) { return n && n.tagName ? String(n.tagName).toUpperCase() : ''; };",
+                "\t\t\t\t\tvar isSheet = function (n) { var t = tag(n); return t === 'STYLE' || t === 'LINK'; };",
+                '\t\t\t\t\tvar affectsTheme = function (mutations) {',
+                '\t\t\t\t\t\tfor (var i = 0; i < mutations.length; i++) {',
+                '\t\t\t\t\t\t\tvar m = mutations[i];',
+                '\t\t\t\t\t\t\tif (!m) { continue; }',
+                "\t\t\t\t\t\t\tif (tag(m.target) === 'STYLE' || (m.type === 'characterData' && tag(m.target && m.target.parentNode) === 'STYLE')) { return true; }",
+                '\t\t\t\t\t\t\tif (m.addedNodes) { for (var j = 0; j < m.addedNodes.length; j++) { if (isSheet(m.addedNodes[j])) { return true; } } }',
+                '\t\t\t\t\t\t\tif (m.removedNodes) { for (var k = 0; k < m.removedNodes.length; k++) { if (isSheet(m.removedNodes[k])) { return true; } } }',
+                '\t\t\t\t\t\t}',
+                '\t\t\t\t\t\treturn false;',
+                '\t\t\t\t\t};',
+                '\t\t\t\t\tnew MutationObserver(function (mutations) {',
+                '\t\t\t\t\t\tif (synced && !affectsTheme(mutations)) { return; }',
                 "\t\t\t\t\t\tvar wb = document.querySelector('.monaco-workbench');",
                 '\t\t\t\t\t\tvar style = wb && getComputedStyle(wb);',
                 "\t\t\t\t\t\tvar now = style ? style.getPropertyValue('--vscode-editor-background').trim() : '';",
                 '\t\t\t\t\t\tif (!now) { return; }',
+                '\t\t\t\t\t\tsynced = true;',
                 '\t\t\t\t\t\tpaint(now);',
                 '\t\t\t\t\t\tvar base = Object.keys(types).filter(function (t) { return wb.classList.contains(t); })[0];',
                 '\t\t\t\t\t\tvar shown = { baseTheme: base, colorInfo: { background: now } };',
@@ -800,7 +813,7 @@ if (!fs.existsSync(rehEntryPoint)) {
                 '\t\t\t\t\t\tvar kept = Object.keys(seen);',
                 '\t\t\t\t\t\tif (kept.length > 20) { delete seen[kept[0]]; }',
                 "\t\t\t\t\t\ttry { localStorage.setItem('vscodroid-folder-themes', JSON.stringify(seen)); } catch (e) { /* full: only the record is lost */ }",
-                '\t\t\t\t\t}).observe(document.head, { childList: true, subtree: true });',
+                '\t\t\t\t\t}).observe(document.head, { childList: true, subtree: true, characterData: true });',
             ];
         });
         if (added) {

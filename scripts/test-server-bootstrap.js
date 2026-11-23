@@ -1013,7 +1013,9 @@ async function exitingBootstrapPreservesReplacementNote() {
         // the first theme's before the workbench adds its own, and each theme
         // after that in place of the one before, at the end.
         const workbench = { classList: Object.assign([], { contains(c) { return this.includes(c); } }), vars: {} };
-        const head = {};
+        const head = { tagName: 'HEAD' };
+        const styleEl = { tagName: 'STYLE' };
+        const titleEl = { tagName: 'TITLE' };
         const document = {
             getElementById: (id) => (id === 'vscode-workbench-web-configuration' ? el : null),
             querySelector: (selector) => (selector === '.monaco-workbench' && workbench.built ? workbench : null),
@@ -1028,7 +1030,11 @@ async function exitingBootstrapPreservesReplacementNote() {
             constructor(callback) { this.callback = callback; }
             observe(target, options) { observers.push({ target, options, callback: this.callback }); }
         }
-        const getComputedStyle = (node) => ({ getPropertyValue: (name) => node.vars[name] || '' });
+        let styleReads = 0;
+        const getComputedStyle = (node) => {
+            styleReads++;
+            return { getPropertyValue: (name) => node.vars[name] || '' };
+        };
         // The server, answering a path the way server-main.js does: the file, or
         // 404 where there is none.
         const requests = [];
@@ -1056,12 +1062,14 @@ async function exitingBootstrapPreservesReplacementNote() {
             'window', 'XMLHttpRequest', 'performance', 'addEventListener', body)(
             document, localStorage, matchMedia, MutationObserver, getComputedStyle, { search }, window, XMLHttpRequest,
             performance, addEventListener);
-        const retitle = () => {
+        const notify = (mutations) => {
+            const isCharData = mutations.some((m) => m && m.type === 'characterData');
             observers
-                .filter((o) => o.target === head && o.options.childList && o.options.subtree)
-                .forEach((o) => o.callback([]));
+                .filter((o) => o.target === head && o.options.subtree && (isCharData ? o.options.characterData : o.options.childList))
+                .forEach((o) => o.callback(mutations));
             return root.style.backgroundColor;
         };
+        const retitle = () => notify([{ target: titleEl, addedNodes: [{ nodeType: 3 }], removedNodes: [{ nodeType: 3 }] }]);
         return {
             settings: JSON.parse(data),
             painted: root.style.backgroundColor,
@@ -1071,12 +1079,13 @@ async function exitingBootstrapPreservesReplacementNote() {
             requests,
             recorded: items['vscodroid-device-scheme'],
             writes: () => writes,
+            styleReads: () => styleReads,
             /**
              * The head changes the way a theme change rewrites its style element,
              * with the workbench then showing `theme`, or not built yet when that
              * is undefined. Answers the root's colour after.
              */
-            changeHead: (theme) => {
+            changeHead: (theme, mutations = [{ target: head, addedNodes: [styleEl], removedNodes: [] }]) => {
                 if (theme) {
                     const list = workbench.classList;
                     const before = workbench.id ? workbench.id.split(' ') : [];
@@ -1086,8 +1095,9 @@ async function exitingBootstrapPreservesReplacementNote() {
                     if (!list.includes('monaco-workbench')) list.push('file-icons-enabled', 'monaco-workbench', 'linux', 'web');
                 }
                 Object.assign(workbench, theme ? { built: true, ...theme } : { built: false });
-                return retitle();
+                return notify(mutations);
             },
+            notify,
             /** The window title changes, which changes the head and leaves the theme alone. */
             retitle,
         };
@@ -1702,21 +1712,89 @@ async function exitingBootstrapPreservesReplacementNote() {
     // The theme changes while the page is open, here Light Modern to Dark Modern.
     // The root fills the space the soft keyboard gives back until the workbench
     // lays itself out again, so it has to follow: without the observer of the
-    // head it stays white under the dark theme. Every change of the window title
-    // changes the head too, and one that leaves the theme alone writes nothing.
+    // head it stays white under the dark theme. Title and metadata updates in
+    // the head must skip getComputedStyle altogether, while style additions,
+    // style textContent updates, and stylesheet link changes still sync.
     {
         const page = load({ splash: { baseTheme: 'vs', colorInfo: { background: '#ffffff' } }, last: 'light', dark: false });
         assert.strictEqual(page.painted, '#ffffff', 'a light theme does not get a light blank page');
         const dark = shown('vs-dark vscode-theme-defaults-themes-dark_modern-json', { 'editor.background': ' #1f1f1f' });
         assert.strictEqual(page.changeHead(dark), '#1f1f1f',
             'the root keeps the theme the page started on after the theme changed');
+        const readsAfterStyleAdd = page.styleReads();
+        assert.strictEqual(readsAfterStyleAdd, 1, 'adding a style element did not trigger a style read');
         page.retitle();
+        page.notify([{ target: { tagName: 'HEAD' }, addedNodes: [{ tagName: 'TITLE' }], removedNodes: [] }]);
+        page.notify([{ target: { tagName: 'HEAD' }, addedNodes: [{ tagName: 'META' }], removedNodes: [] }]);
+        assert.strictEqual(
+            page.styleReads(), readsAfterStyleAdd,
+            'a <title> or <meta> head mutation triggered getComputedStyle unnecessarily',
+        );
         assert.strictEqual(page.writes(), 1, 'a change of the head that leaves the theme alone rewrote the record');
         // The window behind the page shows where the page has not painted at a new
         // size, so it takes each colour the root does, and once per change.
         assert.deepStrictEqual(page.posted, ['#ffffff', '#1f1f1f'],
             'the app is not told the colour of each theme the page shows, or is told it again on a title change, ' +
             'so the space the keyboard gives back can show the colour of a theme no longer shown');
+        // Rewriting textContent inside an existing <style> element (as VS Code does on
+        // dynamic theme updates) must still sync colours.
+        assert.strictEqual(
+            page.changeHead(lightModern, [{ target: { tagName: 'STYLE' }, addedNodes: [{ nodeType: 3 }], removedNodes: [{ nodeType: 3 }] }]),
+            '#ffffff',
+            'updating textContent of an existing <style> element did not sync the theme',
+        );
+        assert.strictEqual(page.styleReads(), readsAfterStyleAdd + 1, 'a <style> textContent update did not read styles');
+        assert.strictEqual(page.writes(), 2, 'a <style> textContent update did not persist the new theme');
+        assert.deepStrictEqual(page.posted, ['#ffffff', '#1f1f1f', '#ffffff']);
+        // Adding or removing a <link> stylesheet element must also sync colours.
+        assert.strictEqual(
+            page.changeHead(dark, [{ target: { tagName: 'HEAD' }, addedNodes: [{ tagName: 'LINK' }], removedNodes: [] }]),
+            '#1f1f1f',
+            'adding a <link> element did not sync the theme',
+        );
+        assert.strictEqual(
+            page.changeHead(lightModern, [{ target: { tagName: 'HEAD' }, addedNodes: [], removedNodes: [{ tagName: 'LINK' }] }]),
+            '#ffffff',
+            'removing a <link> element did not sync the theme',
+        );
+        // Lowercase tagName and characterData edits inside a <style> text node must also sync,
+        // while characterData edits inside <title> remain ignored after initial sync.
+        assert.strictEqual(
+            page.changeHead(dark, [{ target: { tagName: 'head' }, addedNodes: [{ tagName: 'style' }], removedNodes: [] }]),
+            '#1f1f1f',
+            'adding a lowercase <style> element did not sync the theme',
+        );
+        assert.strictEqual(
+            page.changeHead(lightModern, [{ type: 'characterData', target: { nodeType: 3, parentNode: { tagName: 'STYLE' } } }]),
+            '#ffffff',
+            'a characterData mutation inside a <style> text node did not sync the theme',
+        );
+        const readsBeforeTitleCharData = page.styleReads();
+        page.notify([{ type: 'characterData', target: { nodeType: 3, parentNode: { tagName: 'TITLE' } } }]);
+        assert.strictEqual(
+            page.styleReads(), readsBeforeTitleCharData,
+            'a characterData mutation inside <title> triggered getComputedStyle unnecessarily',
+        );
+    }
+
+    // Boot-order race: if initial <style> tags land in head before .monaco-workbench mounts,
+    // the first post-mount head mutation (even a title update) still runs initial sync, and
+    // subsequent title mutations skip getComputedStyle.
+    {
+        const page = load({ splash: { baseTheme: 'vs', colorInfo: { background: '#ffffff' } }, last: 'light', dark: false });
+        const dark = shown('vs-dark vscode-theme-defaults-themes-dark_modern-json', { 'editor.background': '#1f1f1f' });
+        assert.strictEqual(page.changeHead(undefined), '#ffffff', 'pre-mount style insert changed initial colour');
+        assert.strictEqual(
+            page.changeHead(dark, [{ target: { tagName: 'TITLE' }, addedNodes: [{ nodeType: 3 }], removedNodes: [{ nodeType: 3 }] }]),
+            '#1f1f1f',
+            'first post-mount head mutation did not run initial theme sync after pre-mount style insertion',
+        );
+        const readsAfterFirstSync = page.styleReads();
+        page.retitle();
+        assert.strictEqual(
+            page.styleReads(), readsAfterFirstSync,
+            'a <title> mutation after initial sync still triggered getComputedStyle',
+        );
     }
 
     // A head that changes before the workbench is built leaves the colour the page started with.
