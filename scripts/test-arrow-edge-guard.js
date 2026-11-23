@@ -564,8 +564,23 @@ for (const tag of ['INPUT', 'TEXTAREA']) {
                 this.selectionEnd = 0;
                 listen(this);
             }
-            updateText(start, end, text) { this.text = this.text.slice(0, start) + text + this.text.slice(end); }
-            updateSelection(start, end) { this.selectionStart = start; this.selectionEnd = end; }
+            updateText(start, end, text) {
+                if (start < 0 || end < 0 || start > end || end > this.text.length) {
+                    const err = new Error(`IndexSizeError: updateText(${start}, ${end}) out of range for length ${this.text.length}`);
+                    err.name = 'IndexSizeError';
+                    throw err;
+                }
+                this.text = this.text.slice(0, start) + text + this.text.slice(end);
+            }
+            updateSelection(start, end) {
+                if (start < 0 || end < 0 || start > this.text.length || end > this.text.length) {
+                    const err = new Error(`IndexSizeError: updateSelection(${start}, ${end}) out of range for length ${this.text.length}`);
+                    err.name = 'IndexSizeError';
+                    throw err;
+                }
+                this.selectionStart = start;
+                this.selectionEnd = end;
+            }
             dispatchEvent(event) {
                 for (const l of this.listeners.slice()) if (l.type === event.type) l.fn(event);
                 return true;
@@ -781,6 +796,125 @@ for (const tag of ['INPUT', 'TEXTAREA']) {
                 caret: [from + text.length, from + text.length], restored: true, latched: false, chords: 0 })]);
         borrowed.fire('textupdate', { text });
         cases.push([`a returned ${modifier} context cannot insert ${JSON.stringify(text)} again`, received.length, 1]);
+    }
+
+    // Backward selection (selectionStart > selectionEnd) must normalize [lo, hi]
+    // before updating the editor's EditContext and clamping the resulting caret.
+    {
+        const p = latchPage();
+        p.own.updateText(0, 0, '0123456789');
+        p.own.updateSelection(8, 3);
+        const received = [];
+        p.own.addEventListener('textupdate', (event) => received.push(event));
+        p.latch({ ctrl: true });
+        let thrown = null;
+        try {
+            p.host.editContext.fire('textupdate', { text: 'hello', selectionStart: 5, selectionEnd: 5 });
+        } catch (err) {
+            thrown = err.name || err.message;
+        }
+        const event = received[0];
+        const got = {
+            thrown,
+            text: p.own.text,
+            count: received.length,
+            range: event && [event.updateRangeStart, event.updateRangeEnd, event.selectionStart, event.selectionEnd],
+            caret: [p.own.selectionStart, p.own.selectionEnd],
+            restored: p.host.editContext === p.own,
+            latched: !!(p.mods().ctrl || p.mods().alt || p.mods().shift),
+            chords: p.log.filter((line) => line.startsWith('chord ')).length,
+        };
+        cases.push([
+            'backward selection with multi-char textupdate replaces [lo, hi] cleanly without IndexSizeError',
+            JSON.stringify(got),
+            JSON.stringify({
+                thrown: null,
+                text: '012hello89',
+                count: 1,
+                range: [3, 8, 8, 8],
+                caret: [8, 8],
+                restored: true,
+                latched: false,
+                chords: 0,
+            }),
+        ]);
+    }
+    {
+        const p = latchPage();
+        p.own.updateText(0, 0, '0123456789');
+        p.own.updateSelection(8, 3);
+        const received = [];
+        p.own.addEventListener('textupdate', (event) => received.push(event));
+        p.latch({ alt: true });
+        let thrown = null;
+        try {
+            p.host.editContext.fire('textupdate', { text: 'hi', selectionStart: 2, selectionEnd: 2 });
+        } catch (err) {
+            thrown = err.name || err.message;
+        }
+        const event = received[0];
+        const got = {
+            thrown,
+            text: p.own.text,
+            range: event && [event.updateRangeStart, event.updateRangeEnd, event.selectionStart, event.selectionEnd],
+            caret: [p.own.selectionStart, p.own.selectionEnd],
+            restored: p.host.editContext === p.own,
+            latched: !!(p.mods().ctrl || p.mods().alt || p.mods().shift),
+        };
+        cases.push([
+            'backward selection with shorter replacement places caret at lo + selection',
+            JSON.stringify(got),
+            JSON.stringify({
+                thrown: null,
+                text: '012hi89',
+                range: [3, 8, 5, 5],
+                caret: [5, 5],
+                restored: true,
+                latched: false,
+            }),
+        ]);
+    }
+    {
+        const p = latchPage();
+        p.own.updateText(0, 0, '0123456789');
+        p.own.updateSelection(8, 3);
+        const received = [];
+        p.own.addEventListener('textupdate', (event) => received.push(event));
+        p.latch({ alt: true });
+        let thrown = null;
+        try {
+            p.host.editContext.dispatchEvent({
+                type: 'textupdate',
+                text: 'hi',
+                updateRangeStart: 0,
+                updateRangeEnd: 0,
+                selectionStart: 99,
+                selectionEnd: 99,
+            });
+        } catch (err) {
+            thrown = err.name || err.message;
+        }
+        const event = received[0];
+        const got = {
+            thrown,
+            text: p.own.text,
+            range: event && [event.updateRangeStart, event.updateRangeEnd, event.selectionStart, event.selectionEnd],
+            caret: [p.own.selectionStart, p.own.selectionEnd],
+            restored: p.host.editContext === p.own,
+            latched: !!(p.mods().ctrl || p.mods().alt || p.mods().shift),
+        };
+        cases.push([
+            'backward selection with out-of-range selection clamps caret to new text length',
+            JSON.stringify(got),
+            JSON.stringify({
+                thrown: null,
+                text: '012hi89',
+                range: [3, 8, 7, 7],
+                caret: [7, 7],
+                restored: true,
+                latched: false,
+            }),
+        ]);
     }
 
     latchCase('Ctrl latched, a composing keyboard\'s p is Ctrl+P and reaches no text',

@@ -787,13 +787,14 @@ class ExtraKeyRow @JvmOverloads constructor(
      * them from inside this dispatch when it takes a drag. A finger lifting is
      * still in its own ACTION_POINTER_UP, so that one is taken off.
      *
-     * A cancel is not counted. Up to API 35 ViewGroup hands one on unsplit, so
-     * it can carry a finger that is on another view, and the fingers it ends
-     * were counted by the event before it.
+     * A cancel ends the gesture on this row, so the count resets to zero
+     * instead of reading pointers from the event (up to API 35 ViewGroup hands
+     * a cancel on unsplit, so it can carry a finger that is on another view) or
+     * leaving a prior multi-finger count stuck.
      */
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         when (ev.actionMasked) {
-            MotionEvent.ACTION_CANCEL -> Unit
+            MotionEvent.ACTION_CANCEL -> fingersDown = 0
             MotionEvent.ACTION_POINTER_UP -> fingersDown = ev.pointerCount - 1
             else -> fingersDown = ev.pointerCount
         }
@@ -801,6 +802,7 @@ class ExtraKeyRow @JvmOverloads constructor(
     }
 
     override fun onDetachedFromWindow() {
+        removeCallbacks(modifierSyncRunnable)
         longPressPopup?.dismiss()
         longPressPopup = null
         super.onDetachedFromWindow()
