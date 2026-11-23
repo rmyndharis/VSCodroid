@@ -162,7 +162,10 @@ class MainThreadWatchTest {
      */
     @Test
     fun `the policy is installed from the activity and nowhere else`() {
-        val calls = code(mainActivity).lines().count { it.contains("MainThreadWatch.install()") }
+        val mainSources = com.vscodroid.SourceScan.withoutComments(
+            com.vscodroid.SourceScan.readAll(com.vscodroid.SourceScan.MAIN_ACTIVITY_FILES),
+        )
+        val calls = mainSources.lines().count { it.contains("MainThreadWatch.install()") }
         assertEquals(
             1, calls,
             "MainActivity must install the policy exactly once; found $calls call site(s)",

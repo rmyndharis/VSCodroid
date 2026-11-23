@@ -4,8 +4,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const source = fs.readFileSync(path.join(__dirname, '../android/app/src/main/kotlin/com/vscodroid/MainActivity.kt'), 'utf8');
-const method = source.split('private fun injectTerminalTypedCharacters()')[1];
+const source = fs.readFileSync(path.join(__dirname, '../android/app/src/main/kotlin/com/vscodroid/MainActivityPageScripts.kt'), 'utf8');
+const method = source.split('internal fun MainActivity.injectTerminalTypedCharacters()')[1];
 const script = method ? method.split('"""')[1] : '';
 
 function page(patched = true) {
@@ -138,7 +138,7 @@ for (const delay of [1, null, false, '0']) {
     vm.runInNewContext(script, p.context); assert.equal(p.window.setTimeout, installed);
 }
 assert.ok(script, 'terminal typing injector must exist');
-assert.match(source.slice(source.indexOf('private fun injectBridgeToken()'), source.indexOf('private fun injectSafeAreaCSS()')), /injectTerminalTypedCharacters\(\)/);
+assert.match(source.slice(source.indexOf('internal fun MainActivity.injectBridgeToken()'), source.indexOf('internal fun MainActivity.injectSafeAreaCSS()')), /injectTerminalTypedCharacters\(\)/);
 const failures = [];
 function row(name, test) {
     try { test(); console.log(`ok: ${name}`); }

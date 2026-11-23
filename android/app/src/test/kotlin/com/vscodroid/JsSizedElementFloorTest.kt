@@ -42,8 +42,8 @@ class JsSizedElementFloorTest {
 
     private val injected: String =
         SourceScan.body(
-            SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"),
-            "private fun injectTouchTargetCSS(",
+            SourceScan.read("src/main/kotlin/com/vscodroid/MainActivityPageScripts.kt"),
+            "internal fun MainActivity.injectTouchTargetCSS(",
         )
 
     /**

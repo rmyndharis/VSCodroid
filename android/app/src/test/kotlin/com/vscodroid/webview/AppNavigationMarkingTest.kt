@@ -56,7 +56,10 @@ class AppNavigationMarkingTest {
     }
 
     private fun mainActivity(): String =
-        SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"))
+        SourceScan.withoutComments(SourceScan.readAll(SourceScan.MAIN_ACTIVITY_FILES))
+
+    private fun mainActivityFiles(): List<String> =
+        SourceScan.MAIN_ACTIVITY_FILES.map { SourceScan.withoutComments(SourceScan.read(it)) }
 
     /**
      * Read out of each function's own body rather than off the whole file: a
@@ -72,8 +75,7 @@ class AppNavigationMarkingTest {
      */
     @Test
     fun `explicit page replacements mark themselves first`() {
-        val source = mainActivity()
-        val sites = sitesLoading(source, NAVIGATION)
+        val sites = sitesLoading(mainActivityFiles(), NAVIGATION)
             .filterNot { (declaration, _) -> declaration.endsWith("fun handleResumeFromBackground(") }
 
         // The control for the case itself. A scan that matches nothing passes
@@ -124,15 +126,37 @@ class AppNavigationMarkingTest {
      * which MainActivity already declares: a suspend function that navigates
      * would have been invisible to the one check written to find it.
      */
-    private fun sitesLoading(source: String, what: Regex): List<Pair<String, String>> =
-        Regex("""\n    (?:\w+ )*fun \w+\(""")
-            .findAll(source)
-            .map { it.value.trim() }
-            .distinct()
-            .filterNot { it.endsWith("fun setupWebView(") }
-            .map { it to SourceScan.body(source, it) }
-            .filter { (_, body) -> what.containsMatchIn(body) }
-            .toList()
+    private fun hasBlockBody(slice: String): Boolean {
+        var parenDepth = 0
+        var seenParen = false
+        for (ch in slice) {
+            when (ch) {
+                '(' -> {
+                    parenDepth += 1
+                    seenParen = true
+                }
+                ')' -> if (parenDepth > 0) parenDepth -= 1
+                '{' -> if (seenParen && parenDepth == 0) return true
+                '=' -> if (seenParen && parenDepth == 0) return false
+            }
+        }
+        return false
+    }
+
+    private fun sitesLoading(sources: List<String>, what: Regex): List<Pair<String, String>> =
+        sources.flatMap { source ->
+            val matches = Regex("""(?m)^(?:    )?(?:\w+ )*fun (?:MainActivity\.)?\w+\(""")
+                .findAll(source)
+                .toList()
+            matches.mapIndexedNotNull { idx, match ->
+                val declaration = match.value.trim()
+                if (declaration.endsWith("fun setupWebView(")) return@mapIndexedNotNull null
+                val sliceEnd = matches.getOrNull(idx + 1)?.range?.first ?: source.length
+                val slice = source.substring(match.range.first, sliceEnd)
+                val body = if (hasBlockBody(slice)) SourceScan.body(slice, declaration) else slice
+                if (what.containsMatchIn(body)) declaration to body else null
+            }
+        }
 
     /**
      * That a page of this app's own says so before it lands on top of the
@@ -153,8 +177,7 @@ class AppNavigationMarkingTest {
      */
     @Test
     fun `every page of this app's own clears the workbench flag before it loads`() {
-        val source = mainActivity()
-        val sites = sitesLoading(source, OWN_PAGE)
+        val sites = sitesLoading(mainActivityFiles(), OWN_PAGE)
 
         // The control, on the same grounds the other rule's floor stands on: a
         // scan matching nothing passes every assertion under it. Two is what

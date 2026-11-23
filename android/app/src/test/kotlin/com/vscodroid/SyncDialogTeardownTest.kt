@@ -36,7 +36,7 @@ import java.io.File
  */
 class SyncDialogTeardownTest {
 
-    private val file = File("src/main/kotlin/com/vscodroid/MainActivity.kt")
+    private val file = File("src/main/kotlin/com/vscodroid/MainActivitySafCoordinator.kt")
 
     private val source by lazy {
         check(file.isFile) {
@@ -47,26 +47,8 @@ class SyncDialogTeardownTest {
     }
 
     /** The body of a `private fun name(` declaration, to its closing brace. */
-    private fun body(name: String): String {
-        val start = source.indexOf("private fun $name(")
-        assertTrue(start >= 0) {
-            "$name is gone from MainActivity.kt, so this test is measuring nothing. " +
-                "If it moved or was renamed, point this at the new site rather than " +
-                "deleting it."
-        }
-        val open = source.indexOf('{', start)
-        var depth = 0
-        var i = open
-        while (i < source.length) {
-            if (source[i] == '{') depth += 1
-            if (source[i] == '}') {
-                depth -= 1
-                if (depth == 0) return source.substring(open, i + 1)
-            }
-            i += 1
-        }
-        throw AssertionError("Could not find the end of $name in MainActivity.kt")
-    }
+    private fun body(name: String): String =
+        SourceScan.body(source, "internal fun MainActivity.$name(")
 
     /**
      * Comment lines dropped, so prose about the guard cannot stand in for one and

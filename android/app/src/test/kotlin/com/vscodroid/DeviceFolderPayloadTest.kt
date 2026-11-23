@@ -28,7 +28,7 @@ import java.io.File
  */
 class DeviceFolderPayloadTest {
 
-    private val producerSource = File("src/main/kotlin/com/vscodroid/MainActivity.kt")
+    private val producerSource = File("src/main/kotlin/com/vscodroid/MainActivitySafCoordinator.kt")
 
     /** Every key `deviceFolderCopiesAsJson` puts, read off the one loop that builds them. */
     private fun sent(): Set<String> {

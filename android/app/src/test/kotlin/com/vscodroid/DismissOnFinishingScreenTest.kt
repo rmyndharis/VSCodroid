@@ -20,7 +20,7 @@ class DismissOnFinishingScreenTest {
 
     @Test
     fun `no dialog is left up for a screen that is only finishing`() {
-        val code = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt")).lines()
+        val code = SourceScan.withoutComments(SourceScan.readAll(SourceScan.MAIN_ACTIVITY_FILES)).lines()
         val guarded = code.filter { it.contains(".dismiss()") && it.contains("isDestroyed") }
         // The control: the sync dialog's four handlers, the unanswered removal question and the
         // away-from-home notice under a crash page are guarded dismissals today.

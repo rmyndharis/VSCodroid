@@ -53,28 +53,26 @@ import java.io.File
  */
 class DeviceFolderOpenThreadTest {
 
-    private val source = File("src/main/kotlin/com/vscodroid/MainActivity.kt").readText()
+    private val source = SourceScan.readAll(
+        listOf(
+            "src/main/kotlin/com/vscodroid/MainActivity.kt",
+            "src/main/kotlin/com/vscodroid/MainActivitySafCoordinator.kt",
+        )
+    )
 
-    /** The body of a `private fun name(` declaration, to its closing brace. */
+    /** The body of a declaration on MainActivity or its SAF coordinator, to its closing brace. */
     private fun body(name: String): String {
-        val start = source.indexOf("private fun $name(")
-        assertTrue(start >= 0) {
-            "$name is gone from MainActivity.kt, so this test is measuring nothing. " +
+        val declaration = listOf(
+            "private fun $name(",
+            "internal fun $name(",
+            "internal fun MainActivity.$name(",
+        ).firstOrNull { source.contains(it) }
+        assertTrue(declaration != null) {
+            "$name is gone from MainActivity sources, so this test is measuring nothing. " +
                 "If it moved or was renamed, point this at the new site rather than " +
                 "deleting it."
         }
-        val open = source.indexOf('{', start)
-        var depth = 0
-        var i = open
-        while (i < source.length) {
-            if (source[i] == '{') depth += 1
-            if (source[i] == '}') {
-                depth -= 1
-                if (depth == 0) return source.substring(open, i + 1)
-            }
-            i += 1
-        }
-        throw AssertionError("Could not find the end of $name in MainActivity.kt")
+        return SourceScan.body(source, declaration!!)
     }
 
     /**
@@ -302,7 +300,7 @@ class DeviceFolderOpenThreadTest {
                 "replaces the value its caller hands in or repeats its own default",
         )
         val declaration = source.substring(
-            source.indexOf("private fun navigateToFolder("),
+            source.indexOf("internal fun navigateToFolder("),
         ).substringBefore(") {")
         assertTrue(declaration.contains("token: String? = nodeService?.getConnectionToken()")) {
             "navigateToFolder no longer reads the token in its parameter default, so a " +
@@ -437,8 +435,8 @@ class DeviceFolderOpenThreadTest {
 
     @Test
     fun `the resolved adoption carries the path through the open queue`() {
-        val source = File("src/main/kotlin/com/vscodroid/MainActivity.kt").readText()
-        val adoption = SourceScan.body(source, "private fun adoptWorkbenchFolder(")
+        val source = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivitySafCoordinator.kt")
+        val adoption = SourceScan.body(source, "internal fun MainActivity.adoptWorkbenchFolder(")
         assertTrue(adoption.contains("openSafFolder(folder.uri, navigate = false, adoptedPath = folderPath)"))
         val decision = opened.joinToString("\n").substringAfter("if (adoptionIsStale(").substringBefore("Not syncing")
         assertTrue(decision.contains("openWorkspaceFolder") && decision.contains("adoptedPath"))

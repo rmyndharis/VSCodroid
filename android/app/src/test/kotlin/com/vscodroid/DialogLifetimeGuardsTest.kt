@@ -15,13 +15,19 @@ import org.junit.jupiter.api.Test
  */
 class DialogLifetimeGuardsTest {
 
-    private val source = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt")
+    private val source = SourceScan.readAll(
+        listOf(
+            "src/main/kotlin/com/vscodroid/MainActivity.kt",
+            "src/main/kotlin/com/vscodroid/MainActivityDialogs.kt",
+            "src/main/kotlin/com/vscodroid/MainActivitySafCoordinator.kt",
+        )
+    )
 
     private fun code(declaration: String) = SourceScan.withoutComments(SourceScan.body(source, declaration))
 
     @Test
     fun `the About dialog is not shown on a screen that is gone`() {
-        val about = code("fun showAboutDialog(")
+        val about = code("fun MainActivity.showAboutDialog(")
         assertTrue(about.trimStart('{').trimStart().startsWith("if (isFinishing || isDestroyed) return")) {
             "showAboutDialog does not start by checking that its screen is still there:\n$about"
         }
@@ -29,7 +35,7 @@ class DialogLifetimeGuardsTest {
 
     @Test
     fun `the old WebView warning is marked as given when its dialog is dismissed`() {
-        val check = code("private fun checkWebViewVersion(")
+        val check = code("internal fun MainActivity.checkWebViewVersion(")
         val mark = "workspacePrefs.edit { putString(KEY_WEBVIEW_WARNED, version) }"
 
         assertTrue(check.indexOf("setOnDismissListener { $mark }") > check.indexOf("AlertDialog.Builder(this)")) {
@@ -46,27 +52,27 @@ class DialogLifetimeGuardsTest {
         assertTrue(destroy.contains("dismissActiveDialogs()")) {
             "onDestroy must dismiss tracked modal dialogs to prevent leaked windows:\n$destroy"
         }
-        assertTrue(code("private fun openSafFolder(").contains("trackDialog(dialog)")) {
+        assertTrue(code("internal fun MainActivity.openSafFolder(").contains("trackDialog(dialog)")) {
             "openSafFolder sync dialog is not tracked for teardown dismissal"
         }
-        assertTrue(code("private fun confirmForcedRemoval(").contains("trackDialog(")) {
+        assertTrue(code("internal fun MainActivity.confirmForcedRemoval(").contains("trackDialog(")) {
             "confirmForcedRemoval dialog is not tracked for teardown dismissal"
         }
-        assertTrue(code("private fun showWithReachableButtons(").contains("trackDialog(")) {
+        assertTrue(code("internal fun MainActivity.showWithReachableButtons(").contains("trackDialog(")) {
             "showWithReachableButtons does not track About and Licenses dialogs for teardown dismissal"
         }
-        val licenseTexts = code("private fun showLicenseTextsDialog(")
+        val licenseTexts = code("internal fun MainActivity.showLicenseTextsDialog(")
         assertTrue(Regex("""trackDialog\(""").findAll(licenseTexts).count() >= 2) {
             "both chooser and nested dialogs in showLicenseTextsDialog must be tracked:\n$licenseTexts"
         }
-        assertTrue(code("private fun checkWebViewVersion(").contains("trackDialog(")) {
+        assertTrue(code("internal fun MainActivity.checkWebViewVersion(").contains("trackDialog(")) {
             "checkWebViewVersion dialog is not tracked for teardown dismissal"
         }
     }
 
     @Test
     fun `onDestroy unblocks pending forced removal confirmation latches`() {
-        val confirm = code("private fun confirmForcedRemoval(")
+        val confirm = code("internal fun MainActivity.confirmForcedRemoval(")
         val destroy = code("override fun onDestroy(")
         assertTrue(confirm.contains("removalLatches()") && confirm.contains("latches.add(answered)")) {
             "confirmForcedRemoval does not register its latch for teardown release:\n$confirm"

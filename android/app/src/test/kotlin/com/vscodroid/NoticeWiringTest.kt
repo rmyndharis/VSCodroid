@@ -43,7 +43,7 @@ class NoticeWiringTest {
 
     @Test
     fun `all three activities route notices through AppNotices and tear down on destroy`() {
-        val main = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"))
+        val main = SourceScan.withoutComments(SourceScan.readAll(SourceScan.MAIN_ACTIVITY_FILES))
         val toolchain = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/ToolchainActivity.kt"))
         val splash = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/SplashActivity.kt"))
 
@@ -154,9 +154,10 @@ class NoticeWiringTest {
     @Test
     fun `storage low and multi-device-folder notices pass process-once keys through AppNotices`() {
         val main = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"))
+        val dialogs = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/MainActivityDialogs.kt"))
         val helper = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/util/AppNotices.kt"))
 
-        val storageCheck = SourceScan.body(main, "private fun checkStorageHealth(")
+        val storageCheck = SourceScan.body(dialogs, "internal fun MainActivity.checkStorageHealth(")
         assertTrue(
             storageCheck.contains("AppNotices.ONCE_KEY_STORAGE_LOW"),
             "checkStorageHealth must pass a process-once key to avoid repeating storage_low_warning on activity recreate",
@@ -185,7 +186,7 @@ class NoticeWiringTest {
             service.contains("reportStartupNotice(getString(R.string.status_server_slow_start), topic = TOPIC_SLOW_START)"),
             "the slow start notice is recorded without its topic",
         )
-        val main = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"))
+        val main = SourceScan.withoutComments(SourceScan.readAll(SourceScan.MAIN_ACTIVITY_FILES))
         assertFalse(
             main.contains("AppNotices.retract("),
             "a notice is taken back by its text again, which a language change makes miss",

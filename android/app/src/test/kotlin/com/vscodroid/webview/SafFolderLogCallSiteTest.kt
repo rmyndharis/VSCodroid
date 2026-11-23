@@ -48,7 +48,7 @@ import org.junit.jupiter.api.Test
  */
 class SafFolderLogCallSiteTest {
 
-    private val source = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt")
+    private val source = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivitySafCoordinator.kt")
 
     /**
      * `openSafFolder` from its signature line, not from its opening brace.
@@ -60,7 +60,7 @@ class SafFolderLogCallSiteTest {
      * nothing.
      */
     private val opened by lazy {
-        val declaration = "private fun openSafFolder("
+        val declaration = "internal fun MainActivity.openSafFolder("
         val body = SourceScan.body(source, declaration)
         val start = source.indexOf(declaration)
         SourceScan.withoutComments(source.substring(start, source.indexOf('{', start)) + body)

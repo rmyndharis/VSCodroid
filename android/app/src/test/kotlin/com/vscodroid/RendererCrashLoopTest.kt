@@ -214,7 +214,7 @@ class RendererCrashLoopTest {
         }
         listOf(
             "private fun loadVSCode(",
-            "private fun retryServerStart()",
+            "internal fun retryServerStart()",
             // The placeholder a rebuilt WebView starts on. A renderer death that
             // rebuilds the view over the crash page while the server is still
             // coming up (serverPort == 0) reaches neither of the two above, and
@@ -224,7 +224,7 @@ class RendererCrashLoopTest {
             // Every workbench load. A picker result that lands while the crash
             // page is up navigates here directly, and a later self-restart's
             // readiness must not be refused over the workbench it would replace.
-            "private fun navigateToFolder(",
+            "internal fun navigateToFolder(",
         ).forEach { declaration ->
             assertTrue(code(declaration).contains("rendererCrashLoopShown = false")) {
                 "$declaration puts up a page the editor is expected to follow without " +
@@ -266,7 +266,7 @@ class RendererCrashLoopTest {
      */
     @Test
     fun `a folder opened after the refusal is given the bridge back`() {
-        val navigate = code("private fun navigateToFolder(")
+        val navigate = code("internal fun navigateToFolder(")
 
         val asks = navigate.indexOf("initBridge(")
         val loads = navigate.indexOf("loadUrl(")

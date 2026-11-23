@@ -45,6 +45,15 @@ internal object SourceScan {
         "void", "delete", "new", "else", "do", "of", "await", "yield",
     )
 
+    /** The source files that make up `MainActivity` and its extracted modules. */
+    val MAIN_ACTIVITY_FILES = listOf(
+        "src/main/kotlin/com/vscodroid/MainActivity.kt",
+        "src/main/kotlin/com/vscodroid/MainActivityHelpers.kt",
+        "src/main/kotlin/com/vscodroid/MainActivityPageScripts.kt",
+        "src/main/kotlin/com/vscodroid/MainActivityDialogs.kt",
+        "src/main/kotlin/com/vscodroid/MainActivitySafCoordinator.kt",
+    )
+
     /** The file under `android/app`, as the test working directory sees it. */
     fun read(path: String): String {
         val file = File(path)
@@ -54,6 +63,9 @@ internal object SourceScan {
         }
         return file.readText()
     }
+
+    /** Concatenates every file in [paths], failing loudly if any is missing. */
+    fun readAll(paths: List<String>): String = paths.joinToString("\n") { read(it) }
 
     /**
      * The body of Kotlin [declaration], from its opening brace to the matching close.

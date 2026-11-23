@@ -90,7 +90,6 @@ class EditorOriginOwnershipTest {
         every { view.webViewClient } answers { client }
         every { view.evaluateJavascript(any(), any()) } answers { scripts += firstArg<String>() }
         every { activity["initBridge"](any<Int>()) } answers { callOriginal() }
-        every { activity["injectBridgeToken"]() } answers { callOriginal() }
         every { activity["folderFromUrl"](any<String>()) } returns null
         set("tag", "MainActivity")
         set("webView", view)

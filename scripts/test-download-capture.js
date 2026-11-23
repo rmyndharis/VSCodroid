@@ -49,7 +49,7 @@ const vm = require('vm');
 
 const ROOT = path.join(__dirname, '..');
 const MAIN_ACTIVITY = path.join(
-    ROOT, 'android/app/src/main/kotlin/com/vscodroid/MainActivity.kt',
+    ROOT, 'android/app/src/main/kotlin/com/vscodroid/MainActivityPageScripts.kt',
 );
 
 /** How a literal dollar is written inside a Kotlin raw string. */
@@ -61,7 +61,7 @@ const DOLLAR_ESCAPE = "${'$'}";
  */
 function extractCapture() {
     const lines = fs.readFileSync(MAIN_ACTIVITY, 'utf8').split('\n');
-    const fn = lines.findIndex((l) => l.includes('private fun injectDownloadCapture()'));
+    const fn = lines.findIndex((l) => l.includes('internal fun MainActivity.injectDownloadCapture()'));
     assert.notStrictEqual(
         fn, -1,
         'injectDownloadCapture() is gone from MainActivity.kt, so this check has nothing to ' +

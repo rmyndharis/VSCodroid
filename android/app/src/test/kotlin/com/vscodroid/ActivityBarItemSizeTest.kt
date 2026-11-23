@@ -42,8 +42,8 @@ class ActivityBarItemSizeTest {
 
     private val stylesheet: String =
         SourceScan.body(
-            SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"),
-            "private fun injectTouchTargetCSS(",
+            SourceScan.read("src/main/kotlin/com/vscodroid/MainActivityPageScripts.kt"),
+            "internal fun MainActivity.injectTouchTargetCSS(",
         )
 
     /** The repository root is two levels above `android/app`, this suite's working directory. */

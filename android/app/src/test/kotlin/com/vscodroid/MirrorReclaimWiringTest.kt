@@ -27,13 +27,13 @@ import java.io.File
  */
 class MirrorReclaimWiringTest {
 
-    private val mainActivity = File("src/main/kotlin/com/vscodroid/MainActivity.kt")
+    private val mainActivity = File("src/main/kotlin/com/vscodroid/MainActivitySafCoordinator.kt")
     private val storageManager = File("src/main/kotlin/com/vscodroid/storage/SafStorageManager.kt")
 
     private fun methodBody(
         name: String,
         file: File = mainActivity,
-        declaration: String = "private fun $name(",
+        declaration: String = "internal fun MainActivity.$name(",
     ): String = SourceScan.body(SourceScan.read(file.path), declaration)
 
     private fun code(body: String) = SourceScan.withoutComments(body)
@@ -128,7 +128,7 @@ class MirrorReclaimWiringTest {
         assertTrue(body.isNotEmpty()) {
             "the extracted body is empty, so every assertion above it is reading nothing"
         }
-        assertTrue("private fun " !in body) {
+        assertTrue("internal fun " !in body) {
             "the brace match ran past the end of the method and into the next one"
         }
     }
@@ -145,7 +145,7 @@ class MirrorReclaimWiringTest {
      */
     @Test
     fun `every watcher this activity starts is recorded for the whole process`() {
-        val source = mainActivity.readText()
+        val source = SourceScan.readAll(SourceScan.MAIN_ACTIVITY_FILES)
 
         // Judged by WHERE the assignment is, not by what it says. Matching the text
         // instead was tried and does not bind: the permitted spelling is the same

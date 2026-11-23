@@ -33,7 +33,7 @@ require('./test-auth-callback-provider');
 
 const ROOT = path.join(__dirname, '..');
 const MAIN_ACTIVITY = path.join(
-    ROOT, 'android/app/src/main/kotlin/com/vscodroid/MainActivity.kt',
+    ROOT, 'android/app/src/main/kotlin/com/vscodroid/MainActivityPageScripts.kt',
 );
 const ANDROID_BRIDGE = path.join(
     ROOT, 'android/app/src/main/kotlin/com/vscodroid/bridge/AndroidBridge.kt',
@@ -137,7 +137,7 @@ function bridgeExtension() {
  */
 function extractInjected(fnName, mustMention) {
     const lines = fs.readFileSync(MAIN_ACTIVITY, 'utf8').split('\n');
-    const fn = lines.findIndex((l) => l.includes('private fun ' + fnName + '()'));
+    const fn = lines.findIndex((l) => l.includes('internal fun MainActivity.' + fnName + '()'));
     assert.notStrictEqual(
         fn, -1,
         fnName + '() is gone from MainActivity.kt, so this check has nothing to run. ' +

@@ -20,7 +20,7 @@ import java.io.File
 class ComposingEnterWiringTest {
 
     private companion object {
-        const val MAIN_ACTIVITY = "src/main/kotlin/com/vscodroid/MainActivity.kt"
+        const val MAIN_ACTIVITY = "src/main/kotlin/com/vscodroid/MainActivityPageScripts.kt"
         const val WORKBENCH = "src/main/assets/vscode-reh/out/vs/code/browser/workbench/workbench.js"
     }
 
@@ -43,11 +43,11 @@ class ComposingEnterWiringTest {
     fun `the script is installed from the path every page load takes`() {
         val source = mainActivity()
         assertTrue(
-            source.contains("private fun injectComposingEnter()"),
+            source.contains("internal fun MainActivity.injectComposingEnter()"),
             "injectComposingEnter is gone, so Enter on Gboard after typing a word does not " +
                 "commit New File or Rename and does not accept a Command Palette pick.",
         )
-        val bridgeToken = SourceScan.body(source, "private fun injectBridgeToken(")
+        val bridgeToken = SourceScan.body(source, "internal fun MainActivity.injectBridgeToken(")
         assertTrue(
             bridgeToken.contains("injectComposingEnter()"),
             "injectComposingEnter() is not called from injectBridgeToken, the one path that " +
@@ -57,7 +57,7 @@ class ComposingEnterWiringTest {
 
     @Test
     fun `a composing Enter is replaced outside the editor and the terminal only`() {
-        val script = SourceScan.scriptBody(mainActivity(), "private fun injectComposingEnter(")
+        val script = SourceScan.scriptBody(mainActivity(), "internal fun MainActivity.injectComposingEnter(")
         listOf(
             "e.isComposing" to "the one thing that tells Gboard's Enter from any other; " +
                 "without it every Enter is replaced",

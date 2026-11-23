@@ -33,32 +33,13 @@ import java.io.File
  */
 class ActivityRetentionTest {
 
-    private val source = File("src/main/kotlin/com/vscodroid/MainActivity.kt").readText()
+    private val source = SourceScan.readAll(SourceScan.MAIN_ACTIVITY_FILES)
 
     /** The braced block that follows [marker], to its closing brace. */
-    private fun blockAt(marker: String): String {
-        val start = source.indexOf(marker)
-        assertTrue(start >= 0) { "'$marker' is gone from MainActivity.kt, so this test is measuring nothing" }
-        val open = source.indexOf('{', start)
-        var depth = 0
-        var i = open
-        while (i < source.length) {
-            if (source[i] == '{') depth += 1
-            if (source[i] == '}') {
-                depth -= 1
-                if (depth == 0) return source.substring(open, i + 1)
-            }
-            i += 1
-        }
-        throw AssertionError("Could not find the end of the block after '$marker'")
-    }
+    private fun blockAt(marker: String): String = SourceScan.body(source, marker)
 
     /** Comment text removed, so an explanation cannot satisfy a search for the rule. */
-    private fun code(text: String): String =
-        text.lines().joinToString("\n") { line ->
-            val marker = line.indexOf("//")
-            if (marker >= 0) line.substring(0, marker) else line
-        }
+    private fun code(text: String): String = SourceScan.withoutComments(text)
 
     /**
      * Every notice the Activity hands the manager, found by its shape rather than listed by

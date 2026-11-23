@@ -70,9 +70,12 @@ class NavigationLifetimeTest {
         every { view.loadUrl(any()) } answers { loads += "editor" }
         every { view.loadDataWithBaseURL(any(), any(), any(), any(), any()) } answers { loads += "recovery" }
         every { activity.getString(any()) } returns "Retry"
+        mockkStatic("com.vscodroid.MainActivityPageScriptsKt")
+        mockkStatic("com.vscodroid.MainActivitySafCoordinatorKt")
         every { activity["initBridge"](any<Int>()) } returns Unit
-        every { activity["applyEditorLanguage"]() } returns Unit
-        every { activity["applySecretStorage"]() } returns Unit
+        every { activity.applyEditorLanguage() } returns Unit
+        every { activity.applySecretStorage() } returns Unit
+        every { activity.adoptWorkbenchFolder(any()) } returns Unit
         every { activity["paintWindowNow"](any<Int>()) } returns Unit
         every { activity getProperty "workspacePrefs" } returns prefs
         every { activity["markAppNavigation"]() } answers { callOriginal() }
@@ -84,6 +87,7 @@ class NavigationLifetimeTest {
         every { service.isServerReady() } returns true
         val storage = mockk<SafStorageManager>(relaxed = true)
         every { storage.claimWorkspacePaths(any()) } returns true
+        every { activity.safManager } returns storage
         set("tag", "MainActivity")
         set("webView", view)
         set("nodeService", service)

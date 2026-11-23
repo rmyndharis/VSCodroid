@@ -293,7 +293,7 @@ class WorkspaceUrlRoundTripTest {
     fun `the workspace root is reduced once at navigation, not per request`() {
         val source = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt")
         val writer = SourceScan.withoutComments(
-            SourceScan.body(source, "private fun rememberWorkspaceFolder("),
+            SourceScan.body(source, "internal fun rememberWorkspaceFolder("),
         )
 
         // Read as one line rather than as one contiguous string: the writer also
@@ -434,8 +434,8 @@ class WorkspaceUrlRoundTripTest {
     @Test
     fun `a second window is this window`() {
         val override = SourceScan.scriptBody(
-            SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"),
-            "private fun injectWindowOpenOverride(",
+            SourceScan.read("src/main/kotlin/com/vscodroid/MainActivityPageScripts.kt"),
+            "internal fun MainActivity.injectWindowOpenOverride(",
         )
 
         val sameOrigin = override.indexOf("location.origin")

@@ -25,17 +25,24 @@ class FullScreenWiringTest {
 
     /** Comments blanked, because the KDoc names everything the cases look for. */
     private fun mainActivity(): String =
-        SourceScan.withoutComments(SourceScan.read(MAIN_ACTIVITY))
+        SourceScan.withoutComments(
+            SourceScan.readAll(
+                listOf(
+                    MAIN_ACTIVITY,
+                    "src/main/kotlin/com/vscodroid/MainActivityPageScripts.kt",
+                )
+            )
+        )
 
     @Test
     fun `the script is installed from the path every page load takes`() {
         val source = mainActivity()
         assertTrue(
-            source.contains("private fun injectFullScreenShim()"),
+            source.contains("internal fun MainActivity.injectFullScreenShim()"),
             "injectFullScreenShim is gone, so View > Toggle Full Screen answers a " +
                 "fullscreenerror again and does nothing.",
         )
-        val bridgeToken = SourceScan.body(source, "private fun injectBridgeToken(")
+        val bridgeToken = SourceScan.body(source, "internal fun MainActivity.injectBridgeToken(")
         assertTrue(
             bridgeToken.contains("injectFullScreenShim()"),
             "injectFullScreenShim() is not called from injectBridgeToken, the one path that " +
@@ -45,7 +52,7 @@ class FullScreenWiringTest {
 
     @Test
     fun `the script hands the request to the bridge and answers the workbench's own calls`() {
-        val script = SourceScan.scriptBody(mainActivity(), "private fun injectFullScreenShim(")
+        val script = SourceScan.scriptBody(mainActivity(), "internal fun MainActivity.injectFullScreenShim(")
         listOf(
             "AndroidBridge.setFullScreen(t, next)" to "the request has to reach the bridge " +
                 "with the session token, or nothing on the device changes",
@@ -78,7 +85,7 @@ class FullScreenWiringTest {
             "the bridge callback records the choice and no longer applies it, so View > Toggle " +
                 "Full Screen changes nothing on the device until the focus leaves and returns.",
         )
-        val shim = SourceScan.body(source, "private fun injectFullScreenShim(")
+        val shim = SourceScan.body(source, "internal fun MainActivity.injectFullScreenShim(")
         assertTrue(
             shim.contains("getBoolean(KEY_FULL_SCREEN, false)"),
             "the script is not told the saved state, so a page that loads while full screen " +

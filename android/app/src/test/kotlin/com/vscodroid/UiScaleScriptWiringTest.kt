@@ -24,7 +24,12 @@ import org.junit.jupiter.api.Test
  */
 class UiScaleScriptWiringTest {
 
-    private val source = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt")
+    private val source = SourceScan.readAll(
+        listOf(
+            "src/main/kotlin/com/vscodroid/MainActivity.kt",
+            "src/main/kotlin/com/vscodroid/MainActivityHelpers.kt",
+        )
+    )
 
     private fun code(declaration: String): String =
         SourceScan.withoutComments(SourceScan.body(source, declaration))

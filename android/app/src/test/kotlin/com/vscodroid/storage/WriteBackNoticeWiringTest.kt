@@ -29,6 +29,13 @@ import javax.xml.parsers.DocumentBuilderFactory
 class WriteBackNoticeWiringTest {
 
     private val activity = File("../../android/app/src/main/kotlin/com/vscodroid/MainActivity.kt")
+    private val activityHelpers = File("../../android/app/src/main/kotlin/com/vscodroid/MainActivityHelpers.kt")
+
+    private fun activitySource(): String {
+        assertTrue(activity.isFile, "MainActivity.kt is not where this test expects it")
+        assertTrue(activityHelpers.isFile, "MainActivityHelpers.kt is not where this test expects it")
+        return activity.readText() + "\n" + activityHelpers.readText()
+    }
 
     /**
      * A manager per case, so no case inherits a throttle another case has already moved.
@@ -55,8 +62,7 @@ class WriteBackNoticeWiringTest {
      */
     @Test
     fun `MainActivity asks to be told when a write-back gives up`() {
-        assertTrue(activity.isFile, "MainActivity.kt is not where this test expects it")
-        val source = activity.readText()
+        val source = activitySource()
 
         // Anchored at the start of a line, and for the second pattern the character
         // class is the anchor: nothing between the indent and the string name may be a
@@ -91,8 +97,7 @@ class WriteBackNoticeWiringTest {
      */
     @Test
     fun `MainActivity asks to be told when a folder did not arrive whole`() {
-        assertTrue(activity.isFile, "MainActivity.kt is not where this test expects it")
-        val source = activity.readText()
+        val source = activitySource()
 
         assertTrue(
             Regex("""(?m)^\s*safManager\.onUploadIncomplete\s*\{""").containsMatchIn(source),
@@ -121,8 +126,7 @@ class WriteBackNoticeWiringTest {
      */
     @Test
     fun `MainActivity names a file an open keeps inside the app`() {
-        assertTrue(activity.isFile, "MainActivity.kt is not where this test expects it")
-        val source = activity.readText()
+        val source = activitySource()
 
         assertTrue(
             Regex("""(?m)^\s*safManager\.onFilesKeptInApp\s*\{""").containsMatchIn(source),
@@ -151,8 +155,7 @@ class WriteBackNoticeWiringTest {
      */
     @Test
     fun `MainActivity asks to be told when documents did not reach the editor`() {
-        assertTrue(activity.isFile, "MainActivity.kt is not where this test expects it")
-        val source = activity.readText()
+        val source = activitySource()
 
         assertTrue(
             Regex("""(?m)^\s*safManager\.onDocumentsNotCopied\s*\{""").containsMatchIn(source),
@@ -179,8 +182,7 @@ class WriteBackNoticeWiringTest {
      */
     @Test
     fun `MainActivity asks to be told when a delete was declined to save the device copy`() {
-        assertTrue(activity.isFile, "MainActivity.kt is not where this test expects it")
-        val source = activity.readText()
+        val source = activitySource()
 
         assertTrue(
             Regex("""(?m)^\s*safManager\.onKeptOnDevice\s*\{""").containsMatchIn(source),
@@ -220,8 +222,7 @@ class WriteBackNoticeWiringTest {
      */
     @Test
     fun `MainActivity asks to be told when a delete waited out another write`() {
-        assertTrue(activity.isFile, "MainActivity.kt is not where this test expects it")
-        val source = activity.readText()
+        val source = activitySource()
 
         assertTrue(
             Regex("""(?m)^\s*safManager\.onDeleteBusy\s*\{""").containsMatchIn(source),
@@ -240,8 +241,7 @@ class WriteBackNoticeWiringTest {
      */
     @Test
     fun `MainActivity asks to be told when the changes made while a folder opened were not all sent`() {
-        assertTrue(activity.isFile, "MainActivity.kt is not where this test expects it")
-        val source = activity.readText()
+        val source = activitySource()
 
         assertTrue(
             Regex("""(?m)^\s*safManager\.onOpenChangesUnsent\s*\{""").containsMatchIn(source),
@@ -265,8 +265,7 @@ class WriteBackNoticeWiringTest {
      */
     @Test
     fun `MainActivity asks to be told when a save caught as a folder opened could not be kept whole`() {
-        assertTrue(activity.isFile, "MainActivity.kt is not where this test expects it")
-        val source = activity.readText()
+        val source = activitySource()
 
         assertTrue(
             Regex("""(?m)^\s*safManager\.onHeldSaveIncomplete\s*\{""").containsMatchIn(source),

@@ -43,7 +43,7 @@ class NarrowWindowPatchTest {
         val list = Regex("""LIST_MIN_WIDTH: number = platform\.isAndroid \? (\d+) :""")
             .find(patch)?.groupValues?.get(1)?.toInt()
         val page = Regex("""var MIN_WIDTH = (\d+);""")
-            .findAll(SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"))
+            .findAll(SourceScan.read("src/main/kotlin/com/vscodroid/MainActivityHelpers.kt"))
             .map { it.groupValues[1].toInt() }
             .toList()
 

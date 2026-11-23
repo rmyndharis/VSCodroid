@@ -42,7 +42,7 @@ class NoticesTest {
     // Unit tests run with app/ as the working directory.
     private val repoRoot = File("../..")
     private val buildScript = File("build.gradle.kts")
-    private val mainActivity = File("src/main/kotlin/com/vscodroid/MainActivity.kt")
+    private val mainActivity = File("src/main/kotlin/com/vscodroid/MainActivityDialogs.kt")
 
     /** The body of BundleNoticesTask, ended on a closing brace in the first column. */
     private fun taskClassBody(): String {
@@ -203,7 +203,7 @@ class NoticesTest {
         }
         for (dialog in listOf("showLicensesDialog", "showLicenseTextsDialog")) {
             assertTrue(
-                code.any { it.contains("$dialog()") && !it.contains("fun $dialog(") },
+                code.any { it.contains("$dialog()") && !it.contains("fun MainActivity.$dialog(") },
                 "Nothing calls $dialog(), so what it shows is packaged and out of " +
                     "reach: the same state as when these documents lived only in " +
                     "the repository, at more cost."

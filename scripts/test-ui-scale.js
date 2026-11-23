@@ -43,9 +43,10 @@ const Module = require('module');
 const vm = require('vm');
 const { newestExtensionDir } = require('./lib/bundled-extension');
 
-const MAIN_ACTIVITY = path.join(
-    __dirname, '..', 'android/app/src/main/kotlin/com/vscodroid/MainActivity.kt',
-);
+const MAIN_ACTIVITY_SOURCES = [
+    path.join(__dirname, '..', 'android/app/src/main/kotlin/com/vscodroid/MainActivityHelpers.kt'),
+    path.join(__dirname, '..', 'android/app/src/main/kotlin/com/vscodroid/MainActivityPageScripts.kt'),
+];
 
 /** How a literal dollar is written inside a Kotlin raw string. */
 const DOLLAR_ESCAPE = "${'$'}";
@@ -55,7 +56,7 @@ const DOLLAR_ESCAPE = "${'$'}";
  * removes taken off, which is the text the WebView is given.
  */
 function extract(declaration, mustMention) {
-    const lines = fs.readFileSync(MAIN_ACTIVITY, 'utf8').split('\n');
+    const lines = MAIN_ACTIVITY_SOURCES.flatMap((file) => fs.readFileSync(file, 'utf8').split('\n'));
     const fn = lines.findIndex((l) => l.includes(declaration));
     assert.notStrictEqual(
         fn, -1,
@@ -80,7 +81,7 @@ function extract(declaration, mustMention) {
 }
 
 const SCRIPT = extract('internal fun uiScaleScript()', "'vscodroid.uiScale'");
-const RELAY = extract('private fun injectBridgeRelay()', 'setUiScale');
+const RELAY = extract('internal fun MainActivity.injectBridgeRelay()', 'setUiScale');
 
 /** The workbench page's own viewport element in Code - OSS 1.139.1 (workbench.html). */
 const WORKBENCH_VIEWPORT =

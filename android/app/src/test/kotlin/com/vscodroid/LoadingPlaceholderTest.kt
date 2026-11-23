@@ -32,7 +32,7 @@ import java.io.File
  */
 class LoadingPlaceholderTest {
 
-    private val source = File("src/main/kotlin/com/vscodroid/MainActivity.kt").readText()
+    private val source = SourceScan.readAll(SourceScan.MAIN_ACTIVITY_FILES)
 
     @Test
     fun `the character that ends a data URL is encoded`() {

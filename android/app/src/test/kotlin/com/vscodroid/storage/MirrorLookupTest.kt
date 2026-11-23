@@ -167,12 +167,10 @@ class MirrorLookupTest {
      */
     @Test
     fun `a mirror the workbench opened without a grant is said on screen`() {
-        val source = File("src/main/kotlin/com/vscodroid/MainActivity.kt")
-        check(source.isFile) { "MainActivity.kt not found at ${source.absolutePath}" }
-        val text = source.readText()
-        val start = text.indexOf("private fun adoptWorkbenchFolder(")
-        assertTrue(start >= 0, "adoptWorkbenchFolder was renamed or removed")
-        val body = text.substring(start, text.indexOf("\n    }\n", start))
+        val text = com.vscodroid.SourceScan.withoutComments(
+            com.vscodroid.SourceScan.read("src/main/kotlin/com/vscodroid/MainActivitySafCoordinator.kt"),
+        )
+        val body = com.vscodroid.SourceScan.body(text, "internal fun MainActivity.adoptWorkbenchFolder(")
         val miss = body.substringAfter("if (folder == null)", "").substringBefore("return@launch")
         assertTrue(
             body.contains("mirrorNameFor(") && miss.contains("mirror != null") &&

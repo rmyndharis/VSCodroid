@@ -217,15 +217,10 @@ class EditorEntryTest {
      */
     @Test
     fun `neither exported activity copies the caller's extras into the next intent`() {
-        for (name in listOf("MainActivity.kt", "SplashActivity.kt")) {
-            val file = File("src/main/kotlin/com/vscodroid/$name")
-            check(file.isFile) { "$name not found at ${file.absolutePath}; this test would pass by looking at nothing" }
-            val lines = file.readLines().filterNot {
-                val t = it.trimStart()
-                t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
-            }
+        for (path in SourceScan.MAIN_ACTIVITY_FILES + "src/main/kotlin/com/vscodroid/SplashActivity.kt") {
+            val lines = SourceScan.withoutComments(SourceScan.read(path)).lines()
             assertTrue(lines.none { it.contains("putExtras(") }) {
-                "$name copies the caller's extras: ${lines.filter { it.contains("putExtras(") }}"
+                "$path copies the caller's extras: ${lines.filter { it.contains("putExtras(") }}"
             }
         }
     }
