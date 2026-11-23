@@ -80,9 +80,15 @@ def refuse_shallow():
         )
 
 
-# The zone a squash merged through GitHub by this repository's owner is stamped in,
-# and so the zone in which main's day turns (00:00 at +07:00 is 17:00 UTC).
-MERGE_ZONE = datetime.timezone(datetime.timedelta(hours=7))
+# UTC is used for pending-change date checks so contributors and CI runners in
+# any timezone see the same day boundary rather than diverging between 17:00
+# and 23:59 UTC.
+MERGE_ZONE = datetime.timezone.utc
+
+
+def current_date(now=None):
+    """Today's date in MERGE_ZONE (UTC)."""
+    return (now or datetime.datetime.now(MERGE_ZONE)).astimezone(MERGE_ZONE).date()
 
 
 def last_change(rel):
@@ -107,7 +113,7 @@ def on_main(rel, commit):
     return git("merge-base", "--is-ancestor", commit, "refs/remotes/origin/main").returncode == 0
 
 
-def main():
+def main(now=None):
     refuse_shallow()
     failures = []
     for rel, pattern in DATED:
@@ -127,7 +133,7 @@ def main():
         if landed is None:
             print(f"note    no origin/main here, so {rel} is held to its last commit only")
         if landed is False:
-            today = datetime.datetime.now(MERGE_ZONE).date()
+            today = current_date(now)
             if stated < max(changed, today):
                 failures.append((rel, stated, f"changed and not on main yet, so it lands "
                                               f"there no earlier than {max(changed, today)}"))
