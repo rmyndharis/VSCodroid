@@ -19,15 +19,17 @@ class InjectedScriptApiTest {
 
     @Test
     fun `injected JavaScript does not reach for the AMD loader`() {
-        check(mainActivity.isFile) {
-            "MainActivity.kt not found at ${mainActivity.absolutePath}; this test would " +
-                "otherwise pass by looking at nothing"
+        val offenders = SourceScan.MAIN_ACTIVITY_FILES.flatMap { path ->
+            val file = File(path)
+            check(file.isFile) {
+                "$path not found at ${file.absolutePath}; this test would " +
+                    "otherwise pass by looking at nothing"
+            }
+            file.readLines()
+                .withIndex()
+                .filter { (_, line) -> Regex("""\b(window|globalThis|self)\.require\b""").containsMatchIn(line) }
+                .map { (i, line) -> "${file.name}:${i + 1}: ${line.trim()}" }
         }
-
-        val offenders = mainActivity.readLines()
-            .withIndex()
-            .filter { (_, line) -> Regex("""\b(window|globalThis|self)\.require\b""").containsMatchIn(line) }
-            .map { (i, line) -> "MainActivity.kt:${i + 1}: ${line.trim()}" }
 
         assertEquals(
             emptyList<String>(), offenders,

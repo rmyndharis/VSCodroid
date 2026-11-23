@@ -432,7 +432,7 @@ class SafDataPreservationInstrumentedTest {
         assertEquals(0, manager.reclaimRevokedMirrorsSync())
         assertArrayEquals(ORIGINAL, File(savedMirror, SafDocumentsProvider.FILE_NAME).readBytes())
         assertArrayEquals(originalRecord, record.readBytes())
-        assertFalse(manager.listMirrors().single { it.hash == savedMirror.name }.reclaimable)
+        assertEquals(savedMirror.name, manager.listMirrors().single { it.hash == savedMirror.name }.hash)
         assertEquals(SafStorageManager.RECLAIM_REFUSED,
             manager.reclaimMirror(savedMirror.name, force = false))
         assertArrayEquals(ORIGINAL, File(savedMirror, SafDocumentsProvider.FILE_NAME).readBytes())

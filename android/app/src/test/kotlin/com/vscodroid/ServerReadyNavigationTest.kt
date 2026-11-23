@@ -27,7 +27,14 @@ import org.junit.jupiter.api.Test
 class ServerReadyNavigationTest {
 
     private fun mainActivity(): String =
-        SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"))
+        SourceScan.withoutComments(
+            SourceScan.readAll(
+                listOf(
+                    "src/main/kotlin/com/vscodroid/MainActivity.kt",
+                    "src/main/kotlin/com/vscodroid/MainActivitySafCoordinator.kt",
+                )
+            )
+        )
 
     @Test
     fun `a renderer-crash reload waits for readiness`() {
@@ -51,7 +58,7 @@ class ServerReadyNavigationTest {
 
     @Test
     fun `opening a device folder waits for readiness`() {
-        val body = SourceScan.body(mainActivity(), "private fun openSafFolder(")
+        val body = SourceScan.body(mainActivity(), "internal fun MainActivity.openSafFolder(")
 
         assertTrue(
             body.contains("isServerReady() == true"),
@@ -71,7 +78,7 @@ class ServerReadyNavigationTest {
      */
     @Test
     fun `a folder picked while the server is down is not thrown away`() {
-        val body = SourceScan.body(mainActivity(), "private fun openSafFolder(")
+        val body = SourceScan.body(mainActivity(), "internal fun MainActivity.openSafFolder(")
         val remembered = body.indexOf("rememberWorkspaceFolder(target)")
 
         assertTrue(

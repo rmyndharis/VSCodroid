@@ -35,9 +35,18 @@ import org.junit.jupiter.api.Test
 class UnreadDocumentGuardTest {
 
     private fun engine(): String =
-        SourceScan.withoutComments(
-            SourceScan.read("src/main/kotlin/com/vscodroid/storage/SafSyncEngine.kt"),
-        )
+        listOf(
+            "SafSyncEngine.kt",
+            "SafSyncModels.kt",
+            "SafSyncRecordStore.kt",
+            "SafUploadJournal.kt",
+            "SafDocumentClient.kt",
+            "SafInboundCopier.kt",
+            "SafOutboundWriter.kt",
+            "SafMirrorWatcher.kt",
+        ).joinToString("\n") {
+            SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/storage/$it"))
+        }
 
     @Test
     fun `both refusals over an unreadable device copy arm the guard`() {

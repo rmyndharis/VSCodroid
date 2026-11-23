@@ -247,44 +247,58 @@ class MirrorListingTest {
 
     /**
      * Excluded directories such as `node_modules` may exist only inside this copy.
-     * Their rows retain the same destructive-confirmation compatibility field.
+     * Listing still exposes the copy, and removal requires explicit confirmation.
      */
     @Test
-    fun `a copy holding files the device folder lacks is listed as not reclaimable`() {
+    fun `a copy holding files the device folder lacks is listed and refuses unconfirmed removal`() {
         val dir = vouchedMirror(liveUri)
-        File(dir, "node_modules/lodash").mkdirs()
-        File(dir, "node_modules/lodash/index.js").writeText("module.exports = {}")
+        val excluded = File(dir, "node_modules/lodash/index.js").apply {
+            parentFile!!.mkdirs()
+            writeText("module.exports = {}")
+        }
         every { resolver.persistedUriPermissions } returns listOf(permissionFor(liveUri))
 
-        assertFalse(
-            manager.listMirrors().single().reclaimable,
-            "a mirror holding an npm install was reported as a disposable copy",
+        assertEquals(listOf(dir.name), manager.listMirrors().map { it.hash })
+        assertEquals(
+            SafStorageManager.RECLAIM_REFUSED,
+            manager.reclaimMirror(dir.name, force = false),
+            "a mirror holding an npm install was removed without confirmation",
         )
+        assertTrue(dir.isDirectory)
+        assertEquals("module.exports = {}", excluded.readText())
     }
 
     /** Matching recorded bytes still cannot rule out a later direct write. */
     @Test
-    fun `a copy the device folder fully holds is listed as not reclaimable`() {
-        vouchedMirror(liveUri)
+    fun `a copy the device folder fully holds is listed and refuses unconfirmed removal`() {
+        val dir = vouchedMirror(liveUri)
         every { resolver.persistedUriPermissions } returns listOf(permissionFor(liveUri))
 
-        assertFalse(manager.listMirrors().single().reclaimable)
+        assertEquals(listOf(dir.name), manager.listMirrors().map { it.hash })
+        assertEquals(SafStorageManager.RECLAIM_REFUSED, manager.reclaimMirror(dir.name, force = false))
+        assertTrue(dir.isDirectory)
+        assertEquals("fun main() {}", File(dir, "main.kt").readText())
     }
 
     /**
      * A refused upload can leave a local edit absent from the device folder.
      */
     @Test
-    fun `a copy holding an undelivered write is listed as not reclaimable`() {
+    fun `a copy holding an undelivered write is listed and refuses unconfirmed removal`() {
         val dir = vouchedMirror(liveUri)
+        val pending = File(dir, "main.kt")
         File(filesDir, SafSyncEngine.UPLOADS_IN_FLIGHT_FILE)
-            .writeText(File(dir, "main.kt").absolutePath + "\n")
+            .writeText(pending.absolutePath + "\n")
         every { resolver.persistedUriPermissions } returns listOf(permissionFor(liveUri))
 
-        assertFalse(
-            manager.listMirrors().single().reclaimable,
-            "a mirror holding a write that never reached the device was called a copy",
+        assertEquals(listOf(dir.name), manager.listMirrors().map { it.hash })
+        assertEquals(
+            SafStorageManager.RECLAIM_REFUSED,
+            manager.reclaimMirror(dir.name, force = false),
+            "a mirror holding a write that never reached the device was removed without confirmation",
         )
+        assertTrue(dir.isDirectory)
+        assertEquals("fun main() {}", pending.readText())
     }
 
     @Test

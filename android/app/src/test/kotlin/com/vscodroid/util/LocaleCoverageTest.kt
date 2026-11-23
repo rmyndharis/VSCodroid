@@ -351,7 +351,7 @@ class LocaleCoverageTest {
      */
     @Test
     fun `the kept-in-app notices pass the folder and the file in the order every language numbers them`() {
-        val source = read("src/main/kotlin/com/vscodroid/MainActivity.kt")
+        val source = read("src/main/kotlin/com/vscodroid/MainActivityHelpers.kt")
         assertTrue(
             Regex("""getString\(\s*R\.string\.saf_file_kept_in_app,\s*folder,\s*first\s*\)""")
                 .containsMatchIn(source),

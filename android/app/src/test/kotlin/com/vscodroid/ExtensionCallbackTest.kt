@@ -1307,13 +1307,7 @@ class NavigationTokenLoggingTest {
 
     private val mainActivity = File("src/main/kotlin/com/vscodroid/MainActivity.kt")
 
-    private fun source(): List<String> {
-        check(mainActivity.isFile) {
-            "MainActivity.kt not found at ${mainActivity.absolutePath}, this test " +
-                "would otherwise pass by looking at nothing"
-        }
-        return mainActivity.readLines()
-    }
+    private fun source(): List<String> = SourceScan.readAll(SourceScan.MAIN_ACTIVITY_FILES).lines()
 
     @Test
     fun `no log statement prints a token-bearing value unredacted`() {
@@ -1348,7 +1342,7 @@ class NavigationTokenLoggingTest {
     @Test
     fun `the navigation log prints no query string`() {
         val navigate = SourceScan.withoutComments(
-            SourceScan.body(mainActivity.readText(), "private fun navigateToFolder("),
+            SourceScan.body(mainActivity.readText(), "internal fun navigateToFolder("),
         )
 
         assertTrue(
@@ -1785,7 +1779,7 @@ class RestoreWatcherTest {
  */
 class SyncCancellationTest {
 
-    private val mainActivity = File("src/main/kotlin/com/vscodroid/MainActivity.kt")
+    private val mainActivity = File("src/main/kotlin/com/vscodroid/MainActivitySafCoordinator.kt")
 
     private fun codeLines(): List<String> =
         mainActivity.readLines().filterNot {

@@ -21,7 +21,7 @@ import org.junit.jupiter.api.Test
  */
 class SafFailureLoggingTest {
 
-    private val source = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt")
+    private val source = SourceScan.readAll(SourceScan.MAIN_ACTIVITY_FILES)
 
     private val classOnly = listOf(
         "SAF permission revoked during sync",

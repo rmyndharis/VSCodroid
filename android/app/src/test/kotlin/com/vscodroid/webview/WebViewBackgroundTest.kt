@@ -289,7 +289,7 @@ class WebViewBackgroundTest {
         // colour, #1E1E1E, for the error page drawn on it.
         listOf(
             Triple("private fun setupWebView()", "paintWindowNow(lastPageColor(this))", "wv.loadData("),
-            Triple("private fun retryServerStart()", "paintWindowNow(lastPageColor(this))", "webView?.loadData("),
+            Triple("internal fun retryServerStart()", "paintWindowNow(lastPageColor(this))", "webView?.loadData("),
             Triple("private fun showErrorPage(", "paintWindowNow(getColor(R.color.colorBackground))", "webView?.loadDataWithBaseURL("),
         ).forEach { (declaration, paint, load) ->
             val code = body(declaration)

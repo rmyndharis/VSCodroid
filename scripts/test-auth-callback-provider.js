@@ -172,8 +172,9 @@ function fixture({ bridge = true, ready = false, accept = true, nativeGeneration
     first.provider.dispose();
     assert.equal(first.window.__vscodroidCallbackDocumentId, documentId);
 }
+const pageScripts = fs.readFileSync(path.join(root, 'android/app/src/main/kotlin/com/vscodroid/MainActivityPageScripts.kt'), 'utf8');
 const activity = fs.readFileSync(path.join(root, 'android/app/src/main/kotlin/com/vscodroid/MainActivity.kt'), 'utf8');
-const injection = activity.slice(activity.indexOf('private fun injectBridgeToken()'))
+const injection = pageScripts.slice(pageScripts.indexOf('internal fun MainActivity.injectBridgeToken()'))
     .match(/targetView\.evaluateJavascript\("""([\s\S]*?)"""\.trimIndent\(\)\)/);
 assert.ok(injection, 'the real bridge bootstrap script was not found');
 const bootstrap = injection[1]

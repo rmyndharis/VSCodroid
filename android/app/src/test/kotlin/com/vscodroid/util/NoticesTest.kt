@@ -42,35 +42,35 @@ class NoticesTest {
     // Unit tests run with app/ as the working directory.
     private val repoRoot = File("../..")
     private val buildScript = File("build.gradle.kts")
-    private val mainActivity = File("src/main/kotlin/com/vscodroid/MainActivity.kt")
+    private val mainActivity = File("src/main/kotlin/com/vscodroid/MainActivityDialogs.kt")
 
-    /** The body of the bundleNotices task, ended on a closing brace in the first column. */
-    private fun taskBody(): String {
-        val task = buildScript.readText().substringAfter("(\"bundleNotices\") {", "")
-        assertFalse(task.isEmpty(), "bundleNotices task is gone from build.gradle.kts")
-        return task.substringBefore("\n}")
+    /** The body of BundleNoticesTask, ended on a closing brace in the first column. */
+    private fun taskClassBody(): String {
+        val body = buildScript.readText().substringAfter("class BundleNoticesTask : DefaultTask() {", "")
+        assertFalse(body.isEmpty(), "BundleNoticesTask is gone from build.gradle.kts")
+        return body.substringBefore("\n}")
+    }
+
+    /** The body of androidComponents { ... }, ended on a closing brace in the first column. */
+    private fun androidComponentsBody(): String {
+        val body = buildScript.readText().substringAfter("\nandroidComponents {", "")
+        assertFalse(body.isEmpty(), "androidComponents block is gone from build.gradle.kts")
+        return body.substringBefore("\n}")
     }
 
     /**
-     * The entries of the bundleNotices task's `val documents = listOf(...)`.
-     *
-     * Found by name, not by task type. The type has an assertion of its own
-     * below, and a parse anchored on it would answer a change of type with
-     * "the task is gone", which is a different defect and the wrong one to fix.
+     * The entries of `val noticeDocuments = listOf(...)`.
      *
      * Each entry is anchored to the start of a line, with only whitespace
      * allowed in front. `build.gradle.kts` is Kotlin, so `//` disables a line
      * here exactly as it does anywhere else, and a substring search reads a
-     * commented-out entry as a document the build copies. That is the shape
-     * this whole file exists to refuse: the list below would go on agreeing
-     * with [Notices.BUNDLED] while the Sync copied one document fewer and the
-     * dialog came up short on a device. Every entry begins its own line, so
-     * the anchor costs nothing.
+     * commented-out entry as a document the build copies. Every entry begins
+     * its own line, so the anchor costs nothing.
      */
     private fun copiedPaths(): List<String> {
-        val list = Regex("""(?m)^\s*val documents = listOf\(([^)]*)\)""")
-            .find(taskBody())?.groupValues?.get(1)
-        assertNotNull(list, "bundleNotices no longer lists its documents as `val documents = listOf(...)`")
+        val list = Regex("""(?m)^\s*val noticeDocuments = listOf\(([^)]*)\)""")
+            .find(buildScript.readText())?.groupValues?.get(1)
+        assertNotNull(list, "build.gradle.kts no longer lists its documents as `val noticeDocuments = listOf(...)`")
         return Regex("""(?m)^\s*"([^"]+)",?\s*$""")
             .findAll(list!!).map { it.groupValues[1] }.toList()
     }
@@ -81,7 +81,7 @@ class NoticesTest {
         assertEquals(
             (Notices.BUNDLED + Notices.LICENSE_TEXTS.values).sorted(),
             copied.map { File(it).name }.sorted(),
-            "Notices.BUNDLED / Notices.LICENSE_TEXTS and bundleNotices disagree about " +
+            "Notices.BUNDLED / Notices.LICENSE_TEXTS and noticeDocuments disagree about " +
                 "which documents ship. The app opens assets by basename; the task " +
                 "decides which basenames exist."
         )
@@ -94,104 +94,68 @@ class NoticesTest {
 
     @Test
     fun `what the copy writes is packaged, and something makes the copy run`() {
-        val script = buildScript.readText()
-        val body = taskBody()
-        val destination = Regex("""(?m)^\s*into\(layout\.buildDirectory\.dir\("([^"]+)"\)\)""")
-            .find(body)?.groupValues?.get(1)
-        assertNotNull(destination, "bundleNotices names no destination directory")
+        val taskBody = taskClassBody()
+        val wiringBody = androidComponentsBody()
+        val anchored = """(?m)^\s*[^/\n]*"""
 
-        // The list is what the task copies. Parsing the list and not the copy
-        // would let the two part company: a `from(...)` naming something else
-        // leaves every assertion on the list green over an APK that ships it.
+        // The Variant API wires BundleNoticesTask into each variant's generated
+        // assets source directories, carrying both the packaging path and the
+        // automatic task dependency for asset merges and lint without legacy
+        // sourceSets provider opt-outs.
         assertTrue(
-            Regex("""(?m)^\s*from\(\s*documents\s*\)""").containsMatchIn(body),
-            "bundleNotices does not copy its `documents` list, so what this file " +
+            Regex(anchored + """tasks\.register<BundleNoticesTask>\(""").containsMatchIn(wiringBody),
+            "androidComponents does not register BundleNoticesTask per variant."
+        )
+        assertTrue(
+            Regex(anchored + """documentPaths\.set\(\s*documents\s*\)""").containsMatchIn(wiringBody) &&
+                Regex(anchored + """val documents = noticeDocuments\b""").containsMatchIn(wiringBody),
+            "BundleNoticesTask is not wired to `noticeDocuments`, so what this test " +
                 "checks is not what the APK carries."
         )
-
-        // Copying the documents is not packaging them. The destination has to be
-        // an assets source directory or they land in build/ and stop there,
-        // leaving the dialog with nothing but its two missing-document markers.
-        //
-        // Either spelling counts, because both register the same directory and
-        // only one of them is a path. Naming the task is the better one: a bare
-        // path leaves every consumer to declare the producer itself, and Gradle
-        // fails the build when one does not, which is a thing that happens in
-        // the release graph and nowhere a pull request would see it. Pinning the
-        // path spelling alone would have turned that improvement red.
-        //
-        // Both are anchored at the start of a line, and the character class in
-        // front is the anchor rather than the `^`: the live registration is
-        // `sourceSets["main"].assets.srcDir(...)`, so a receiver has to be
-        // allowed through, and what may not get through is a slash. A `//` in
-        // front of the call cannot then satisfy either alternative. Without
-        // that, commenting the registration out leaves this case green over an
-        // APK whose notices directory is copied and never packaged, which is
-        // the state the assertion exists to name.
-        val anchored = """(?m)^\s*[^/\n]*"""
-        val registersPath = Regex(anchored + "assets\\.srcDir\\([^)]*" +
-            Regex.escape(destination!!) + "[^)]*\\)").containsMatchIn(script)
-        val registersTask = Regex(anchored + """assets\.srcDir\(\s*bundleNotices\s*\)""")
-            .containsMatchIn(script)
         assertTrue(
-            registersPath || registersTask,
-            "bundleNotices writes to $destination, and no assets.srcDir(...) " +
-                "registers it, by that path or by naming the task. The documents " +
-                "would be copied and never packaged."
+            Regex(anchored + """variant\.sources\.assets\?\.addGeneratedSourceDirectory\(""")
+                .containsMatchIn(wiringBody) &&
+                Regex(anchored + """BundleNoticesTask::outputDir""").containsMatchIn(wiringBody),
+            "androidComponents does not register BundleNoticesTask::outputDir via " +
+                "variant.sources.assets?.addGeneratedSourceDirectory(...). The documents " +
+                "would be copied and never packaged or depended on."
         )
 
-        // And the copy has to be made to run. Nothing infers it from the source
-        // directory: on a clean build the directory is simply empty, and every
-        // gate stays green while the APK ships no notices at all.
-        // Line-anchored for the reason the registration above is: one of the two
-        // live wirings is `.configureEach { dependsOn(bundleNotices) }`, so the
-        // anchor has to let a receiver through and refuse a slash.
-        assertTrue(
-            Regex(anchored + "dependsOn\\([^)]*bundleNotices").containsMatchIn(script),
-            "Nothing depends on bundleNotices, so a clean build packages an empty " +
-                "notices directory."
-        )
-
-        // And it has to clear out what it no longer writes. A plain Copy leaves
+        // And it has to clear out what it no longer writes. A plain copy leaves
         // the last run's files where they are: with a document renamed or
         // removed, the old one stayed in that directory and went into the next
-        // incremental APK under a name the repository no longer had. CI checks
-        // out clean and never saw it, which is what makes it worth a gate rather
-        // than a habit.
+        // incremental APK under a name the repository no longer had.
         assertTrue(
-            Regex(anchored + """tasks\.register<Sync>\("bundleNotices"\)""")
-                .containsMatchIn(script),
-            "bundleNotices is not a Sync, so a document removed or renamed stays " +
-                "in the notices directory and ships from any incremental build."
+            Regex(anchored + """fsOps\.sync\s*\{""").containsMatchIn(taskBody),
+            "BundleNoticesTask does not use fsOps.sync, so a document removed or " +
+                "renamed stays in the notices directory and ships from an incremental build."
+        )
+        assertTrue(
+            Regex(anchored + """from\(\s*expected\s*\)""").containsMatchIn(taskBody) &&
+                Regex(anchored + """into\(\s*outputDir\s*\)""").containsMatchIn(taskBody),
+            "BundleNoticesTask's fsOps.sync does not sync `expected` into `outputDir`."
         )
     }
 
     @Test
     fun `a document that is missing fails the copy rather than shortening it`() {
-        // Sync and Copy both skip a from() that does not exist without a word,
-        // so a checkout with a licence text moved aside reaches a signed AAB
-        // with every packaging gate green, and Notices.readOne opens that
-        // entry of the chooser on its missing-document marker. The sha256 pins
-        // below would say so, but the test task is not in the packaging graph:
-        // a local bundleRelease never runs them. The guard has to be in the
-        // task.
-        //
-        // Read as text, like everything else here: a unit test cannot execute
-        // a build-script task. What is asserted is that the task's own action
-        // walks the same list the copy reads and throws on a member that is
-        // not a file. Line-anchored, because a commented-out guard is no guard.
-        val body = taskBody()
-        val guard = Regex("""(?m)^\s*doFirst\s*\{""").find(body)
-        assertNotNull(guard, "bundleNotices has no doFirst, so a missing source is skipped silently")
-        val action = body.substring(guard!!.range.first)
+        // FileSystemOperations.sync skips a from() that does not exist without a
+        // word, so a checkout with a licence text moved aside would reach a signed
+        // AAB with every packaging gate green. The guard has to run in the task
+        // action before fsOps.sync and throw GradleException on any missing file.
+        val body = taskClassBody()
+        val actionMatch = Regex("""(?m)^\s*@TaskAction\b""").find(body)
+        assertNotNull(actionMatch, "BundleNoticesTask has no @TaskAction")
+        val action = body.substring(actionMatch!!.range.first)
+        val anchored = """(?m)^\s*[^/\n]*"""
         assertTrue(
-            Regex("""(?m)^\s*[^/\n]*documents\.filterNot\s*\{\s*it\.isFile\s*}""").containsMatchIn(action),
-            "bundleNotices' doFirst does not test each of `documents` with isFile, so " +
+            Regex(anchored + """expected\.filterNot\s*\{\s*it\.isFile\s*}""").containsMatchIn(action),
+            "BundleNoticesTask does not test each expected document with isFile, so " +
                 "a missing one is not what it refuses"
         )
         assertTrue(
-            Regex("""(?m)^\s*[^/\n]*throw GradleException\(""").containsMatchIn(action),
-            "bundleNotices' doFirst throws nothing, so a missing document is reported " +
+            Regex(anchored + """throw GradleException\(""").containsMatchIn(action),
+            "BundleNoticesTask throws nothing, so a missing document is reported " +
                 "at most as a log line and the build stays green"
         )
     }
@@ -239,7 +203,7 @@ class NoticesTest {
         }
         for (dialog in listOf("showLicensesDialog", "showLicenseTextsDialog")) {
             assertTrue(
-                code.any { it.contains("$dialog()") && !it.contains("fun $dialog(") },
+                code.any { it.contains("$dialog()") && !it.contains("fun MainActivity.$dialog(") },
                 "Nothing calls $dialog(), so what it shows is packaged and out of " +
                     "reach: the same state as when these documents lived only in " +
                     "the repository, at more cost."

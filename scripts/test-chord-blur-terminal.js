@@ -46,9 +46,9 @@ function extractInterceptor() {
 
 /** The raw string in `injectTerminalTypedCharacters()`. */
 function extractTerminalScript() {
-    const source = fs.readFileSync(path.join(ROOT, 'MainActivity.kt'), 'utf8');
-    const method = source.split('private fun injectTerminalTypedCharacters()')[1];
-    assert.ok(method, 'injectTerminalTypedCharacters() is gone from MainActivity.kt');
+    const source = fs.readFileSync(path.join(ROOT, 'MainActivityPageScripts.kt'), 'utf8');
+    const method = source.split('internal fun MainActivity.injectTerminalTypedCharacters()')[1];
+    assert.ok(method, 'injectTerminalTypedCharacters() is gone from MainActivityPageScripts.kt');
     const js = method.split('"""')[1];
     assert.ok(js.includes('__vscodroidChordBlur'), 'the terminal script no longer reads the chord\'s mark');
     return js;

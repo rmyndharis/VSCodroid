@@ -1320,15 +1320,13 @@ class NodeService : Service() {
      * survivor lost is back and that particular line has nothing left to report.
      * Check those two files before adding one back.
      *
-     * Narrowly the proxy, and not adoption in general. `assets/server.js` still
-     * `require()`s `assets/process-monitor.js` in the BOOTSTRAP rather than
-     * preloading it into the child, so an adopted server does run its whole
-     * session with no process count and no idle language-server marking.
-     * That is a real difference from a spawned session and it is unsurfaced;
-     * whether it deserves a surface at all is a separate question from the one
-     * this line answered. `ProcessManager.isAdopted` is still the right question
-     * for whether we CONTROL the server; it stopped being a question about the
-     * network.
+     * The process monitor follows the same lifecycle: `assets/server.js`
+     * preloads `assets/process-monitor.js` into the editor server
+     * (`server-main.js`) rather than running it inside the bootstrap process,
+     * so process counts and idle language-server marking continue updating
+     * after bootstrap exit and server adoption. `ProcessManager.isAdopted` is
+     * still the right question for whether we CONTROL the server; it is no
+     * longer a question about either the network proxy or process metrics.
      */
     private fun degradableNotificationText(): String = when {
         processManager.heapOverrideIgnored() -> getString(R.string.heap_override_suspended)

@@ -1,5 +1,6 @@
 package com.vscodroid.setup
 
+import com.vscodroid.SourceScan
 import com.vscodroid.downloadRefreshFor
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -84,38 +85,8 @@ class ToolchainPollWiringTest {
     private val source = File("src/main/kotlin/com/vscodroid/ToolchainActivity.kt")
 
     /** Brace-matched from the signature, stepping over braces inside comments. */
-    private fun bodyOf(signature: String): String {
-        assertTrue(
-            source.isFile,
-            "${source.path} is not at ${source.absolutePath}; this test would " +
-                "otherwise pass by reading nothing",
-        )
-        val text = source.readText()
-        val start = text.indexOf(signature)
-        assertTrue(start >= 0, "no function matching `$signature` in ${source.name}")
-        var i = text.indexOf('{', start)
-        assertTrue(i >= 0, "no body follows `$signature` in ${source.name}")
-        val open = i
-        var depth = 0
-        while (i < text.length) {
-            when {
-                text.startsWith("//", i) -> while (i < text.length && text[i] != '\n') i++
-                text.startsWith("/*", i) -> {
-                    i += 2
-                    while (i < text.length && !text.startsWith("*/", i)) i++
-                    i += 2
-                }
-                text[i] == '{' -> { depth++; i++ }
-                text[i] == '}' -> {
-                    depth--
-                    if (depth == 0) return text.substring(open, i + 1)
-                    i++
-                }
-                else -> i++
-            }
-        }
-        error("unbalanced braces after `$signature` in ${source.name}")
-    }
+    private fun bodyOf(signature: String): String =
+        SourceScan.body(SourceScan.read(source.path), signature)
 
     /**
      * Comments dropped, so the paragraph explaining the poll cannot stand in for
@@ -123,9 +94,7 @@ class ToolchainPollWiringTest {
      * question below for the wrong reason.
      */
     private fun code(signature: String): String {
-        val body = bodyOf(signature)
-            .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), " ")
-            .replace(Regex("""//[^\n]*"""), " ")
+        val body = SourceScan.withoutComments(bodyOf(signature))
         assertTrue(
             body.length in 20..2_000,
             "extracted ${body.length} characters of $signature, which means the extraction " +

@@ -179,6 +179,73 @@ class ExtensionUpdatesTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("shallow", result.stdout + result.stderr)
 
+    def test_main_entry_requires_new_directory(self):
+        node_ext = self.directory.with_name("vscodroid.node-ext-1.0.0")
+        node_ext.mkdir()
+        (node_ext / "package.json").write_text('{"name":"node-ext","version":"1.0.0","main":"./extension.js"}')
+        entry = node_ext / "extension.js"
+        entry.write_text("module.exports = { ok: true };\n")
+        self.git("add", "--", str(node_ext.relative_to(self.root)))
+        self.git("commit", "-qm", "Add node extension")
+        self.git("tag", "v1.2.0")
+        self.assertEqual(0, self.check_status().returncode)
+
+        entry.write_text("module.exports = { ok: false };\n")
+        result = self.check_status()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("extension.js changed without a directory version bump", result.stdout)
+
+        node_ext.rename(node_ext.with_name("vscodroid.node-ext-1.0.1"))
+        self.assertEqual(0, self.check_status().returncode)
+
+    def test_l10n_bundle_changes_require_new_directory(self):
+        # Adding l10n/bundle.l10n.<lang>.json to a released extension requires a directory bump.
+        l10n_dir = self.directory / "l10n"
+        l10n_dir.mkdir()
+        added = l10n_dir / "bundle.l10n.de.json"
+        added.write_text('{"Hello":"Hallo"}')
+        result = self.check_status()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("l10n/bundle.l10n.de.json added without a directory version bump", result.stdout)
+        added.unlink()
+        l10n_dir.rmdir()
+        self.assertEqual(0, self.check_status().returncode)
+
+        # A released extension carrying l10n bundles must bump on semantic edits or removals,
+        # while formatting-only edits remain allowed.
+        localized = self.directory.with_name("vscodroid.localized-1.0.0")
+        (localized / "l10n").mkdir(parents=True)
+        (localized / "package.json").write_text(
+            '{"name":"localized","version":"1.0.0","main":"./extension.js","l10n":"./l10n"}'
+        )
+        (localized / "extension.js").write_text("module.exports = {};\n")
+        bundle = localized / "l10n/bundle.l10n.de.json"
+        bundle.write_text('{"Hello":"Hallo"}')
+        self.git("add", "--", str(localized.relative_to(self.root)))
+        self.git("commit", "-qm", "Add localized extension")
+        self.git("tag", "v1.3.0")
+        self.assertEqual(0, self.check_status().returncode)
+
+        # Formatting-only edit passes.
+        bundle.write_text('{\n  "Hello": "Hallo"\n}\n')
+        self.assertEqual(0, self.check_status().returncode)
+
+        # Semantic edit fails.
+        bundle.write_text('{"Hello":"Guten Tag"}')
+        changed = self.check_status()
+        self.assertNotEqual(0, changed.returncode)
+        self.assertIn("l10n/bundle.l10n.de.json changed without a directory version bump", changed.stdout)
+
+        # Removal fails.
+        bundle.unlink()
+        removed = self.check_status()
+        self.assertNotEqual(0, removed.returncode)
+        self.assertIn("l10n/bundle.l10n.de.json removed without a directory version bump", removed.stdout)
+
+        # Bumping the directory version resolves it.
+        localized.rename(localized.with_name("vscodroid.localized-1.0.1"))
+        self.assertEqual(0, self.check_status().returncode)
+
 
 if __name__ == "__main__":
     unittest.main()

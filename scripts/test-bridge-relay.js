@@ -33,7 +33,7 @@ require('./test-auth-callback-provider');
 
 const ROOT = path.join(__dirname, '..');
 const MAIN_ACTIVITY = path.join(
-    ROOT, 'android/app/src/main/kotlin/com/vscodroid/MainActivity.kt',
+    ROOT, 'android/app/src/main/kotlin/com/vscodroid/MainActivityPageScripts.kt',
 );
 const ANDROID_BRIDGE = path.join(
     ROOT, 'android/app/src/main/kotlin/com/vscodroid/bridge/AndroidBridge.kt',
@@ -137,7 +137,7 @@ function bridgeExtension() {
  */
 function extractInjected(fnName, mustMention) {
     const lines = fs.readFileSync(MAIN_ACTIVITY, 'utf8').split('\n');
-    const fn = lines.findIndex((l) => l.includes('private fun ' + fnName + '()'));
+    const fn = lines.findIndex((l) => l.includes('internal fun MainActivity.' + fnName + '()'));
     assert.notStrictEqual(
         fn, -1,
         fnName + '() is gone from MainActivity.kt, so this check has nothing to run. ' +
@@ -302,7 +302,20 @@ function uriOf(scheme, authority, p) {
     return { scheme, authority, path: p, with(change) { return uriOf(scheme, authority, change.path); } };
 }
 const commands = new Map();
+let bridgeLocale = 'en';
+function bridgeTranslate(message, ...args) {
+    let text = message;
+    if (bridgeLocale !== 'en') {
+        const bundle = path.join(path.dirname(bridgeExtension()), 'l10n', `bundle.l10n.${bridgeLocale}.json`);
+        if (fs.existsSync(bundle)) {
+            const entries = JSON.parse(fs.readFileSync(bundle, 'utf8'));
+            if (Object.prototype.hasOwnProperty.call(entries, message)) text = entries[message];
+        }
+    }
+    return text.replace(/\{(\d+)\}/g, (all, n) => (args[n] === undefined ? all : String(args[n])));
+}
 const vscodeStub = {
+    l10n: { t: bridgeTranslate },
     commands: {
         registerCommand: (id, fn) => { commands.set(id, fn); return { dispose() {} }; },
         executeCommand: async (id, ...args) => {
@@ -1936,6 +1949,10 @@ async function main() {
             close() { closed = true; }
         }
         const localVscode = {
+            l10n: {
+                t: (message, ...args) =>
+                    message.replace(/\{(\d+)\}/g, (all, n) => (args[n] === undefined ? all : String(args[n]))),
+            },
             commands: {
                 registerCommand: (id, fn) => { localCommands.set(id, fn); return { dispose() {} }; },
                 executeCommand: async () => {},
@@ -2007,6 +2024,68 @@ async function main() {
             localErrors.length === 1 && /Extension deactivated/.test(localErrors[0]),
             'deactivate() did not reject pending bridge promise with Extension deactivated: ' + JSON.stringify(localErrors),
         );
+    }
+
+    // Non-English locale rendering: messages, status bar labels, and dialog buttons
+    // must translate and compare choices against the localized button text.
+    {
+        const deBundle = JSON.parse(
+            fs.readFileSync(path.join(path.dirname(bridgeExtension()), 'l10n', 'bundle.l10n.de.json'), 'utf8'),
+        );
+        bridgeLocale = 'de';
+        try {
+            // 1. clearCaches toast renders in German with placeholder filled.
+            const deCleared = await clearTo([true, '1500000']);
+            assert.deepStrictEqual(
+                deCleared,
+                { info: [deBundle['Freed {0} of cached data.'].replace('{0}', '1.5 MB')], error: [] },
+                'clearCaches did not render in German: ' + JSON.stringify(deCleared),
+            );
+
+            // 2. copyBugReport renders status bar label, notice, and Copy button in German,
+            //    and clicking the German button copies the edited text.
+            const deCopyBtn = deBundle['Copy'];
+            let seenButtons = null;
+            const deReport = await bugReport(REPORT, (items) => {
+                if (seenButtons === null) {
+                    seenButtons = items.slice();
+                    openedDocs[0].text = 'de-report\n';
+                }
+                return items.includes(deCopyBtn) ? deCopyBtn : undefined;
+            });
+            const deStatusItem = statusItems.filter((item) => item.shown).pop();
+            assert.strictEqual(
+                deStatusItem.text,
+                `$(copy) ${deBundle['Copy Bug Report']}`,
+                'bug report status bar item was not localized with codicon preserved: ' + deStatusItem.text,
+            );
+            assert.deepStrictEqual(seenButtons, [deCopyBtn], 'bug report button was not localized');
+            assert.strictEqual(
+                deReport.info[0],
+                deBundle['Read the bug report before you share it: the server log can name your files and folders. Delete what you want kept private, then tap Copy, here or in the status bar.'],
+            );
+            assert.deepStrictEqual(clipboard, ['de-report\n'], 'clicking localized Copy button did not copy');
+            assert.strictEqual(deReport.info[1], deBundle['Bug report copied.']);
+
+            // 3. sharedStorageWarning renders in German and clicking its localized Open button
+            //    invokes vscodroid.openFolderFromDevice.
+            const deOpenBtn = deBundle['Open Folder from Device'];
+            const deDontShowBtn = deBundle["Don't Show Again"];
+            serverNote = null;
+            warningChoice = deOpenBtn;
+            await pageLoad([folder('/storage/emulated/0/Documents/de-notes')]);
+            assert.strictEqual(warnings.length, 1, 'German shared-storage warning was not shown');
+            assert.strictEqual(
+                warnings[0].message,
+                deBundle['Android hides the files other apps saved in {0}.'].replace('{0}', 'de-notes'),
+            );
+            assert.deepStrictEqual(warnings[0].items, [deOpenBtn, deDontShowBtn]);
+            assert.deepStrictEqual(executed, ['vscodroid.openFolderFromDevice']);
+        } finally {
+            bridgeLocale = 'en';
+            warningChoice = null;
+            infoChoice = null;
+        }
     }
 
     const unused = coverage.unused.length

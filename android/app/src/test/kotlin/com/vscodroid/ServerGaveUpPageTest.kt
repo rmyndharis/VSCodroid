@@ -121,7 +121,7 @@ class ServerGaveUpPageTest {
 
         // A refused foreground service: nothing was launched, so the file holds
         // some earlier session and offering it would explain the wrong thing.
-        for (site in listOf("private fun startAndBindService(", "private fun retryServerStart(")) {
+        for (site in listOf("private fun startAndBindService(", "internal fun retryServerStart(")) {
             val body = SourceScan.body(src, site)
             assertTrue(body.contains("showServerGaveUp()")) {
                 "$site no longer shows the gave-up page at all"
@@ -167,14 +167,14 @@ class ServerGaveUpPageTest {
     @Test
     fun `each native page replacement invalidates a pending log page`() {
         val source = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt")
-        for ((name, load) in listOf(
-            "setupWebView" to "wv.loadData(",
-            "retryServerStart" to "webView?.loadData(",
-            "showErrorPage" to "webView?.loadDataWithBaseURL(",
-            "navigateToFolder" to "wv.loadUrl(",
+        for ((declaration, load) in listOf(
+            "private fun setupWebView(" to "wv.loadData(",
+            "internal fun retryServerStart(" to "webView?.loadData(",
+            "private fun showErrorPage(" to "webView?.loadDataWithBaseURL(",
+            "internal fun navigateToFolder(" to "wv.loadUrl(",
         )) {
-            val body = SourceScan.body(source, "private fun $name(")
-            assertTrue(body.indexOf("recoveryPageEpoch++") in 0 until body.indexOf(load), name)
+            val body = SourceScan.body(source, declaration)
+            assertTrue(body.indexOf("recoveryPageEpoch++") in 0 until body.indexOf(load), declaration)
         }
     }
 

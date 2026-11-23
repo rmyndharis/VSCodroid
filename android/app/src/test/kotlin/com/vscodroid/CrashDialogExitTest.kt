@@ -27,28 +27,10 @@ import java.io.File
  */
 class CrashDialogExitTest {
 
-    private val source = File("src/main/kotlin/com/vscodroid/MainActivity.kt").readText()
+    private val source = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivityDialogs.kt")
 
-    /** The body of a `private fun name(` declaration, to its closing brace. */
-    private fun body(name: String): String {
-        val start = source.indexOf("private fun $name(")
-        assertTrue(start >= 0) {
-            "$name is gone from MainActivity.kt, so this test is measuring nothing. " +
-                "If it moved or was renamed, point this at the new site."
-        }
-        val open = source.indexOf('{', start)
-        var depth = 0
-        var i = open
-        while (i < source.length) {
-            if (source[i] == '{') depth += 1
-            if (source[i] == '}') {
-                depth -= 1
-                if (depth == 0) return source.substring(open, i + 1)
-            }
-            i += 1
-        }
-        throw AssertionError("Could not find the end of $name in MainActivity.kt")
-    }
+    /** The body of a MainActivity dialog extension declaration, to its closing brace. */
+    private fun body(name: String): String = SourceScan.body(source, "internal fun MainActivity.$name(")
 
     /** Comment text removed, so the prose beside a rule cannot satisfy a search for it. */
     private fun code(text: String): List<String> =
@@ -115,7 +97,7 @@ class CrashDialogExitTest {
     @Test
     fun `dialogs with stacked buttons and long scrolling bodies keep their buttons reachable`() {
         for (method in listOf("showAboutDialog", "showLicensesDialog", "checkPreviousCrash")) {
-            val methodCode = code(SourceScan.body(source, "fun $method(")).joinToString("\n")
+            val methodCode = code(SourceScan.body(source, "fun MainActivity.$method(")).joinToString("\n")
             assertTrue(
                 methodCode.contains("showWithReachableButtons(") && !methodCode.contains(".show()"),
                 "$method must open its AlertDialog through showWithReachableButtons so stacked " +

@@ -36,7 +36,12 @@ import org.junit.jupiter.api.Test
  */
 class BridgeRelayReachTest {
 
-    private val source = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt")
+    private val source = SourceScan.readAll(
+        listOf(
+            "src/main/kotlin/com/vscodroid/MainActivityPageScripts.kt",
+            "src/main/kotlin/com/vscodroid/MainActivitySafCoordinator.kt",
+        )
+    )
 
     /**
      * A declaration's body with its comments blanked.
@@ -48,7 +53,7 @@ class BridgeRelayReachTest {
     private fun code(declaration: String): String =
         SourceScan.withoutComments(SourceScan.body(source, declaration))
 
-    private val relay by lazy { code("private fun injectBridgeRelay(") }
+    private val relay by lazy { SourceScan.scriptBody(source, "internal fun MainActivity.injectBridgeRelay(") }
 
     @Test
     fun `the relay dispatcher is still what these cases are reading`() {
@@ -110,7 +115,7 @@ class BridgeRelayReachTest {
      */
     @Test
     fun `a recent folder this app cannot open does not summon the folder picker`() {
-        val open = code("fun openRecentSafFolder(")
+        val open = code("fun MainActivity.openRecentSafFolder(")
 
         assertTrue(open.contains("hasPersistedPermission")) {
             "openRecentSafFolder no longer checks the grant, so this case is measuring " +
@@ -135,7 +140,7 @@ class BridgeRelayReachTest {
      */
     @Test
     fun `a forced removal asks the user before anything is deleted`() {
-        val remove = code("private fun removeDeviceFolderCopy(")
+        val remove = code("internal fun MainActivity.removeDeviceFolderCopy(")
 
         val asked = remove.indexOf("confirmForcedRemoval()")
         val deleted = remove.indexOf("safManager.reclaimMirror(")
@@ -192,7 +197,7 @@ class BridgeRelayReachTest {
      */
     @Test
     fun `the confirmation gives up rather than drawing on a window that is going`() {
-        val confirm = code("private fun confirmForcedRemoval(")
+        val confirm = code("internal fun MainActivity.confirmForcedRemoval(")
 
         assertTrue(confirm.contains("isFinishing") && confirm.contains("isDestroyed")) {
             "the confirmation shows its dialog without asking whether the activity is " +
@@ -226,7 +231,7 @@ class BridgeRelayReachTest {
      */
     @Test
     fun `an unanswered confirmation is dismissed rather than left offering Remove`() {
-        val confirm = code("private fun confirmForcedRemoval(")
+        val confirm = code("internal fun MainActivity.confirmForcedRemoval(")
 
         val waited = confirm.indexOf("answered.await(")
         val dismissed = confirm.indexOf("dismiss()")
@@ -240,7 +245,7 @@ class BridgeRelayReachTest {
 
     @Test
     fun `an expired confirmation cannot use a later positive answer`() {
-        val confirm = code("private fun confirmForcedRemoval(")
+        val confirm = code("internal fun MainActivity.confirmForcedRemoval(")
         val result = Regex("""val (\w+) = answered\.await\(FORCED_REMOVAL_CONFIRM_MS, TimeUnit\.MILLISECONDS\)""")
             .find(confirm)
         assertTrue(result != null) { "the bounded wait no longer records whether an answer arrived in time" }

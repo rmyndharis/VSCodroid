@@ -1,0 +1,22 @@
+{
+  "Answers from other devices on this network, select to copy": "이 네트워크의 다른 기기에서 응답함, 선택하여 복사",
+  "Answers on localhost alone, so other devices cannot reach it. If this is your server, restart it bound to 0.0.0.0 (exposes the server on every active network interface): Vite `--host 0.0.0.0`, Next.js `-H 0.0.0.0`, Node `server.listen(port, \"0.0.0.0\")`, Python `--bind 0.0.0.0`.": "localhost에서만 응답하므로 다른 기기가 접속할 수 없습니다. 본인 서버라면 0.0.0.0에 바인딩해 다시 시작하세요(활성화된 모든 네트워크 인터페이스에 노출됨): Vite `--host 0.0.0.0`, Next.js `-H 0.0.0.0`, Node `server.listen(port, \"0.0.0.0\")`, Python `--bind 0.0.0.0`.",
+  "Answers on localhost alone, so other devices cannot reach it. If this is your server, restart it bound to {0} (this network only): Vite `--host {0}`, Next.js `-H {0}`, Node `server.listen(port, \"{0}\")`, Python `--bind {0}`.": "localhost에서만 응답하므로 다른 기기가 접속할 수 없습니다. 본인 서버라면 {0}(이 네트워크 전용)에 바인딩해 다시 시작하세요: Vite `--host {0}`, Next.js `-H {0}`, Node `server.listen(port, \"{0}\")`, Python `--bind {0}`.",
+  "Checked {0} common dev-server ports and found nothing listening": "자주 쓰는 개발 서버 포트 {0}개를 확인했지만 대기 중인 서버가 없습니다",
+  "Copied {0}, open it on the other device.": "{0} 복사됨, 다른 기기에서 여세요.",
+  "Enter a port number between 1 and 65535.": "1에서 65535 사이의 포트 번호를 입력하세요.",
+  "Enter a port number…": "포트 번호 입력…",
+  "Looking for dev servers…": "개발 서버 찾는 중…",
+  "Nothing is listening on port {0}. Start the server, then run this again.": "포트 {0}에서 대기 중인 서버가 없습니다. 서버를 시작한 뒤 다시 실행하세요.",
+  "Nothing reachable from other devices was found": "다른 기기에서 접속할 수 있는 서버를 찾지 못했습니다",
+  "Pick an address to copy, then open it on the other device": "복사할 주소를 선택한 뒤 다른 기기에서 여세요",
+  "Port {0} answers this device only. Restart the server bound to 0.0.0.0 (this exposes it on every active network interface) and run this again.": "포트 {0}은 이 기기에서만 응답합니다. 서버를 0.0.0.0(활성화된 모든 네트워크 인터페이스에 노출됨)에 바인딩해 다시 시작한 뒤 다시 실행하세요.",
+  "Port {0} answers this device only. Restart the server bound to {1} and run this again.": "포트 {0}은 이 기기에서만 응답합니다. 서버를 {1}에 바인딩해 다시 시작한 뒤 다시 실행하세요.",
+  "Serve on Network": "네트워크에 게시",
+  "That server only answers this device. Restart the server bound to 0.0.0.0 (this exposes it on every active network interface) and run this again.": "해당 서버는 이 기기에서만 응답합니다. 서버를 0.0.0.0(활성화된 모든 네트워크 인터페이스에 노출됨)에 바인딩해 다시 시작한 뒤 다시 실행하세요.",
+  "That server only answers this device. Restart the server bound to {0} and run this again.": "해당 서버는 이 기기에서만 응답합니다. 서버를 {0}에 바인딩해 다시 시작한 뒤 다시 실행하세요.",
+  "This device is not on a network right now. Connect to Wi-Fi, then run this again.": "이 기기는 현재 네트워크에 연결되어 있지 않습니다. Wi-Fi에 연결한 뒤 다시 실행하세요.",
+  "Which port is your server on?": "서버가 어느 포트에서 실행 중인가요?",
+  "Your server is on a port this command does not check by default": "이 명령이 기본으로 확인하지 않는 포트에서 서버가 실행 중인 경우",
+  "port {0}, this device only": "포트 {0}, 이 기기 전용"
+}

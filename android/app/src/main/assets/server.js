@@ -964,6 +964,30 @@ if (!fs.existsSync(rehEntryPoint)) {
             'musl clients will not resolve names');
     }
 
+    // The process monitor is preloaded into the editor server for the same
+    // reason as dns-proxy.js: this bootstrap is SIGKILLed routinely while the
+    // forked editor server survives and is adopted on the next launch. Running
+    // the monitor in the bootstrap left TMPDIR/vscodroid-processes.json stale
+    // for the rest of an adopted session. Loading it here first proves it
+    // parses without starting a scan (its self-start block gates on
+    // VSCODROID_PROCESS_MONITOR, set only on childEnv), and passing one
+    // `--require=<path>` token keeps process-monitor.js naming the row
+    // server-main.js.
+    // Clear any inherited flag from this process's own environment before
+    // requiring process-monitor.js so the parse check never triggers its
+    // self-start branch inside the bootstrap and creates a second writer.
+    delete process.env.VSCODROID_PROCESS_MONITOR;
+    delete childEnv.VSCODROID_PROCESS_MONITOR;
+    const monitorPath = path.join(SERVER_DIR, 'process-monitor.js');
+    try {
+        require(monitorPath);
+        execArgv.push(`--require=${monitorPath}`);
+        childEnv.VSCODROID_PROCESS_MONITOR = '1';
+    } catch (e) {
+        log('warn', `process-monitor not usable at ${monitorPath} (${e.message}); ` +
+            'process monitoring will be unavailable');
+    }
+
     // platform-fix.js is in NODE_OPTIONS, which is how this process and the
     // server get it, but VS Code deletes NODE_OPTIONS from the extension host's
     // environment before starting it. The extension host takes the server's
@@ -1051,9 +1075,8 @@ if (!fs.existsSync(rehEntryPoint)) {
         }
     };
 
-    // Goes on before the note is written and before the monitor loads. Node runs
-    // it from the event loop, so it cannot run before this script has written
-    // the note it clears.
+    // Goes on before the note is written. Node runs it from the event loop, so
+    // it cannot run before this script has written the note it clears.
     server.on('exit', (code, signal) => {
         // A killed child reports code === null and the signal separately, and
         // `code || 0` collapsed that to a clean zero -- so a server killed for
@@ -1084,14 +1107,6 @@ if (!fs.existsSync(rehEntryPoint)) {
         // Not fatal: adoption is an optimisation, and its absence costs a
         // restart rather than a session.
         log('warn', 'Could not record the editor server pid: ' + e.message);
-    }
-
-    // Start process monitor (non-fatal if it fails)
-    try {
-        const monitor = require(path.join(SERVER_DIR, 'process-monitor.js'));
-        monitor.start();
-    } catch (e) {
-        log('warn', 'Process monitor failed to start: ' + e.message);
     }
 
     server.on('error', (err) => {

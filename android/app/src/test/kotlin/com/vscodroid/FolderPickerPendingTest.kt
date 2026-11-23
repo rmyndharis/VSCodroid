@@ -13,7 +13,12 @@ import org.junit.jupiter.api.Test
  */
 class FolderPickerPendingTest {
 
-    private val source = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt")
+    private val source = SourceScan.readAll(
+        listOf(
+            "src/main/kotlin/com/vscodroid/MainActivity.kt",
+            "src/main/kotlin/com/vscodroid/MainActivitySafCoordinator.kt",
+        )
+    )
 
     private fun code(declaration: String) = SourceScan.withoutComments(SourceScan.body(source, declaration))
 
@@ -30,7 +35,7 @@ class FolderPickerPendingTest {
 
     @Test
     fun `the flag is set before the launch and cleared by the answer and by a launch that fails`() {
-        val open = code("fun openFolderPicker(")
+        val open = code("fun MainActivity.openFolderPicker(")
         val set = open.indexOf("folderPickerPending = true")
         val launch = open.indexOf("folderPickerLauncher.launch(null)")
         assertTrue(set in 0 until launch) { "the flag is not set before the folder picker is launched:\n$open" }
@@ -40,7 +45,7 @@ class FolderPickerPendingTest {
         assertTrue(Regex("""catch \(e: IllegalStateException\) \{\s*folderPickerPending = false""").containsMatchIn(open)) {
             "a launch that is refused keeps the page from reloading for good:\n$open"
         }
-        val answer = code("private val folderPickerLauncher =")
+        val answer = code("internal val folderPickerLauncher =")
         assertTrue(Regex("""\{ uri ->\s*folderPickerPending = false\s*uri\?\.let""").containsMatchIn(answer)) {
             "the picker's answer, or its cancellation, does not clear the flag:\n$answer"
         }

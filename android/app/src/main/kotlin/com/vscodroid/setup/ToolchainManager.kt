@@ -1,51 +1,36 @@
 package com.vscodroid.setup
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.os.Build
-import android.os.StatFs
-import androidx.annotation.StringRes
-import com.vscodroid.BuildConfig
-import com.vscodroid.R
-import android.system.ErrnoException
 import android.system.Os
-import com.google.android.play.core.assetpacks.AssetPackException
 import com.google.android.play.core.assetpacks.AssetPackManagerFactory
 import com.google.android.play.core.assetpacks.AssetPackState
 import com.google.android.play.core.assetpacks.AssetPackStateUpdateListener
-import com.google.android.play.core.assetpacks.model.AssetPackErrorCode
 import com.google.android.play.core.assetpacks.model.AssetPackStatus
 import com.vscodroid.util.Environment
 import com.vscodroid.util.Logger
-import com.vscodroid.util.StorageManager
 import com.vscodroid.webview.redactToken
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.BufferedInputStream
 import java.io.File
-import java.io.FileOutputStream
 import java.io.IOException
 import java.net.HttpURLConnection
-import java.net.URL
 import java.nio.file.Files
-import java.nio.file.LinkOption
-import java.security.MessageDigest
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executor
-import java.util.concurrent.LinkedBlockingQueue
-import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
-import java.util.zip.ZipInputStream
-import java.util.UUID
-import android.annotation.SuppressLint
 
 /**
  * Manages on-demand toolchain installation via Play Asset Delivery or HTTP fallback.
  *
  * Play Store install flow:
- *   1. fetch() → AssetPackManager downloads the pack
- *   2. On COMPLETED → installFromDirectory() copies files to filesDir (off main thread)
+ *   1. fetch() -> AssetPackManager downloads the pack
+ *   2. On COMPLETED -> installFromDirectory() copies files to filesDir (off main thread)
  *   3. chmod +x on binaries, create symlinks in usr/bin/
  *   4. Persist state to toolchains.json, then regenerate toolchain-env.sh and
  *      toolchain-exec.tsv from it
@@ -53,132 +38,49 @@ import android.annotation.SuppressLint
  *      record is written
  *
  * HTTP fallback (sideloaded/debug builds):
- *   1. Download ZIP from GitHub Releases via HttpURLConnection
- *   2. Extract ZIP → installFromDirectory() (shared with Play path)
+ *   1. Download ZIP from GitHub Releases via [ToolchainHttpDownloader]
+ *   2. Extract ZIP -> installFromDirectory() (shared with Play path)
  *   3. Same chmod/symlink/persist steps as above
  */
-class ToolchainManager(private val context: Context) {
+class ToolchainManager(internal val context: Context) {
 
-    private val tag = "ToolchainManager"
+    internal val tag = "ToolchainManager"
     private val assetPackManager = AssetPackManagerFactory.getInstance(context)
-    private val stateFile = File(context.filesDir, "home/.vscodroid/toolchains.json")
-    private val envFile = File(context.filesDir, "home/.vscodroid/toolchain-env.sh")
+    internal val stateFile = File(context.filesDir, "home/.vscodroid/toolchains.json")
+    internal val envFile = File(context.filesDir, "home/.vscodroid/toolchain-env.sh")
 
-    /**
-     * Where an install writes down the tree it is about to create, before it
-     * creates it.
-     *
-     * [stateFile] is written last, so for the tens of seconds a copy takes,
-     * nothing on disk names the directory being filled. A low-memory kill or a
-     * force stop in that window leaves up to the whole unpacked tree, about
-     * 185 MB for the Java 25 that ships today, under no manifest at all:
-     * [getInstalledToolchains] does not name it, no card offers a Remove for it,
-     * [uninstallLocked] has no record to work from, and every pass in
-     * [repairInstalledToolchains] is driven by that same record. Clearing app
-     * data was the only way back. The kill is ordinary rather than exotic: while
-     * the first-run queue runs the foreground service has not been started yet,
-     * so a backgrounded install is a plain background process.
-     *
-     * Beside the record it stands in for, and inside `filesDir`, so it survives
-     * an app update exactly as the record does.
-     *
-     * ⚠️ A tree stranded by a build older than this marker has none, and there is
-     * nothing on disk to recover it from: [ToolchainRegistry] carries no install
-     * root, and a dangling `usr/bin` symlink is fragile and usually absent. Such
-     * a device gets the reclaim from its next interruption onward.
-     */
-    private val installMarkerDir = File(context.filesDir, "home/.vscodroid/toolchain-installing")
+    /** Where an install records the tree it is about to write before copying bytes into `usr/`. */
+    internal val installMarkerDir = File(context.filesDir, "home/.vscodroid/toolchain-installing")
 
-    /**
-     * The marker for one pack.
-     *
-     * One place decides the path, so the install that writes it, the exits that
-     * remove it and [reclaimInterruptedInstallsSync] cannot drift apart.
-     * Keyed by pack name rather than by the manifest's `name` because the reclaim
-     * has to take the `installsInFlight` claim first, and that set is keyed by
-     * pack name; deriving one form from the other would break for a payload whose
-     * manifest name disagreed with its pack.
-     */
-    private fun installMarker(packName: String) = File(installMarkerDir, "$packName.json")
+    internal fun installMarkerFile(packName: String) = File(installMarkerDir, "$packName.json")
 
     /**
      * Persists a lightweight marker when a Play-delivered toolchain is uninstalled so launch
      * reconciliation retries pack removal instead of reinstalling a pack Play kept on disk.
      */
-    private val packReleaseMarkerDir = File(context.filesDir, "home/.vscodroid/toolchain-uninstalled")
-
-    private fun packReleaseMarker(packName: String): File? {
-        if (!isSinglePathSegment(packName)) return null
-        return File(packReleaseMarkerDir, packName)
-    }
-
-    private fun markPackReleasePending(packName: String): Long = synchronized(packOperationLock) {
-        val generation = nextPackReleaseGeneration.incrementAndGet()
-        packReleaseGenerations[packName] = generation
-        val marker = packReleaseMarker(packName) ?: run {
-            Logger.w(tag, "Refusing to write pack release marker for invalid pack name: ${redactToken(packName)}")
-            return@synchronized generation
-        }
-        packReleaseMarkerDir.mkdirs()
-        if (!writeAtomically(marker) { it.write(packName.toByteArray()) }) {
-            Logger.w(tag, "Could not persist pending pack release marker for $packName")
-        }
-        generation
-    }
-
-    private fun clearPackReleaseMarker(packName: String, dropPendingRelease: Boolean = false) {
-        synchronized(packOperationLock) {
-            packReleaseGenerations[packName] = nextPackReleaseGeneration.incrementAndGet()
-            if (dropPendingRelease) pendingPackReleases.remove(packName)
-            val marker = packReleaseMarker(packName) ?: return
-            if (marker.exists() || Files.isSymbolicLink(marker.toPath())) {
-                marker.delete()
-            }
-        }
-    }
+    internal val packReleaseMarkerDir = File(context.filesDir, "home/.vscodroid/toolchain-uninstalled")
 
     /**
-     * The two derived files that make a toolchain command reachable from
-     * something that is not bash, both named from [Environment] so the writer
-     * here and the reader there cannot drift apart.
+     * The two derived files that make a toolchain command reachable from something that is not bash.
      */
-    private val execTable = File(Environment.getExecTablePath(context))
-    private val tcBinDir = File(Environment.getTrampolineBinDir(context))
+    internal val execTable = File(Environment.getExecTablePath(context))
+    internal val tcBinDir = File(Environment.getTrampolineBinDir(context))
 
-    private val filesDir = context.filesDir.absolutePath
-    private val homeDir = "$filesDir/home"
+    internal val filesDir = context.filesDir.absolutePath
+    internal val homeDir = "$filesDir/home"
 
     /**
      * Single-thread executor for heavy file I/O (copy, chmod, symlink).
-     *
-     * Built by [toolchainIoExecutor] rather than by `newSingleThreadExecutor`,
-     * whose thread is a core thread and is therefore never reclaimed. Nothing
-     * shuts this down and nothing can: multiple call sites each build their own
-     * [ToolchainManager] and none of them owns the object long enough to know
-     * when the work is finished. `SplashActivity.onCreate` alone builds two and
-     * submits on both, on every launch, into a process kept alive by the
-     * foreground service, so the parked threads accumulated for as long as the
-     * process lived.
+     * Core thread times out when idle via [toolchainIoExecutor].
      */
-    private val ioExecutor = toolchainIoExecutor()
+    internal val ioExecutor = toolchainIoExecutor()
+
+    private val httpDownloader = ToolchainHttpDownloader(this)
+    private val derivedFiles = ToolchainDerivedFiles(this)
+    private val uninstaller = ToolchainUninstaller(this)
 
     /**
-     * Progress and outcome for one pack.
-     *
-     * The first three arguments are the pack name, an `AssetPackStatus` value,
-     * and how far along it is as a percentage.
-     * The fourth argument is why it failed, and it is null for every status that
-     * is not a failure, with one exception: a removal that did not happen is
-     * UNKNOWN with [ToolchainFailure.REMOVAL] ([failRemoval]). It exists because
-     * "Failed" on its own is the same word for a full disk, a dropped connection
-     * and a release that never published the file, and the user is the one
-     * person who can act on the difference: free space, move to wifi, or wait for
-     * a release. The reason was in logcat and nowhere else.
-     *
-     * Reached through [fail], [failRemoval] and [report] rather than invoked
-     * directly, so a new failure site cannot forget to say why: [fail] has no
-     * overload without one.
-     * The final argument identifies the HTTP transfer, or is null for other work.
+     * Progress and outcome for one pack: `(packName, status, percent, failureReason, transferId)`.
      */
     var onStateChange: ((String, Int, Int, ToolchainFailure?, Long?) -> Unit)? = null
 
@@ -187,94 +89,43 @@ class ToolchainManager(private val context: Context) {
         if (status == AssetPackStatus.COMPLETED || status == AssetPackStatus.CANCELED) {
             synchronized(this) { playRequests.remove(packName) }
         }
-        // Outside the monitor, like every call into [onStateChange]: a screen's callback lets go of
-        // its Play listener, and that must not happen while this thread holds what Play's own
-        // dispatch may be waiting for. See [applyListener].
         onStateChange?.invoke(packName, status, percent, null, transferId)
     }
 
-    /**
-     * A failure, and why.
-     *
-     * There is no overload without a reason, which is the point: every failure
-     * site has to name one, and a new one cannot be added without doing the
-     * same. Counting them here would only rot; the compiler does the counting.
-     */
+    internal fun reportState(packName: String, status: Int, percent: Int, transferId: Long? = null) =
+        report(packName, status, percent, transferId)
+
+    /** A failure, and why. Every failure site names a [ToolchainFailure]. */
     private fun fail(packName: String, why: ToolchainFailure, transferId: Long? = null) {
-        // Logged before the callback, and unconditionally, because the callback is
-        // optional and this used to be the whole method. A manager built without an
-        // `onStateChange` reported its failures into a null and left nothing at all,
-        // not even a line: `reconcileDeliveredPacks` runs on exactly such an instance
-        // at launch, so a manifest it could not read or a state file it could not
-        // write vanished without trace. Every screen that installs does set the
-        // callback, which is why this was invisible.
-        // Redacted because one caller's pack name is a string a page chose:
-        // [install] reports INTERNAL for a name the registry does not know, and a
-        // name the registry does not know is arbitrary text. The bridge redacts it
-        // for its own line and hands the raw value on, so the asymmetry is paid
-        // here. A registry pack name carries nothing for this to remove.
         Logger.e(tag, "Toolchain ${redactToken(packName)} failed: $why")
         synchronized(this) { playRequests.remove(packName) }
         onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0, why, transferId)
     }
 
-    /**
-     * A Remove that did not happen, and why. UNKNOWN and not FAILED, which a card draws as Failed with a Retry that
-     * installs: that downloaded the whole pack again over a record that still names every file the removal left.
-     * With UNKNOWN the card goes back to what the record says, which is still Remove, and the screen says the reason.
-     */
+    internal fun failState(packName: String, why: ToolchainFailure, transferId: Long? = null) =
+        fail(packName, why, transferId)
+
+    /** A Remove that did not happen, reported as UNKNOWN with [ToolchainFailure.REMOVAL]. */
     private fun failRemoval(packName: String) {
         Logger.e(tag, "Removing ${redactToken(packName)} failed")
         onStateChange?.invoke(packName, AssetPackStatus.UNKNOWN, 0, ToolchainFailure.REMOVAL, null)
     }
 
-    /**
-     * The record exists and cannot be parsed. It is left as it is, because it still names the files
-     * an uninstall would remove, so this is not a storage problem and says so in the log with the
-     * file to look at. Deleting `toolchains.json` from a terminal is the way back.
-     */
+    internal fun failRemovalState(packName: String) = failRemoval(packName)
+
+    /** The record exists and cannot be parsed; leave it in place and report INTERNAL. */
     private fun failUnreadableRecord(packName: String, transferId: Long? = null) {
         Logger.e(tag, "${stateFile.path} exists but cannot be read; leaving it as it is")
         fail(packName, ToolchainFailure.INTERNAL, transferId)
     }
 
-    // -- HTTP fallback state --
-
     /**
-     * One download's cancellation flag.
-     *
-     * There was a single `@Volatile httpCancelled` here for every pack, and a
-     * shared flag cannot express "cancel this one". Two ways out of it were
-     * reachable from the toolchain screen. Cancelling Go while Ruby sat queued
-     * behind it aborted Ruby too, at its first check, before it had transferred
-     * a byte -- the executor serialises the tasks, not the flag they read.
-     * Starting a third install while the first was mid-transfer ran the reset on
-     * the *calling* thread and cleared a cancellation the running download had
-     * not looked at yet, so the pack the user cancelled carried on downloading.
-     *
-     * A flag per request rather than per pack name: the token is created when
-     * the download is asked for and handed to the task that performs it, so
-     * whatever happens to the map afterwards, that task keeps reading the flag
-     * its own caller can set.
+     * Per-request cancellation and progress token for an HTTP toolchain download.
      */
-    private class HttpDownload {
+    internal class HttpDownload {
         val transferId = nextHttpTransfer.incrementAndGet()
         @Volatile var cancelled = false
-
-        /**
-         * How far the transfer has got, kept on the token as well as reported.
-         *
-         * The report goes to `onStateChange`, which belongs to the manager that
-         * began the download and to nothing else. A screen rebuilt while the
-         * transfer runs holds a different manager and hears none of it, so
-         * without a figure the process itself can be asked for, the only card
-         * such a screen could draw would be a progress bar frozen at zero.
-         * Volatile because the download thread writes it and the main thread
-         * reads it through [packsDownloading].
-         */
         @Volatile var percent = 0
-
-        /** Currently open HTTP connection for this transfer, disconnected on cancel. */
         @Volatile var activeConnection: HttpURLConnection? = null
 
         /** Sleeps up to [backoffMs] while not cancelled, waking immediately on cancellation. */
@@ -298,333 +149,47 @@ class ToolchainManager(private val context: Context) {
         }
     }
 
-    /**
-     * A request the release cannot answer, now or on a third attempt.
-     *
-     * Retryability used to be decided by looking for `"404"` as a substring of
-     * the exception message, which was fine while every message was written
-     * with that in mind and stopped being fine as soon as the messages carried
-     * a URL. Three of the retryable ones do -- a redirect with no `Location`,
-     * a non-200 status, and running out of redirect hops -- and after GitHub's
-     * redirect the URL is a signed `objects.githubusercontent.com` link full of
-     * hex. A 64-character hex string contains `404` about **1.5%** of the time
-     * (measured over 400k samples; analytically 62/4096), and such a URL has
-     * several hex components. So a small but real slice of transient failures
-     * was being classified permanent and given up on after one attempt.
-     *
-     * A type instead of a spelling. The exception says what it is rather than
-     * hoping its prose reads a particular way, and the cost of getting it wrong
-     * is one-directional either way: this only ever ends an install sooner than
-     * it needed to, never installs something it should not have.
-     */
-    private class MissingFromRelease(message: String) : IOException(message)
-
-    /**
-     * A `Range` the origin will not serve: HTTP 416.
-     *
-     * A type rather than a spelling, for the reason [MissingFromRelease] is one.
-     * The recovery it names is the opposite of a retry: every attempt inside
-     * [retrying] re-reads the same partial file and asks from the same offset,
-     * so a refusal of that offset is refused identically three times and the
-     * user is told the network failed. What has to change between attempts is
-     * the file, not the connection, and only [downloadFile] knows which file
-     * that is.
-     */
-    private class RangeRefused(message: String) : IOException(message)
-
     companion object {
-        private const val HTTP_TIMEOUT_MS = 30_000     // 30s connect + read timeout
-        private const val MAX_RETRIES = 2
-        private const val DOWNLOAD_BUFFER_SIZE = 8192
-        private const val MAX_REDIRECTS = 5
-
-        /** Where the built-in git extension keeps the helper scripts it exports. */
-        private const val GIT_EXTENSION_DIST = "server/vscode-reh/extensions/git/dist"
-
-        /** The server tree, whose `node` the remote CLI runs. */
-        private const val SERVER_TREE = "server/vscode-reh"
-
-        /**
-         * Where the server keeps its command-line client, the directory it puts
-         * first on every terminal's PATH.
-         */
-        private const val REMOTE_CLI_DIR = "$SERVER_TREE/bin/remote-cli"
-
-        /** The client's name there, which is `applicationName` in the product config. */
-        private const val REMOTE_CLI = "vscodroid"
-
-        /**
-         * Every script the git extension may name in `GIT_ASKPASS`, `SSH_ASKPASS`
-         * or `GIT_EDITOR`; the `-empty` ones are what it names when its IPC
-         * server is off. A name missing from the shipped tree is skipped.
-         */
-        private val GIT_HELPER_SCRIPTS = listOf(
-            "askpass.sh", "askpass-empty.sh",
-            "ssh-askpass.sh", "ssh-askpass-empty.sh",
-            "git-editor.sh", "git-editor-empty.sh",
-        )
-
-        private const val GIT_CORE_DIR = "usr/lib/git-core"
-        private val GIT_CORE_SCRIPTS = listOf(
-            "git-submodule", "git-mergetool", "git-filter-branch", "git-subtree",
-            "git-merge-octopus", "git-merge-one-file", "git-merge-resolve",
-            "git-difftool--helper", "git-quiltimport", "git-request-pull", "git-web--browse",
-        )
-
-        /** Appended to a git helper's name for the shipped script its link replaced. */
-        private const val GIT_HELPER_SUFFIX = ".script"
-
-        /**
-         * What runs a git helper or an npm launcher. The scripts are POSIX `sh`,
-         * and this is a file the app may execute, which the trampoline hands to
-         * the loader with the script as its argument.
-         */
-        private const val SYSTEM_SHELL = "/system/bin/sh"
-
-        /**
-         * The Codex engine, relative to filesDir. Under `lib/` of the install
-         * root, which [isPathCommand] keeps off PATH: the command `codex` is the
-         * launcher [addCodexRows] writes, and the helper the engine starts sits
-         * beside this file.
-         */
-        private const val CODEX_ENGINE = "usr/libexec/codex/lib/codex"
-
-        /**
-         * Ceiling on the digest manifest read into memory.
-         *
-         * Three lines of `sha256sum` output today, so this is roughly five
-         * hundred times what it needs. It is a ceiling rather than a budget: an
-         * origin that answers this URL with something enormous should cost a
-         * refusal, not the process.
-         */
-        private const val MANIFEST_MAX_CHARS = 64 * 1024
-
-        /**
-         * The installer names that mean Play delivered this app, and can
-         * therefore deliver its asset packs.
-         *
-         * `com.google.android.feedback` is the Play Store's own legacy package
-         * name, and it is still the installer of record for installs made by
-         * older versions of it. Left out, such a device took the HTTP path: a
-         * Play install downloading native binaries from a GitHub release, which
-         * is the one thing the Play path exists to avoid.
-         */
+        /** The installer names that mean Play delivered this app and can serve its asset packs. */
         private val PLAY_INSTALLERS = setOf(
             "com.android.vending",
             "com.google.android.feedback",
         )
 
-        /**
-         * Records that a toolchain's binaries have had their execute bit checked.
-         * Kept in the toolchain's own state entry rather than as one global flag,
-         * so a toolchain installed later is marked without being walked, and a
-         * repair that fails partway is retried only for what it did not finish.
-         */
-        private const val KEY_EXEC_REPAIRED = "execBitsChecked"
-        private const val KEY_INSTALL_ID = "installId"
-
-        /** The install attempt whose unfinished copy last asked the repair pass for its walk ([reclaimPartialCopy]). */
-        private const val KEY_EXEC_RESET_FOR = "execBitsResetFor"
+        internal const val KEY_EXEC_REPAIRED = "execBitsChecked"
+        internal const val KEY_INSTALL_ID = "installId"
+        internal const val KEY_EXEC_RESET_FOR = "execBitsResetFor"
 
         /**
          * Environment a toolchain's manifest carries today and an install made by an
-         * earlier build does not, by toolchain name. The record keeps the manifest it
-         * was installed with, so a variable added to the pack's manifest reaches new
-         * installs only; [backfillToolchainEnvSync] adds these to the rest.
-         *
-         * Ruby: `RUBYOPT=-rrubygems`, because the interpreter starts without
-         * RubyGems and a script's `require` of an installed gem fails (see
-         * `scripts/download-ruby.sh`).
+         * earlier build does not, by toolchain name.
          */
         private val ENV_BACKFILL = mapOf(
             "ruby" to mapOf("RUBYOPT" to "-rrubygems"),
         )
 
         /**
-         * Environment variables that hold a list of options the caller may already have
-         * set, which a toolchain adds to rather than replaces.
-         */
-        private val OPTION_LIST_VARS = setOf("RUBYOPT")
-
-        /** `-XX:Name=value`, `-XX:+Name`, `-XX:-Name`, and the heap and stack sizes. */
-        private val JVM_FLAG = Regex("-(?:XX:(?:[+-][A-Za-z0-9_]+|[A-Za-z0-9_]+=[A-Za-z0-9_.+-]+)|X(?:mx|ms|ss)[0-9]+[kKmMgG]?)")
-
-        /**
-         * The JVM flags a toolchain manifest asks every JDK launcher to start with
-         * (`jvmFlags`), restricted to the HotSpot option shapes in [JVM_FLAG]. They are
-         * written into shell functions, so anything with a space, a quote or a
-         * metacharacter is dropped rather than trusted: the manifest is the app's own,
-         * but a line that breaks this file breaks every new terminal. An agent, a
-         * system property or a class path option is not a tuning flag and is dropped
-         * with them: it would start in every JVM the user runs.
-         */
-        internal fun jvmFlagsOf(manifest: JSONObject): List<String> {
-            val flags = manifest.optJSONArray("jvmFlags") ?: return emptyList()
-            return (0 until flags.length())
-                .map { flags.optString(it, "") }
-                .filter { JVM_FLAG.matches(it) }
-        }
-
-        /**
-         * The VM options the manifest's `jvmFlags` put in front of a JDK launcher: as they
-         * are for `java`, as `-J` options for every tool beside it. Empty for anything that
-         * is not a launcher in the install root's `bin/`, and for a manifest without any (an
-         * install made while the pack carried JDK 17, which has no such flag).
-         */
-        internal fun jvmLauncherFlags(manifest: JSONObject, relPath: String): List<String> {
-            val root = manifest.optString("installRoot", "")
-            if (root.isEmpty() || !relPath.startsWith("$root/bin/")) return emptyList()
-            val direct = relPath.substringAfterLast('/') == "java"
-            return jvmFlagsOf(manifest).map { if (direct) it else "-J$it" }
-        }
-
-        /**
-         * The most arguments an exec-table row can carry after its target. The
-         * trampoline has its own `MAX_ROW_ARGS` (`scripts/exec-trampoline.c`) and
-         * refuses a longer row whole when the command runs, so a row is never
-         * written past it ([fitsTableRow]): a launcher or JDK row that would be is
-         * left out and logged. `ExecTrampolineRowLimitTest` holds the two equal.
+         * The most arguments an exec-table row can carry after its target.
+         * `ExecTrampolineRowLimitTest` holds this equal to `scripts/exec-trampoline.c`.
          */
         internal const val MAX_ROW_ARGS = 8
 
-        /**
-         * Whether a manifest binary is a command at all. The JDK keeps `jspawnhelper` and
-         * `jexec` in `lib/`: the JVM starts the first by absolute path and the second is a
-         * `#!` target, so neither belongs on PATH, where each only showed up as a command
-         * that prints nothing useful when typed.
-         */
-        internal fun isPathCommand(manifest: JSONObject, relPath: String): Boolean {
-            val root = manifest.optString("installRoot", "")
-            return root.isEmpty() || !relPath.startsWith("$root/lib/")
-        }
+        /** Serialises every read-modify-write cycle on `toolchains.json` and derived files. */
+        internal val stateLock = Any()
 
-        /**
-         * How much of a file in `usr/bin` is read to find out what runs it.
-         *
-         * A `#!` line is the first thing in the file and a console script's is well
-         * under this, so the whole answer is always in the first read. Bounded
-         * because this runs over every name in that directory on every launch and
-         * nothing stops a user putting an enormous file there.
-         */
-        private const val SHEBANG_HEAD_BYTES = 256
+        /** Process-wide coordination across multiple [ToolchainManager] instances. */
+        internal val installsInFlight = ConcurrentHashMap.newKeySet<String>()
+        internal val packOperationLock = Any()
+        internal val packRemovalsInFlight = mutableSetOf<String>()
+        internal val pendingPackReleases = mutableMapOf<String, () -> Unit>()
+        internal val packReleaseGenerations = mutableMapOf<String, Long>()
+        internal val nextPackReleaseGeneration = AtomicLong()
 
-        /**
-         * Serialises every read-modify-write cycle on `toolchains.json` and the
-         * env file generated from it.
-         *
-         * Deliberately on the companion rather than on the instance, because an
-         * instance field would serialise nothing here. Activities, the bridge and
-         * `Environment` each build [ToolchainManager] instances, each with
-         * its own single-thread executor, so the executors serialise their own
-         * work and nothing serialises theirs against each other. Two of them
-         * overlapping on one file is not hypothetical: the repair pass fires
-         * from `SplashActivity` on every launch and runs `readState` ->
-         * mutate -> `writeState`, while an install queued from the same screen
-         * runs the same cycle on the same file. Whichever writes last wins with
-         * a copy of the array it read before the other one changed it, and the
-         * loser's toolchain is simply not in the file any more.
-         *
-         * Ceiling: one process. The file lives in `filesDir`, so any other
-         * process that opened it -- the Node server, a terminal -- is outside
-         * this lock entirely. Nothing does today, and the atomic rename below is
-         * what keeps such a reader from ever seeing a half-written file even so.
-         */
-        private val stateLock = Any()
+        /** Process-wide active HTTP transfers, keyed by pack name. */
+        internal val httpDownloads = ConcurrentHashMap<String, HttpDownload>()
+        internal val nextHttpTransfer = AtomicLong()
 
-        /**
-         * Pack names whose copy into the shared `usr/` tree is running right now.
-         *
-         * On the companion for the same reason [stateLock] is: every call site
-         * builds its own [ToolchainManager], and `ioExecutor` is an instance
-         * field, so the executors serialise each manager's own work and nothing
-         * serialises theirs against each other. Two managers installing one pack
-         * is reachable without trying: `ToolchainActivity` declares no
-         * `configChanges`, so a rotation mid-install recreates it with a second
-         * manager, and the card it rebuilds knows nothing of the install still
-         * running, so it offers Install again.
-         *
-         * What that costs is space and bookkeeping rather than the bytes
-         * themselves. Both copies carry identical source bytes, so the
-         * overlapping writes do not corrupt anything. But neither install's
-         * pre-flight reserves for the other, so a device whose free space sits
-         * between one install's reservation and two installs' real peak passes
-         * both checks and then hits ENOSPC partway through the second copy. That
-         * leaves a truncated tree under a record the first install has already
-         * written as installed, and `repairInstalledToolchains` does not
-         * re-examine a pack the record calls installed, so nothing ever puts it
-         * right.
-         *
-         * The second install declines rather than waits, which is the call
-         * `SafSyncEngine.documentWritesInFlight` already makes for this shape:
-         * waiting on an unbounded filesystem operation turns a race into a stall
-         * behind whatever the user is looking at, and here there is nothing to
-         * wait for anyway. The pack is being installed; the caller that declines
-         * has nothing to add to that.
-         *
-         * Ceiling: one process, exactly as above. Another process copying into
-         * `usr/` is outside this entirely, and nothing does today.
-         */
-        private val installsInFlight = ConcurrentHashMap.newKeySet<String>()
-        private val packOperationLock = Any()
-        private val packRemovalsInFlight = mutableSetOf<String>()
-        private val pendingPackReleases = mutableMapOf<String, () -> Unit>()
-        private val packReleaseGenerations = mutableMapOf<String, Long>()
-        private val nextPackReleaseGeneration = java.util.concurrent.atomic.AtomicLong()
-
-        /**
-         * The token for each pack with a download outstanding, so [cancel] can
-         * find it by name.
-         *
-         * Entries are put in on the calling thread and removed by the task
-         * itself, which is what lets a cancellation arriving while the pack is
-         * still queued be seen once it starts.
-         *
-         * On the companion for the reason [installsInFlight] is, and it is the
-         * same rotation that makes it reachable. `ToolchainActivity` declares no
-         * `configChanges`, so turning the phone mid-download destroys the
-         * Activity and builds a second manager. As an instance field this map
-         * went with the first one: the transfer carried on, and nothing left
-         * alive could reach its token. Cancelling was then impossible from
-         * anywhere -- not from the rebuilt screen, and not from `AndroidBridge`,
-         * whose own lazily built manager is a third instance again -- so the
-         * only way to stop a download on mobile data was to force-stop the app.
-         *
-         * It is also what lets [downloadViaHttp] recognise a pack that is
-         * already being fetched. [installsInFlight] cannot do that job: it is
-         * claimed only once the archive has been downloaded and expanded, so it
-         * reads free for the whole of the transfer, and a tap on the Install
-         * button the rebuilt card offers started the download again from the
-         * first byte.
-         *
-         * Admission shares [packOperationLock] with final copy and removal claims.
-         */
-        private val httpDownloads = ConcurrentHashMap<String, HttpDownload>()
-        private val nextHttpTransfer = java.util.concurrent.atomic.AtomicLong()
-
-        /**
-         * Every pack with an HTTP transfer outstanding right now, and how far
-         * each has got.
-         *
-         * Asked of the process rather than of one manager, because progress is
-         * reported only to the manager that began the download. Two readers need
-         * the answer and neither holds that manager. The toolchain screen rebuilds
-         * its cards from nothing on every `onCreate` -- a rotation, or simply
-         * opening it while the first-run queue is still working -- and a card with
-         * no report to go on drew Install for a pack that was already downloading:
-         * no progress, and no Cancel, which is the one button that stops a 56 MB
-         * transfer on mobile data. [com.vscodroid.util.StorageManager.clearCaches]
-         * needs it for the opposite reason: to leave a running download's staging
-         * directory alone while it clears the abandoned ones.
-         *
-         * The Play path is not here because it is asked for instead of tracked:
-         * [readPlayDownloads] puts the same question to Play Core, and the
-         * toolchain screen asks it in `onStart` beside this map. This paragraph
-         * used to justify the omission by asserting that Play Core re-delivers
-         * state for a pack it is still fetching once [registerListener] runs.
-         * Nothing here ever measured that, and what it costs when it is wrong is
-         * the card offering Install for a pack already downloading: no progress,
-         * and no Cancel.
-         */
+        /** Every pack with an HTTP transfer outstanding right now, and its percent progress. */
         internal fun packsDownloading(): Map<String, Int> =
             httpDownloads.mapValues { (_, download) -> download.percent }
 
@@ -633,23 +198,7 @@ class ToolchainManager(private val context: Context) {
                 ToolchainDownloadProgress(download.transferId, download.percent)
             }
 
-        /**
-         * Whether some install in this process holds [packName] right now.
-         *
-         * Asked of the process rather than of one manager, for the reason
-         * [packsDownloading] is: the sets are on the companion because every call
-         * site builds its own [ToolchainManager], and the reader here holds
-         * neither of the two managers involved. The first-run progress screen
-         * needs it to tell "this pack was handed to an install already running"
-         * from "Play had nothing to say about it", which arrive as the same
-         * `UNKNOWN` status through the same callback.
-         *
-         * Both sets, because the two decline sites sit at different stages of one
-         * install: [httpDownloads] covers the whole transfer, [installsInFlight]
-         * only the copy. `containsKey` rather than `in`, for the reason
-         * [downloadViaHttp] already records at its own decline: `in` on a
-         * `ConcurrentHashMap` resolves to `containsValue`.
-         */
+        /** Whether some install in this process holds [packName] right now. */
         internal fun packIsBeingInstalled(packName: String): Boolean =
             packName in installsInFlight || httpDownloads.containsKey(packName)
     }
@@ -658,55 +207,15 @@ class ToolchainManager(private val context: Context) {
         handleStateUpdate(state)
     }
 
-    /**
-     * Whether Play installed this app, once something has asked.
-     *
-     * Volatile because the callers are not on one thread: the activities reach
-     * [install] on the main thread, `AndroidBridge` reaches it from the
-     * WebView's, and [reconcileDeliveredPacks] asks from [ioExecutor]. Two
-     * threads racing here cost one extra binder call and agree on the answer,
-     * so nothing stronger is needed. See [shouldUseHttpFallback].
-     */
     @Volatile
     private var installSourceIsPlay: Boolean? = null
 
-    // -- Lifecycle --
-
-    /**
-     * Whether this instance's [listener] is currently registered with Play Core.
-     *
-     * Two callers reach [registerListener] on one instance without knowing about
-     * each other: the activities call it from `onStart`, and [install] calls it
-     * again before every `fetch`. So a registration and its removal are made by
-     * different code for different reasons, and whether they balance depends on
-     * what registering twice means.
-     *
-     * Play Core's own registry is a `Set` -- `AssetPackManager.registerListener`
-     * delegates to a class holding `protected final java.util.Set b`, verified
-     * by decompiling asset-delivery 2.2.2 rather than assumed -- so registering
-     * the same object twice is already one entry, and the duplicate deliveries
-     * that would otherwise follow do not happen. This flag is therefore not
-     * fixing a live double-delivery bug, and saying so matters: an earlier
-     * draft of this comment claimed it was.
-     *
-     * It is kept because that behaviour is an implementation detail of a
-     * minified third-party class, promised nowhere in the API. Making the
-     * pairing explicit here means [unregisterListener] can be called from a
-     * terminal state without the caller knowing whether [install] took the Play
-     * branch or the HTTP one -- which never registers -- and our correctness
-     * does not rest on a `Set` we had to decompile to find.
-     *
-     * [listenerRegistered] changes only under [listenerLock], because check-and-act
-     * is the whole point and the callers are not on one thread: the activities are
-     * on the main thread, while the bridge reaches [install] from the WebView's own
-     * thread. Both flags are volatile as well, because a caller that finds the lock
-     * taken only leaves its wish in [listenerWanted], and the holder reads it after
-     * letting go ([applyListener]).
-     */
     @Volatile private var listenerRegistered = false
     @Volatile private var listenerWanted = false
     private val listenerLock = ReentrantLock()
     private val playRequests = mutableMapOf<String, Any>()
+
+    // -- Lifecycle --
 
     fun registerListener() {
         listenerWanted = true
@@ -719,23 +228,10 @@ class ToolchainManager(private val context: Context) {
     }
 
     fun unregisterListenerIfIdle() {
-        // Decided and wished in one step, under the monitor that guards the requests: an install
-        // that adds one in between would otherwise have its listener taken away, and its pack
-        // would download with nobody told.
         val idle = synchronized(this) { playRequests.isEmpty().also { if (it) listenerWanted = false } }
         if (idle) applyListener()
     }
 
-    /**
-     * Makes Play's registry agree with [listenerWanted], and never waits to do it.
-     *
-     * Play delivers a state update on the main thread while it holds the monitor of its
-     * listener registry, and registering or removing a listener takes that monitor. A thread
-     * that waited here for the lock while another thread, holding it, waited for that monitor,
-     * would be the main thread stuck for good when it is the one delivering. So a caller that
-     * finds the lock taken leaves its wish in [listenerWanted] and returns: the thread that
-     * holds the lock looks again before it lets go, and applies it.
-     */
     private fun applyListener() {
         do {
             if (!listenerLock.tryLock()) return
@@ -753,30 +249,6 @@ class ToolchainManager(private val context: Context) {
 
     // -- Query state --
 
-    /**
-     * Asks Play what it is already doing with the packs this build offers, and
-     * hands each answer to [onState] as a pack name, an `AssetPackStatus` and a
-     * percentage.
-     *
-     * A screen built while a Play download is running holds no reports at all,
-     * and [packsDownloading] cannot help it: that map covers the HTTP path only.
-     * The gap was covered by an assertion instead, that Play Core re-delivers
-     * state for a pack it is still fetching once a listener registers. Nothing
-     * here has ever measured that, this file said so in one place and asserted
-     * the opposite in another, and what it costs when it is wrong is the card
-     * offering Install for a pack already downloading: no progress, and no
-     * Cancel, which is the only control in the app that stops a 55 MB metered
-     * transfer. This is the question with an answer either way.
-     *
-     * Every pack is reported, including settled ones; deciding which of them a
-     * card should be redrawn from belongs to the screen, which is also the only
-     * party that knows whether it has something better already. The listeners
-     * are Play Core's, so they arrive on the main thread.
-     *
-     * Play-only, and silent on the HTTP path: `getPackStates` on an install Play
-     * does not recognise fails rather than answering an empty map, which is not
-     * an event worth telling a user about.
-     */
     fun readPlayDownloads(onState: (packName: String, status: Int, percent: Int) -> Unit) {
         try {
             assetPackManager.getPackStates(ToolchainRegistry.available.map { it.packName })
@@ -816,7 +288,7 @@ class ToolchainManager(private val context: Context) {
         .filter { !packIsBeingInstalled(it) && installIsPending(it) }
 
     private fun installIsPending(packName: String): Boolean {
-        val marker = installMarker(packName)
+        val marker = installMarkerFile(packName)
         if (!marker.exists() && !Files.isSymbolicLink(marker.toPath())) return false
         val pending = runCatching { JSONObject(marker.readText()) }.getOrNull() ?: return true
         val installId = pending.optString(KEY_INSTALL_ID)
@@ -829,12 +301,6 @@ class ToolchainManager(private val context: Context) {
         }
     }
 
-    /**
-     * The name the record holds for an installed toolchain whose build is not the one the
-     * registry offers now, by pack name. Java 17 stays on a device that installed it
-     * before the pack moved to 21 (the record keeps its own manifest), and the card
-     * drawn from the registry called it "Java 21".
-     */
     fun installedLabels(): Map<String, String> {
         val state = readState()
         val labels = mutableMapOf<String, String>()
@@ -853,24 +319,19 @@ class ToolchainManager(private val context: Context) {
     fun install(packName: String) {
         val info = ToolchainRegistry.find(packName)
         if (info == null) {
-            // The one line here that fires BECAUSE the string is not a known
-            // toolchain, which is to say exactly when it is whatever the caller
-            // sent. Logger.e is not gated on a debuggable build.
             Logger.e(tag, "Unknown toolchain: ${redactToken(packName)}")
             fail(packName, ToolchainFailure.INTERNAL)
             return
         }
         Logger.i(tag, "Requesting install of ${info.displayName} (${info.packName})")
 
-        // Before anything is downloaded: a ZIP fetched and verified only to be refused is paid for
-        // again on every try.
         if (readableState() == null) {
             failUnreadableRecord(info.packName)
             return
         }
 
         // An explicit install supersedes any pending release or deferred removePack from an earlier uninstall.
-        clearPackReleaseMarker(info.packName, dropPendingRelease = true)
+        uninstaller.clearPackReleaseMarker(info.packName, dropPendingRelease = true)
 
         if (shouldUseHttpFallback()) {
             val url = info.downloadUrl
@@ -879,20 +340,9 @@ class ToolchainManager(private val context: Context) {
                 fail(info.packName, ToolchainFailure.PLAY_REQUIRED)
                 return
             }
-            // Both figures, because the two questions differ by a factor of
-            // three and one number was answering both. The space gate has to
-            // reserve for the unpacked tree; the progress bar divides by what
-            // crosses the network, and only when the server sends no
-            // Content-Length. Given the unpacked figure, a chunked response left
-            // the Java 25 bar topping out near 30% for the whole transfer.
-            downloadViaHttp(info.packName, url, info.estimatedSize, info.downloadSize)
+            httpDownloader.downloadViaHttp(info.packName, url, info.estimatedSize, info.downloadSize)
         } else {
             val request = synchronized(this) {
-                // Silent, unlike the declines that report UNKNOWN: this is this manager's own request for the pack,
-                // still live, and its reports follow. UNKNOWN reads as settled to every screen, so it would take the
-                // pack out of the toolchain screen's outstanding set, letting `onStop` hand back the Play listener
-                // the download still needs, and would move the first-run queue past a pack still downloading. A
-                // cancel ends the request ([cancel]), so this no longer swallows an Install made after one.
                 if (info.packName in playRequests) return
                 listenerWanted = true
                 Any().also { playRequests[info.packName] = it }
@@ -903,17 +353,6 @@ class ToolchainManager(private val context: Context) {
                 synchronized(this) { playRequests.remove(info.packName) }
                 throw e
             }
-            // The Task is answered rather than discarded. A fetch Play refuses
-            // outright delivers no AssetPackState at all, so [handleDownloadState]
-            // never runs for this pack and the queue's downloadNext() is never
-            // reached: the row sits on its last status for the rest of the session,
-            // every pack queued behind it is never even requested, nothing is
-            // written to the log, and the only way out is Cancel.
-            //
-            // Routed through [fail] like every listener-delivered failure, so the
-            // card, the queue and the log all learn about it the same way. A
-            // duplicate terminal report costs nothing: the queue ignores one for a
-            // pack it has already moved past, and the card repaints.
             try {
                 assetPackManager.fetch(listOf(info.packName))
                     .addOnFailureListener { e ->
@@ -930,40 +369,17 @@ class ToolchainManager(private val context: Context) {
         }
     }
 
-    /** Takes the request out of the map if it is still [request], so one caller alone reports its failure. */
     private fun takeRequest(packName: String, request: Any): Boolean = synchronized(this) {
         (playRequests[packName] === request).also { if (it) playRequests.remove(packName) }
     }
 
     /**
-     * Stops [packName]'s download, and returns whether the end of the download it stopped is still to be
-     * reported.
-     *
-     * The toolchain screen offers no Install until that end, because both ends interfere with one made
-     * before them: Play's CANCELED ends this manager's request for the pack by name ([report]), and a
-     * cancelled HTTP transfer holds the pack until it stops, so an Install refuses ([downloadViaHttp]).
-     * True for an HTTP transfer this flagged while it still held the pack: its `finally` gives the pack
-     * back and only then reads the flag, so it reports CANCELED on every way out, to the manager that
-     * began it. On a Play install, true when Play's cancel answers CANCELED for the pack: it returns the
-     * state it leaves each pack in, CANCELED only for a download it stopped. False when nothing was
-     * running, as for a sideload with no transfer.
+     * Stops [packName]'s download, and returns whether the end of the download it stopped is still to be reported.
      */
     fun cancel(packName: String): Boolean {
         val info = ToolchainRegistry.find(packName) ?: return false
-        // Signals only this pack's download to stop (checked every 8KB in the
-        // download loop). A pack with nothing outstanding has no token, and
-        // cancelling it must not reach a download that is running for another.
-        //
-        // The map is process-wide, so this reaches the transfer whichever manager
-        // began it. That is the point rather than a side effect: a rotation
-        // rebuilds the screen with a second manager while the first one's
-        // download carries on, and a token only the destroyed manager could see
-        // made the transfer uncancellable from anywhere.
         val transfer = httpDownloads[info.packName]
         var connToClose: HttpURLConnection? = null
-        // Under the token's monitor, which the transfer's finally holds while it gives the pack back and
-        // before it reads the flag: a token still here once the flag is set means the finally will see the
-        // flag, and report CANCELED.
         val transferReportsItsEnd = transfer != null && synchronized(transfer) {
             transfer.cancelled = true
             @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
@@ -971,27 +387,9 @@ class ToolchainManager(private val context: Context) {
             connToClose = transfer.activeConnection
             httpDownloads[info.packName] === transfer
         }
-        connToClose?.let(::disconnectAsync)
-        // This manager's Play request ends here, and not only when Play reports CANCELED: Play cancels only a
-        // download that is running, so a pack waiting on its cellular-data question, or already delivered, sends
-        // nothing back, and the request left standing made every later Install of the pack return without a fetch.
+        connToClose?.let(httpDownloader::disconnectAsync)
         synchronized(this) { playRequests.remove(info.packName) }
         val answer = assetPackManager.cancel(listOf(info.packName))
-        // Play's cancel is a request to the download service and does nothing to a
-        // pack it has already finished delivering, so without this a cancel could
-        // leave a complete pack sitting in `filesDir/assetpacks`. That was merely
-        // wasted disk until [reconcileDeliveredPacks] existed; now it is a delivered
-        // pack that the next launch would find and install, which is the opposite of
-        // what the user just asked for. Releasing it here is what makes "cancelled"
-        // and "not delivered" the same state, which is the only reading of Play's
-        // records that reconcile can make.
-        //
-        // Deletion stays off the caller's thread. releasePack also coordinates
-        // with copies started by other managers and with Play's pending delete.
-        //
-        // Only on a Play install. A sideload has no delivered copy, and the removal it
-        // posted anyway is a Play Core call that can fail on every cancel, logging a
-        // pack that "stays on disk" when there is none.
         val viaPlay = !shouldUseHttpFallback()
         if (viaPlay) {
             ioExecutor.execute { releasePack(info.packName) }
@@ -1020,485 +418,24 @@ class ToolchainManager(private val context: Context) {
         }
     }
 
-    /** Disconnects an active HTTP request off the calling thread so UI cancel stays non-blocking. */
-    private fun disconnectAsync(conn: HttpURLConnection) {
-        Thread({ runCatching { conn.disconnect() } }, "toolchain-cancel").apply {
-            isDaemon = true
-            start()
-        }
-    }
-
-    // -- Uninstall (runs on IO thread) --
+    // -- Uninstall (delegated to ToolchainUninstaller) --
 
     fun uninstall(name: String) {
         ioExecutor.execute {
             try {
                 uninstallSync(name)
             } catch (e: Exception) {
-                // The throwable is kept: nothing that throws on this path builds
-                // its message from this argument, they name paths taken from the
-                // install record, so the second channel does not repeat what the
-                // first one hides.
                 Logger.e(tag, "Failed to uninstall ${redactToken(name)}", e)
-                // Said to the screen as well, so that every route out of an
-                // uninstall reports exactly once. The card takes its Remove
-                // button away when the user confirms and puts it back on the
-                // first report about the pack; without this line an exception
-                // here left it with no button at all until the screen was
-                // reopened. A removal failure, so the card falls back to what
-                // the install record says, still Remove, and the screen says the
-                // removal did not happen ([failRemoval]).
                 failRemoval("toolchain_${toolchainShortName(name)}")
             }
         }
     }
 
-    /**
-     * Accepts either name form, because the two entry points into this class
-     * disagreed about which one they take and only one of them said so.
-     *
-     * [install] resolves through [ToolchainRegistry.find], so `go` and
-     * `toolchain_ruby` both work there. This side matched the persisted short name
-     * only, and the form JavaScript actually holds is the pack name --
-     * `getAvailableToolchains` hands it out as `packName`. So the natural call,
-     * `removeToolchain("toolchain_ruby")`, logged "not found in state" and removed
-     * nothing, while the same string passed to `installToolchain` worked.
-     * `ToolchainActivity` never hit it because it strips the prefix itself
-     * before calling; the bridge did not.
-     *
-     * Takes the same [installsInFlight] claim an install does, because the two
-     * are the same file work in opposite directions and nothing put them in
-     * order. Each construction site has its own single-thread executor, so a
-     * Remove queued on one manager runs while a copy runs on another's: the
-     * reachable pair is a removal from the bridge or the toolchain screen
-     * against the copy the first-run queue is performing. Deleting the files a
-     * copy is writing leaves a tree the install then records as complete.
-     *
-     * Declines rather than waits, which is the call [installFromDirectory]
-     * already makes for this shape, and reports UNKNOWN for the reason it does:
-     * a screen that has taken the Remove button away needs an answer to put it
-     * back, and neither COMPLETED nor NOT_INSTALLED is true here.
-     *
-     * Not every removal comes through here. [removeRetiredToolchainsSync] calls
-     * [uninstallLocked] directly and takes no claim; its KDoc carries why that
-     * one is safe.
-     */
-    private fun uninstallSync(nameOrPack: String) {
-        val name = toolchainShortName(nameOrPack)
-        val packName = "toolchain_$name"
-        val claimed = synchronized(packOperationLock) {
-            !httpDownloads.containsKey(packName) && claimPack(packName, readsDeliveredPack = false)
-        }
-        if (!claimed) {
-            Logger.i(tag, "An install of $packName is running; not removing it underneath")
-            report(packName, AssetPackStatus.UNKNOWN, 0)
-            return
-        }
-        try {
-            synchronized(stateLock) { uninstallLocked(name) }
-        } finally {
-            releasePackClaim(packName)
-        }
-    }
+    private fun uninstallSync(nameOrPack: String) = uninstaller.uninstallSync(nameOrPack)
 
-    /**
-     * Caller must hold [stateLock]. The manifest read at the top names the
-     * files, symlinks and libraries deleted below it, so another instance
-     * rewriting the record midway through leaves this pass deleting from one
-     * version of the truth and recording against another.
-     */
-    private fun uninstallLocked(name: String) {
-        val state = readableState() ?: run {
-            Logger.e(tag, "${stateFile.path} exists but cannot be read; leaving it as it is")
-            failRemoval("toolchain_$name")
-            return
-        }
-        var manifestObj: JSONObject? = null
-        var idx = -1
+    private fun packReleaseMarker(packName: String): File? = uninstaller.packReleaseMarker(packName)
 
-        for (i in 0 until state.length()) {
-            val obj = state.optJSONObject(i) ?: continue
-            if (obj.optString("name") == name) {
-                manifestObj = obj
-                idx = i
-                break
-            }
-        }
-
-        val packName = "toolchain_$name"
-        if (manifestObj == null) {
-            // The uninstall twin of the "Unknown toolchain" line in [install]:
-            // [toolchainShortName] returns a name it does not recognise unchanged,
-            // deliberately, so that a retired toolchain can still be removed, and
-            // that is what puts arbitrary text here.
-            Logger.w(tag, "Toolchain ${redactToken(name)} not found in state")
-            // Reported rather than returned in silence, and NOT_INSTALLED is what
-            // is true: the record does not name it. The screen that asked has
-            // taken the Remove button off the card while the removal is queued,
-            // and this is the only thing that ever puts it right for a record
-            // that was already gone.
-            report(packName, AssetPackStatus.NOT_INSTALLED, 0)
-            return
-        }
-
-        val outcome = removeToolchainFiles(name, manifestObj, state, requireBaseLibListing = true)
-        if (outcome == RemovalOutcome.UNCHANGED) {
-            failRemoval(packName)
-            return
-        }
-
-        val viaPlay = !shouldUseHttpFallback()
-        if (outcome == RemovalOutcome.PARTIAL) {
-            // Files were already deleted before removal stopped, so leaving the record in place
-            // would keep exporting broken wrappers. Reclaim any prior pending marker first so its
-            // witness is not silently overwritten, write a cleanup marker for leftovers, drop the
-            // broken entry from state and derived files, and report FAILED so Retry reinstalls.
-            val pendingMarker = installMarker(packName)
-            val priorMarkerExisted = pathExistsNoFollow(pendingMarker)
-            if (priorMarkerExisted) {
-                val pending = runCatching { JSONObject(pendingMarker.readText()) }.getOrNull()
-                val priorSettled = pending != null && pending.optString("name") == name &&
-                    (toolchainPathsAreOwned(pending, manifestObj) ||
-                        reclaimPartialCopy(
-                            name,
-                            pending,
-                            reclaimSameRootOrphans = true,
-                            restoreSymlinks = false,
-                        ))
-                if (!priorSettled) {
-                    Logger.w(tag, "Keeping $packName record: prior pending marker could not be settled during partial removal")
-                    fail(packName, ToolchainFailure.REMOVAL)
-                    return
-                }
-            }
-            installMarkerDir.mkdirs()
-            if (!writeAtomically(pendingMarker) { it.write(manifestObj.toString().toByteArray()) }) {
-                Logger.e(tag, "Could not record cleanup marker for partially removed $packName; keeping state record")
-                fail(packName, ToolchainFailure.STORAGE)
-                return
-            }
-            val releaseGen = if (viaPlay) markPackReleasePending(packName) else null
-            state.remove(idx)
-            if (!writeState(state)) {
-                if (!priorMarkerExisted) pendingMarker.delete()
-                if (viaPlay) clearPackReleaseMarker(packName, dropPendingRelease = true)
-                fail(packName, ToolchainFailure.STORAGE)
-                return
-            }
-            regenerateDerivedFilesLocked()
-            if (priorMarkerExisted) {
-                cancel(packName)
-            }
-            if (viaPlay) releasePack(packName, expectedGeneration = releaseGen)
-            fail(packName, ToolchainFailure.REMOVAL)
-            return
-        }
-
-        val releaseGen = if (viaPlay) markPackReleasePending(packName) else null
-
-        // Remove from state
-        state.remove(idx)
-        // Asked, exactly as [installFromDirectoryHoldingPack] asks it, and for the
-        // sibling reason: the record is what everything else reads, so a removal
-        // whose record write failed is not a removal that happened. The files are
-        // gone either way, they were deleted above, but reporting
-        // NOT_INSTALLED on top of a record that still names the toolchain tells
-        // the user it is gone while the next launch draws it as installed and
-        // `getAllToolchainEnv` goes on exporting JAVA_HOME for a directory that no
-        // longer exists. Nothing reconciles that later: the repair pass only
-        // checks execute bits.
-        //
-        // FAILED, and not the [failRemoval] the two refusals above make, because
-        // here the files are already gone: the Retry FAILED puts on the card
-        // reinstalls the toolchain, which is the repair for a record that outlived
-        // its files, where above it would download a pack over files still there.
-        // STORAGE for the reason the install sibling picks it: [writeAtomically]
-        // writes a temporary file and renames it, and what stops that is space or
-        // an I/O fault, both of which "free some space and try again" survives.
-        if (!writeState(state)) {
-            if (viaPlay) clearPackReleaseMarker(packName, dropPendingRelease = true)
-            fail(packName, ToolchainFailure.STORAGE)
-            return
-        }
-        regenerateDerivedFilesLocked()
-
-        val pendingMarker = installMarker(packName)
-        if (pendingMarker.exists() || Files.isSymbolicLink(pendingMarker.toPath())) {
-            val pending = runCatching { JSONObject(pendingMarker.readText()) }.getOrNull()
-            if (pending != null && pending.optString("name") == name && reclaimPartialCopy(name, pending)) {
-                pendingMarker.delete()
-            }
-            // Removing a failed reinstall also cancels the delivery that could bring it back.
-            cancel(packName)
-        }
-        if (viaPlay) {
-            releasePack(packName, expectedGeneration = releaseGen)
-        }
-
-        Logger.i(tag, "Uninstalled toolchain: $name")
-        report(packName, AssetPackStatus.NOT_INSTALLED, 0)
-    }
-
-    private enum class RemovalOutcome { UNCHANGED, PARTIAL, COMPLETE }
-
-    private fun pathExistsNoFollow(file: File): Boolean =
-        file.exists() || Files.isSymbolicLink(file.toPath())
-
-    private fun countEntriesNoFollow(root: File): Int {
-        if (!pathExistsNoFollow(root)) return 0
-        if (Files.isSymbolicLink(root.toPath()) || !root.isDirectory) return 1
-        var count = 0
-        val stack = ArrayDeque<File>()
-        stack.addLast(root)
-        while (stack.isNotEmpty()) {
-            val f = stack.removeLast()
-            count++
-            if (!Files.isSymbolicLink(f.toPath()) && f.isDirectory) {
-                f.listFiles()?.forEach { stack.addLast(it) }
-            }
-        }
-        return count
-    }
-
-    /**
-     * Deletes from disk what [manifest] says the toolchain [name] put there:
-     * its links in `usr/bin`, its binaries, its install root, the paths it owns
-     * inside shared trees, its library links and the libraries it copied.
-     *
-     * Shared by the uninstall and by [reclaimPartialCopy], which is the point of
-     * it being one function: an install the system stopped part-way through has
-     * written exactly the files its manifest names, and the question of which of
-     * them are safe to take is the one the uninstall already answers. That is
-     * the base install's libraries and the other installed toolchains', which
-     * [state] supplies.
-     *
-     * Touches no record. The caller decides whether the toolchain is still
-     * installed and writes `toolchains.json` itself.
-     */
-    private fun removeToolchainFiles(
-        name: String,
-        manifest: JSONObject,
-        state: JSONArray,
-        requireBaseLibListing: Boolean = false,
-    ): RemovalOutcome {
-        val paths = toolchainRemovalPaths(manifest).associateWith { confinedToolchainPath(it) }
-        if (paths.values.any { it == null }) {
-            Logger.w(tag, "Keeping $name: a managed path has a redirected ancestor")
-            return RemovalOutcome.UNCHANGED
-        }
-
-        val otherLibs = otherToolchainLibs(state, name)
-        val otherLibSymlinks = otherToolchainLibSymlinks(state, name)
-        val otherSymlinks = otherToolchainSymlinks(state, name)
-        val otherBinaries = otherToolchainBinaries(state, name)
-
-        val libs = manifest.optJSONArray("libs")
-        val libNames = if (libs != null) (0 until libs.length()).map { libs.getString(it) } else emptyList()
-        val unsharedLibs = libNames.filter { it !in otherLibs && it !in otherLibSymlinks }
-        val baseAssets: Set<String>? = if (unsharedLibs.isNotEmpty()) {
-            try {
-                context.assets.list("usr/lib")?.toSet()
-            } catch (e: Exception) {
-                Logger.w(tag, "Cannot list base usr/lib assets; keeping all libs: ${e.message}")
-                null
-            }
-        } else {
-            emptySet()
-        }
-        if (requireBaseLibListing && unsharedLibs.isNotEmpty() && baseAssets == null) {
-            Logger.w(tag, "Keeping $name: base usr/lib asset listing unavailable before removal")
-            return RemovalOutcome.UNCHANGED
-        }
-
-        // A copy of one of these files that a dying process cut short left its temporary file
-        // beside it, which no manifest names, so the removal below would never find it.
-        paths.values.mapNotNullTo(HashSet()) { it?.parentFile }.forEach(::sweepStrayTemps)
-        val expectedGone = paths.keys.toMutableSet()
-        var deletedAny = false
-
-        // Delete symlinks from usr/bin/ (use Os.lstat to catch dangling symlinks)
-        val symlinks = manifest.optJSONObject("symlinks")
-        if (symlinks != null) {
-            for (key in symlinks.keys()) {
-                val rel = "usr/bin/$key"
-                if (key in otherSymlinks || rel in otherBinaries) {
-                    expectedGone.remove(rel)
-                    Logger.i(tag, "Keeping symlink $key: another installed toolchain declares it")
-                    continue
-                }
-                val link = paths.getValue(rel)!!
-                val linkExists = try { Os.lstat(link.absolutePath); true } catch (e: Exception) { false }
-                if (linkExists && link.delete()) {
-                    deletedAny = true
-                    Logger.d(tag, "Removed symlink: $key")
-                }
-            }
-        }
-
-        // Delete individual binary files (for toolchains like Ruby that place
-        // binaries directly in usr/bin/ rather than an isolated directory)
-        val binaries = manifest.optJSONArray("binaries")
-        if (binaries != null) {
-            for (i in 0 until binaries.length()) {
-                val binPath = binaries.getString(i)
-                val sharedAsSymlink = binPath.startsWith("usr/bin/") &&
-                    binPath.removePrefix("usr/bin/") in otherSymlinks
-                if (binPath in otherBinaries || sharedAsSymlink) {
-                    expectedGone.remove(binPath)
-                    Logger.i(tag, "Keeping binary $binPath: another installed toolchain declares it")
-                    continue
-                }
-                val binFile = paths.getValue(binPath)!!
-                if (pathExistsNoFollow(binFile) && binFile.delete()) {
-                    deletedAny = true
-                    Logger.d(tag, "Removed binary: $binPath")
-                }
-            }
-        }
-
-        // Delete the toolchain's isolated install root (NOT shared dirs like usr/bin/)
-        val installRoot = manifest.optString("installRoot", "")
-        if (installRoot.isNotEmpty()) {
-            val dir = paths.getValue(installRoot)!!
-            if (pathExistsNoFollow(dir)) {
-                val beforeCount = countEntriesNoFollow(dir)
-                // Link-aware, not File.deleteRecursively, which follows a directory
-                // link: `ln -s ~/projects/mygem/lib/mygem` into Ruby's load path is an
-                // ordinary thing to do, and removing Ruby then emptied the project.
-                val freed = StorageManager.deleteRecursive(dir, context.filesDir.parentFile)
-                if (freed > 0L || countEntriesNoFollow(dir) < beforeCount) {
-                    deletedAny = true
-                    Logger.d(tag, "Deleted install root: $installRoot")
-                }
-            }
-        }
-
-        // Delete what the toolchain put into trees it shares with the base install
-        // and does not own outright. The C/C++ pack is the case: its headers sit in
-        // usr/include and its resource directory in usr/lib/clang, because clang
-        // finds both relative to where it runs, so neither can be an install root.
-        // Each entry is one file, link or directory, named by the pack's build
-        // script, and nothing beside it is touched: a header the user installed
-        // into usr/include next to them survives.
-        for (path in ownedPaths(manifest)) {
-            val rel = path.relativeTo(context.filesDir).path
-            val target = paths.getValue(rel)!!
-            if (pathExistsNoFollow(target)) {
-                val beforeCount = countEntriesNoFollow(target)
-                // For a file, a link and a directory alike, and link-aware for the
-                // reason the install root's delete is.
-                val freed = StorageManager.deleteRecursive(target, context.filesDir.parentFile)
-                if (freed > 0L || countEntriesNoFollow(target) < beforeCount) {
-                    deletedAny = true
-                    Logger.d(tag, "Removed owned path: $rel")
-                }
-            }
-        }
-
-        // Delete library symlinks (versioned sonames)
-        val libSymlinks = manifest.optJSONObject("libSymlinks")
-        if (libSymlinks != null) {
-            for (linkName in libSymlinks.keys()) {
-                val rel = "usr/lib/$linkName"
-                if (linkName in otherLibSymlinks || linkName in otherLibs) {
-                    expectedGone.remove(rel)
-                    Logger.i(tag, "Keeping lib symlink $linkName: another installed toolchain declares it")
-                    continue
-                }
-                val linkFile = paths.getValue(rel)!!
-                val linkExists = try { Os.lstat(linkFile.absolutePath); true } catch (e: Exception) { false }
-                if (linkExists && linkFile.delete()) {
-                    deletedAny = true
-                    Logger.d(tag, "Removed lib symlink: $linkName")
-                }
-            }
-        }
-
-        // Delete libs that were copied to usr/lib/, preserving any library shipped by the base APK
-        // or declared by another installed toolchain.
-        if (libNames.isNotEmpty()) {
-            val baseShipped = baseAssets?.plus(otherLibs)?.plus(otherLibSymlinks)
-            val safeToRemove = toolchainLibsSafeToRemove(libNames, baseShipped)
-            val keep = libNames.toSet() - safeToRemove.toSet()
-            for (libName in keep) {
-                if (baseShipped != null || libName in otherLibs || libName in otherLibSymlinks) {
-                    expectedGone.remove("usr/lib/$libName")
-                }
-                Logger.i(tag, "Keeping $libName: the base install or another toolchain ships it too")
-            }
-            for (libName in safeToRemove) {
-                val lib = paths.getValue("usr/lib/$libName")!!
-                if (pathExistsNoFollow(lib) && lib.delete()) {
-                    deletedAny = true
-                }
-            }
-        }
-        val allGone = expectedGone.all { path -> !pathExistsNoFollow(paths.getValue(path)!!) }
-        return when {
-            allGone -> RemovalOutcome.COMPLETE
-            deletedAny -> RemovalOutcome.PARTIAL
-            else -> RemovalOutcome.UNCHANGED
-        }
-    }
-
-    /** Paths a manifest can remove, before shared-library preservation is applied. */
-    private fun toolchainRemovalPaths(manifest: JSONObject): Set<String> = buildSet {
-        manifest.optString("installRoot", "").takeIf { it.isNotEmpty() }?.let { add(it) }
-        ownedPaths(manifest).forEach { add(it.relativeTo(context.filesDir).path) }
-        manifest.optJSONArray("binaries")?.let { values ->
-            for (i in 0 until values.length()) add(values.getString(i))
-        }
-        manifest.optJSONArray("libs")?.let { values ->
-            for (i in 0 until values.length()) add("usr/lib/${values.getString(i)}")
-        }
-        manifest.optJSONObject("symlinks")?.keys()?.forEach { add("usr/bin/$it") }
-        manifest.optJSONObject("libSymlinks")?.keys()?.forEach { add("usr/lib/$it") }
-    }
-
-    private fun toolchainPathsAreOwned(pending: JSONObject, owner: JSONObject): Boolean {
-        val owned = toolchainRemovalPaths(owner)
-        val trees = ownedPaths(owner).map { it.relativeTo(context.filesDir).path } +
-            listOfNotNull(owner.optString("installRoot", "").takeIf { it.isNotEmpty() })
-        return toolchainRemovalPaths(pending).all { path ->
-            path in owned || trees.any { path.startsWith(it + "/") }
-        }
-    }
-
-    /** Keeps a selected leaf link unlinkable, but refuses redirected parents. */
-    private fun confinedToolchainPath(relative: String): File? = runCatching {
-        val base = context.filesDir.canonicalFile
-        val file = File(base, relative).absoluteFile
-        file.takeIf {
-            it == it.normalize() && it.path.startsWith(base.path + File.separator) &&
-                it.parentFile.canonicalFile == it.parentFile
-        }
-    }.getOrNull()
-
-    /** Whether [relative] is lexically a clean path inside `usr/` with no traversal or leading slash. */
-    private fun isLexicalUsrPath(relative: String): Boolean {
-        if (relative.isEmpty() || relative.startsWith("/")) return false
-        val parts = relative.split('/')
-        return parts.size >= 2 && parts[0] == "usr" && parts.none { it.isEmpty() || it == "." || it == ".." }
-    }
-
-    /** Whether [name] is a single safe entry name with no path separators or traversal segments. */
-    private fun isSinglePathSegment(name: String): Boolean =
-        name.isNotEmpty() && name != "." && name != ".." && '/' !in name && '\\' !in name
-
-    /** Resolves [relative] strictly under `filesDir/usr/`, refusing traversal and symlinked ancestors. */
-    private fun confinedUsrPath(relative: String): File? =
-        if (isLexicalUsrPath(relative)) confinedToolchainPath(relative) else null
-
-    /** Confirms a link target stays under `filesDir/usr/`, including when the target itself is a link. */
-    private fun isConfinedUsrTarget(relative: String): Boolean {
-        val resolved = confinedUsrPath(relative) ?: return false
-        val usrRoot = runCatching { File(context.filesDir.canonicalFile, "usr") }.getOrNull() ?: return false
-        if (Files.isSymbolicLink(resolved.toPath()) || resolved.exists()) {
-            val canonical = runCatching { resolved.canonicalFile }.getOrNull() ?: return false
-            if (!canonical.path.startsWith(usrRoot.path + File.separator)) return false
-        }
-        return true
-    }
+    private fun markPackReleasePending(packName: String): Long = uninstaller.markPackReleasePending(packName)
 
     // -- Asset pack state handling --
 
@@ -1511,27 +448,13 @@ class ToolchainManager(private val context: Context) {
 
         Logger.d(tag, "Pack $packName: status=$status, $downloaded/$totalBytes ($percent%)")
 
-        // Don't fire onStateChange for COMPLETED here; the real COMPLETED fires
-        // at the end of installFromDirectoryHoldingPack(), once the copy is done
-        // and the record is written.
-        // Firing it twice would cause downloadNext() to be called twice, skipping packs.
-        //
-        // FAILED is held back for a different reason: report() has no way to say
-        // why, and this is the only place that knows. It is emitted below through
-        // fail() instead, still exactly once and still carrying FAILED, which is
-        // what keeps isTerminalPackStatus moving the first-run queue past it. A
-        // pack that stops emitting FAILED strands every pack queued behind it.
         if (status != AssetPackStatus.COMPLETED && status != AssetPackStatus.FAILED) {
             report(packName, status, percent)
         }
 
-        // Not enumerated, and the else arm below is why. Play Core adds statuses,
-        // and a `when` naming all of today's would keep compiling while silently
-        // ignoring a new one; the else arm reports whatever arrives instead.
         @SuppressLint("SwitchIntDef")
         when (status) {
             AssetPackStatus.COMPLETED -> {
-                // Heavy I/O: copy files, chmod, symlinks. Run off main thread
                 ioExecutor.execute {
                     try {
                         val location = assetPackManager.getPackLocation(packName)
@@ -1554,43 +477,15 @@ class ToolchainManager(private val context: Context) {
                 fail(packName, toolchainFailureFor(code))
             }
             AssetPackStatus.REQUIRES_USER_CONFIRMATION -> {
-                // Downloads exceeding 200MB or Play-determined thresholds need user
-                // confirmation via a system dialog. We need an Activity reference for
-                // this; for now, log and report the state so the UI can prompt the user.
                 Logger.w(tag, "Pack $packName requires user confirmation")
             }
             else -> { /* DOWNLOADING, PENDING, WAITING_FOR_WIFI, etc., just report progress */ }
         }
     }
 
-    /**
-     * Copies a pack Play has delivered into `usr/`, then hands Play's copy back.
-     *
-     * One method rather than the same sequence at each site, because two now reach it:
-     * the COMPLETED callback, and [reconcileDeliveredPacks] at launch. Both have to
-     * apply the same pre-flight and neither may forget the release, and the way the
-     * second site came to exist is that the first was the only one.
-     *
-     * The pre-flight is the one [downloadViaHttp] does, with a smaller figure.
-     * `installFromDirectory` copies the whole tree, and without this the copy fails
-     * partway on a full device: an IOException reported as INTERNAL, and half a
-     * toolchain left in `usr/` under no manifest, which is what made every retry start
-     * from less space than the last.
-     */
     private fun installDeliveredPack(packName: String, assetsDir: File) {
-        // [packUnpackedBytes], not `ToolchainRegistry.find(...)?.estimatedSize ?: 0L`.
-        // A retired pack answers null from the registry -- that pass-through is
-        // deliberate and keeps uninstalling one working -- and the elvis then made the
-        // whole reservation the 50 MB buffer. A gate that asks for 50 MB before copying
-        // 185 MB, which is what Java 25 unpacks to today, is worse than no gate: it
-        // passes exactly the devices it exists to refuse, and reports success while
-        // doing it. That figure moves with the JDK, so re-measure it rather than
-        // trusting it here: `du -sk android/toolchain_java/src/main/assets/usr`.
         val unpacked = packUnpackedBytes(packName)
         if (unpacked == null) {
-            // Unknown size, so there is no honest reservation to make. Said out loud
-            // rather than gated on a guess, because a wrong figure here is
-            // indistinguishable from a check that ran.
             Logger.w(
                 tag,
                 "No recorded size for $packName, so the space pre-flight is skipped; " +
@@ -1599,7 +494,7 @@ class ToolchainManager(private val context: Context) {
         } else {
             val space = toolchainCopySpace(File(assetsDir, "usr"), File(context.filesDir, "usr"))
             val required = toolchainCopyBytes(unpacked, space)
-            val available = freeBytesFor(required)
+            val available = httpDownloader.freeBytesFor(required)
             if (available < required) {
                 Logger.e(
                     tag,
@@ -1607,115 +502,37 @@ class ToolchainManager(private val context: Context) {
                         "${available / 1_000_000} MB available, " +
                         "${required / 1_000_000} MB required",
                 )
-                // Play's copy is deliberately KEPT here, and an earlier version of
-                // this branch released it on the reasoning that a refused install has
-                // no use for it. That reasoning was wrong twice over.
-                //
-                // Play delivers into `filesDir/assetpacks`, verified from
-                // asset-delivery 2.2.2's bytecode: `bh` builds
-                // `new File(context.getFilesDir(), "assetpacks")`. So the pack sits on
-                // the very filesystem `StatFs(filesDir)` above just measured. Deleting
-                // it frees `unpacked` bytes and the retry re-downloads and re-extracts
-                // `unpacked` bytes into the same directory, arriving back at the free
-                // space that failed the gate. The delete buys the next attempt nothing
-                // and charges it a full download, 55 MB for Java 17 as it was then.
-                //
-                // Keeping it is also what makes the repair work. The user frees space,
-                // and the next launch's [reconcileDeliveredPacks] finds this same
-                // delivered pack still in place and installs it with no download at
-                // all. Releasing it here would remove the one thing that path needs.
                 fail(packName, ToolchainFailure.STORAGE)
                 return
             }
         }
-        // False covers two situations, and `removePack` is wrong for both.
-        //
-        // Another install of this pack may be copying out of `assetsDir` at this
-        // moment, and `removePack` is a real recursive delete of that directory:
-        // releasing it would pull the source out from under the reader, which is
-        // the hazard [cancel] documents from the other direction. The install
-        // that holds the pack releases it when it is done with it.
-        //
-        // Or this install copied the tree and could not write the record. That
-        // is the space refusal above arriving one step later, and the same
-        // reasoning governs it: the user frees space, relaunches, and
-        // [reconcileDeliveredPacks] finishes the install from a delivery still in
-        // place. Deleting it here charged them the whole download again for a
-        // failure that had already done all the work.
         if (installFromDirectory(packName, assetsDir)) {
             releasePack(packName)
         }
     }
 
     /**
-     * Finishes any Play delivery that completed while nothing was listening for it.
-     *
-     * Listeners follow live requests. A process death can still leave an unconsumed
-     * delivery, so startup reconciles it without depending on a repeated callback.
-     * A pending marker also keeps an interrupted reinstall retryable over its old record.
-     *
-     * The second job is the same repair for the other outcome. A pack Play still
-     * holds for a toolchain the record already calls installed is a delivery that
-     * was consumed and never handed back, because `removePack` is asynchronous and
-     * a process that goes away between the copy and the delete leaves it in place.
-     * Nothing here measures it: both space pre-flights read free bytes, and the
-     * pack is a whole toolchain of them. So it is released rather than passed over.
-     *
-     * Play installs only. On the HTTP path there is no pack to ask about, and
-     * `getPackLocation` on an install Play does not recognise is a question with no
-     * meaning rather than a cheap no.
+     * Finishes any Play delivery that completed while nothing was listening for it,
+     * and reclaims delivered packs for already-installed, uninstalled, or retired toolchains.
      */
     fun reconcileDeliveredPacks() {
         ioExecutor.execute {
-            // Inside the executor, not before it. `shouldUseHttpFallback` asks the
-            // package manager who installed this app, which is a synchronous binder
-            // call, and the one caller is `SplashActivity.onCreate` on the main
-            // thread. Every other launch repair hands its work off for the same
-            // reason; this one used to do its first piece of work before it did.
             if (shouldUseHttpFallback()) return@execute
             try {
-                // Read once, and nothing in the loop invalidates it: each pack is
-                // visited at most once, so an install performed here can only affect
-                // an entry already passed. Re-reading per pack would be equally
-                // correct and would cost a file parse per toolchain.
                 val installed = getInstalledToolchains()
                 ToolchainRegistry.available.forEach { info ->
-                    // Per pack, not around the loop. `installDeliveredPack`
-                    // reaches `JSONObject(...)` on a malformed manifest and
-                    // `copyDirectoryTree` on a directory it cannot list or a
-                    // disk that fills up, and either throw used to unwind out
-                    // of the whole `forEach`. Ruby is first in the registry, so
-                    // one throw on Ruby meant Java's delivery was never examined
-                    // -- neither installed if it was outstanding, nor reclaimed
-                    // if it was a whole toolchain of duplicate storage. Every
-                    // later launch repeated exactly that, so the reclaim that
-                    // could have made room for Ruby was the thing Ruby's failure
-                    // prevented. The pack is named here; the outer catch below
-                    // could only name the exception.
                     try {
                         reconcileOnePack(info, installed)
                     } catch (e: Exception) {
-                        Logger.w(
-                            tag,
-                            "Could not reconcile ${info.packName}: ${e.message}",
-                        )
+                        Logger.w(tag, "Could not reconcile ${info.packName}: ${e.message}")
                     }
                 }
-                // The packs this build no longer offers, asked about the same
-                // way. [removeRetiredToolchainsSync] reads the install record
-                // and deletes the copy under `usr/`; it never asks Play, so a
-                // delivery a process death left in `filesDir/assetpacks` before
-                // its removal ran outlived the withdrawal: 179 MB for Go,
-                // counted by no pre-flight and offered for removal by no
-                // screen. Released outright rather than installed. Nothing can
-                // be reading the directory, because [install] refuses a name
-                // the registry does not know.
                 RETIRED_TOOLCHAINS.keys.forEach { name ->
                     val packName = "toolchain_$name"
                     try {
                         val genBefore = synchronized(packOperationLock) { packReleaseGenerations[packName] }
                         if (assetPackManager.getPackLocation(packName) == null) {
-                            clearPackReleaseMarkerIfUnchanged(packName, genBefore)
+                            uninstaller.clearPackReleaseMarkerIfUnchanged(packName, genBefore)
                             return@forEach
                         }
                         Logger.i(tag, "Reclaiming a delivered pack for a retired toolchain: $packName")
@@ -1730,59 +547,10 @@ class ToolchainManager(private val context: Context) {
         }
     }
 
-    /** Clears a release marker when Play reported no delivered pack and no newer event intervened. */
-    private fun clearPackReleaseMarkerIfUnchanged(packName: String, expectedGeneration: Long?) {
-        synchronized(packOperationLock) {
-            if (packName in installsInFlight || packName in packRemovalsInFlight) return
-            if (packReleaseGenerations[packName] != expectedGeneration) return
-            val marker = packReleaseMarker(packName) ?: return
-            if (marker.exists() || Files.isSymbolicLink(marker.toPath())) {
-                marker.delete()
-            }
-        }
-    }
-
-    /**
-     * Atomically checks for a pending-release marker and, if present, claims the pack for removal
-     * under [packOperationLock]. Returns true when reconciliation must not install the delivery.
-     */
-    private fun releasePackIfPending(packName: String): Boolean {
-        val generationToRelease: Long? = synchronized(packOperationLock) {
-            val marker = packReleaseMarker(packName)
-            val pending = marker != null && (marker.exists() || Files.isSymbolicLink(marker.toPath()))
-            if (!pending) return false
-            if (packName in installsInFlight || packName in packRemovalsInFlight) return true
-            packRemovalsInFlight.add(packName)
-            packReleaseGenerations[packName] ?: nextPackReleaseGeneration.incrementAndGet().also {
-                packReleaseGenerations[packName] = it
-            }
-        }
-        if (generationToRelease != null) {
-            Logger.i(
-                tag,
-                "Reclaiming a delivered pack for an uninstalled toolchain: " +
-                    packName,
-            )
-            startRemovePack(packName, generationToRelease)
-        }
-        return true
-    }
-
-    /**
-     * One pack's half of [reconcileDeliveredPacks], so a failure can be contained
-     * to the pack it belongs to.
-     *
-     * @param installed what `toolchains.json` named when the pass began
-     */
     private fun reconcileOnePack(
         info: ToolchainRegistry.ToolchainInfo,
         installed: List<String>,
     ) {
-        // Play is asked first, and the record second. The order is the
-        // whole of the repair below: asking the record first meant an
-        // installed toolchain was never asked about, so a delivered pack
-        // whose removal did not happen was passed over on every launch
-        // for the life of the install.
         val generationBefore = synchronized(packOperationLock) { packReleaseGenerations[info.packName] }
         val location = try {
             assetPackManager.getPackLocation(info.packName)
@@ -1791,56 +559,31 @@ class ToolchainManager(private val context: Context) {
             return
         }
         if (location == null) {
-            clearPackReleaseMarkerIfUnchanged(info.packName, generationBefore)
+            uninstaller.clearPackReleaseMarkerIfUnchanged(info.packName, generationBefore)
             return
         }
         if (info.packName.removePrefix("toolchain_") in installed && !installIsPending(info.packName)) {
-            // The toolchain is already in `usr/`, so this delivery has
-            // nothing left to give and is pure duplicate storage. It
-            // reaches here when the release that should have followed the
-            // install did not complete: `removePack` is asynchronous, and
-            // the process can go away between the copy and the delete.
-            //
-            // Skipped while an install holds the pack, for the reason
-            // [installDeliveredPack] gives: `removePack` is a recursive
-            // delete of the directory that install is reading. A record
-            // written by an earlier install of the same toolchain makes
-            // that pair reachable.
             if (info.packName in installsInFlight) return
-            Logger.i(
-                tag,
-                "Reclaiming a delivered pack for an installed toolchain: " +
-                    info.packName,
-            )
+            Logger.i(tag, "Reclaiming a delivered pack for an installed toolchain: ${info.packName}")
             releasePack(info.packName)
             return
         }
-        if (releasePackIfPending(info.packName)) {
+        if (uninstaller.releasePackIfPending(info.packName)) {
             return
         }
         val assetsPath = location.assetsPath() ?: return
-        Logger.i(
-            tag,
-            "Finishing a delivery nothing was listening for: ${info.packName}",
-        )
+        Logger.i(tag, "Finishing a delivery nothing was listening for: ${info.packName}")
         installDeliveredPack(info.packName, File(assetsPath))
     }
 
-    /**
-     * Takes the claim on [packName], or answers false when it cannot be had.
-     *
-     * [readsDeliveredPack] is whether the work reads Play's copy of the pack, which is what
-     * a delete in flight forbids: an install copies out of that directory and has to wait
-     * for Play to finish removing it. A removal and the reclaim of an interrupted install
-     * touch only `usr/` and the install record, so a delete of Play's copy is none of their
-     * business, and refusing them for it cost the user a Remove that did nothing for as
-     * long as Play took.
-     */
     private fun claimPack(packName: String, readsDeliveredPack: Boolean = true): Boolean =
         synchronized(packOperationLock) {
             (!readsDeliveredPack || packName !in packRemovalsInFlight) &&
                 installsInFlight.add(packName)
         }
+
+    internal fun claimPackInternal(packName: String, readsDeliveredPack: Boolean = true): Boolean =
+        claimPack(packName, readsDeliveredPack)
 
     private fun releasePackClaim(packName: String) {
         val pendingRelease = synchronized(packOperationLock) {
@@ -1850,19 +593,8 @@ class ToolchainManager(private val context: Context) {
         pendingRelease?.invoke()
     }
 
-    /**
-     * Hands Play's copy of [packName] back.
-     *
-     * Play writes the pack into `filesDir/assetpacks` and keeps it until asked, so
-     * each route that is done with a delivery ends here: an install that wrote its
-     * record, a cancel, an uninstall, and the launch-time reclaim in [reconcileDeliveredPacks]. A
-     * refused install is deliberately not one of them; [installDeliveredPack] says
-     * why.
-     *
-     * Guarded, because this now runs on a failure path. `removePack` is a Play Core
-     * call and the HTTP delivery path never registered one; an exception here must not
-     * replace the failure the caller is on its way to report.
-     */
+    internal fun releasePackClaimInternal(packName: String) = releasePackClaim(packName)
+
     private fun releasePack(packName: String, expectedGeneration: Long? = null) {
         val releaseGeneration = synchronized(packOperationLock) {
             if (expectedGeneration != null && packReleaseGenerations[packName] != expectedGeneration) return
@@ -1872,7 +604,6 @@ class ToolchainManager(private val context: Context) {
                 pendingPackReleases[packName] = { releasePack(packName, deferredGeneration) }
                 return
             }
-            // Keep new readers out until Play finishes the asynchronous delete.
             packRemovalsInFlight.add(packName)
             packReleaseGenerations[packName] ?: nextPackReleaseGeneration.incrementAndGet().also {
                 packReleaseGenerations[packName] = it
@@ -1881,11 +612,9 @@ class ToolchainManager(private val context: Context) {
         startRemovePack(packName, releaseGeneration)
     }
 
-    /**
-     * Issues Play's asynchronous `removePack` for a pack already entered in [packRemovalsInFlight]
-     * under [releaseGeneration], clearing its pending-release marker synchronously on completion
-     * only when removal succeeded and no newer uninstall or install superseded [releaseGeneration].
-     */
+    internal fun releasePackInternal(packName: String, expectedGeneration: Long? = null) =
+        releasePack(packName, expectedGeneration)
+
     private fun startRemovePack(packName: String, releaseGeneration: Long) {
         try {
             assetPackManager.removePack(packName)
@@ -1905,7 +634,7 @@ class ToolchainManager(private val context: Context) {
                     synchronized(packOperationLock) {
                         packRemovalsInFlight.remove(packName)
                         if (succeeded && packReleaseGenerations[packName] == releaseGeneration) {
-                            val marker = packReleaseMarker(packName)
+                            val marker = uninstaller.packReleaseMarker(packName)
                             if (marker != null && (marker.exists() || Files.isSymbolicLink(marker.toPath()))) {
                                 marker.delete()
                             }
@@ -1918,43 +647,14 @@ class ToolchainManager(private val context: Context) {
         }
     }
 
-    // -- File operations --
+    internal fun startRemovePackInternal(packName: String, releaseGeneration: Long) =
+        startRemovePack(packName, releaseGeneration)
 
-    /**
-     * Copies a pack into the shared `usr/` tree, unless another install of the
-     * same pack is already doing exactly that.
-     *
-     * The claim is taken here rather than at either entry point because this is
-     * where the two of them meet: [installDeliveredPack] arrives from Play, the
-     * background task in [downloadViaHttp] arrives from a release ZIP, and the
-     * copy below is the part they share. One claim site is also what keeps a
-     * single install from claiming twice.
-     *
-     * A decliner touches nothing the install that holds the claim owns: it does
-     * not release the pack, does not delete a staging directory, and does not
-     * write the record. The staging directory is per download already
-     * ([toolchainTempDir]), so the HTTP path's own cleanup stays correct without
-     * knowing about any of this; the Play pack is not, which is why the return
-     * value exists.
-     *
-     * @return whether Play's delivered copy may now be handed back. That is the
-     *   question [installDeliveredPack] is asking, and answering "did this call
-     *   own the claim" instead lost the one case where the two differ. False
-     *   covers a decline, because `removePack` is a real recursive delete of the
-     *   very directory the other install is copying out of, and it now also
-     *   covers a record that could not be written: freeing space and relaunching
-     *   is the repair for that, and [reconcileDeliveredPacks] can only perform it
-     *   while the delivery is still there. The HTTP path ignores the answer, and
-     *   correctly: its staging directory belongs to one download.
-     */
+    // -- File installation (shared between Play Asset Delivery and HTTP fallback) --
+
     private fun installFromDirectory(packName: String, assetsDir: File): Boolean =
         installFromDirectory(packName, assetsDir, readsDeliveredPack = true)
 
-    /**
-     * [readsDeliveredPack] is false for the HTTP path, whose [assetsDir] is its own staging
-     * tree. Claimed as a reader of Play's copy it was refused for as long as a
-     * [releasePack] of that pack was in flight, over a directory it never opens.
-     */
     private fun installFromDirectory(
         packName: String,
         assetsDir: File,
@@ -1969,29 +669,6 @@ class ToolchainManager(private val context: Context) {
     ): Boolean {
         if (!claimPack(packName, readsDeliveredPack)) {
             Logger.i(tag, "Another install already holds $packName; leaving it to that one")
-            // Neither COMPLETED nor FAILED, because both would be untrue in a way
-            // something acts on. COMPLETED is the word this class uses for "the
-            // record is written and the toolchain is usable", which this call did
-            // not do and cannot promise the other one will. FAILED carries a
-            // reason the user is asked to act on, and there is nothing here for
-            // them to act on.
-            //
-            // Reported at all, rather than returning in silence, because the
-            // first-run queue advances on reported state and `isTerminalPackStatus`
-            // counts anything outside the five in-progress statuses as finished.
-            // A silent return would leave that queue waiting on a pack that this
-            // manager has stopped working on, with every pack behind it.
-            //
-            // UNKNOWN and specifically NOT the neighbouring NOT_INSTALLED, which
-            // reads as terminal just as well and is wrong for a different reason.
-            // That one is this class's word for a completed uninstall, written at
-            // the end of `uninstallSync`, and `ToolchainCardState.updateState`
-            // reads it as exactly that and drops the pack from its installed set.
-            // The rotation this claim exists for is where that bites: the manager
-            // still holding the claim belongs to the destroyed Activity, so its
-            // COMPLETED reaches nothing, while this decline reaches the live card
-            // and would leave it offering Install for a toolchain that is on its
-            // way in. UNKNOWN carries no such meaning to any reader here.
             if (readsDeliveredPack) synchronized(this) { playRequests.remove(packName) }
             report(packName, AssetPackStatus.UNKNOWN, 0, transferId)
             return false
@@ -1999,66 +676,26 @@ class ToolchainManager(private val context: Context) {
         return try {
             installFromDirectoryHoldingPack(packName, assetsDir, transferId)
         } finally {
-            // In a finally rather than at each exit: the body reports FAILED and
-            // returns from four places and throws from more, and a claim dropped
-            // on only the path its author had in mind is never released at all,
-            // which would refuse every later install of that pack for the life
-            // of the process.
             releasePackClaim(packName)
-            // The claim only, and the marker deliberately not beside it. The two
-            // lifetimes look identical and are not: a claim lives in this process
-            // and keeps two installs of one pack apart, while a marker is the
-            // durable note of a tree being written and is meant to outlive the
-            // process.
-            //
-            // Removed here it was keyed on the pack alone, so it came off on exits
-            // this call had no part in. A delivery with no manifest takes the
-            // claim, reports CORRUPT and returns without writing a byte, and took
-            // an EARLIER interrupted install's marker with it; that marker is the
-            // last thing on disk naming its tree, so those ~180 MB stopped being
-            // reclaimable at all. It also came off on a throw partway through the
-            // copy, which is the one event the marker exists for.
-            //
-            // Each exit in the body that has written the record or settled its own
-            // tree now drops its own marker, and nothing else does.
         }
     }
 
+    internal fun installFromStaging(packName: String, extractDir: File, transferId: Long?): Boolean =
+        installFromDirectory(packName, extractDir, readsDeliveredPack = false, transferId = transferId)
+
     /**
      * The install itself, with the pack already claimed by the caller.
-     *
-     * @return whether the delivery has nothing left to give. True for a finished
-     *   install and true for a `CORRUPT` refusal, which a retry has to
-     *   re-download anyway. False for an entry in the pack's way, which the person
-     *   clears before a retry from the same delivery (for a reinstall, only until
-     *   the next launch hands that delivery back: the record names the toolchain
-     *   and no marker is written), and false for the copy
-     *   failing and for the record write failing, which are the same event a step
-     *   apart: a full disk during or at the end of a copy. The user frees space,
-     *   and the next launch's [reconcileDeliveredPacks] finishes the install from
-     *   the delivery still in
-     *   place, with no download at all. That is the same reasoning the space
-     *   refusal in [installDeliveredPack] already states, applied to the two
-     *   outcomes that reach the user as "free some space and try again".
+     * Flushes writes to media before recording completion in `toolchains.json`.
      */
     private fun installFromDirectoryHoldingPack(
         packName: String,
         assetsDir: File,
         transferId: Long?,
     ): Boolean {
-        // Both of these report FAILED before returning, and that is load-bearing
-        // rather than tidy. Every other way out of this function ends in a state
-        // being reported -- success at the end, and the caller's catch on a throw
-        // -- but a plain return reported nothing, and the first-run queue is
-        // driven entirely by those reports. A pack whose manifest was missing or
-        // malformed therefore stalled setup on the progress screen instead of
-        // being skipped, which is a far worse outcome than one absent toolchain.
         val manifestFile = File(assetsDir, "$packName.json")
         if (!manifestFile.exists()) {
             Logger.e(tag, "No $packName.json in asset pack $packName")
             fail(packName, ToolchainFailure.CORRUPT, transferId)
-            // Released: a delivery with no manifest in it is not something a
-            // later launch can finish, and a retry has to fetch it again.
             return true
         }
 
@@ -2082,7 +719,7 @@ class ToolchainManager(private val context: Context) {
                 fail(packName, ToolchainFailure.CORRUPT, transferId)
                 return true
             }
-            if (confinedUsrPath(installRoot) == null) {
+            if (confinedUsrPath(context.filesDir, installRoot) == null) {
                 Logger.e(tag, "Refusing installRoot with redirected ancestor in $packName: ${redactToken(installRoot)}")
                 fail(packName, ToolchainFailure.INTERNAL, transferId)
                 return false
@@ -2097,7 +734,7 @@ class ToolchainManager(private val context: Context) {
                     fail(packName, ToolchainFailure.CORRUPT, transferId)
                     return true
                 }
-                if (confinedUsrPath("usr/lib/$libName") == null) {
+                if (confinedUsrPath(context.filesDir, "usr/lib/$libName") == null) {
                     Logger.e(tag, "Refusing lib entry with redirected ancestor in $packName: ${redactToken(libName)}")
                     fail(packName, ToolchainFailure.INTERNAL, transferId)
                     return false
@@ -2113,7 +750,7 @@ class ToolchainManager(private val context: Context) {
                     fail(packName, ToolchainFailure.CORRUPT, transferId)
                     return true
                 }
-                if (confinedUsrPath(path) == null) {
+                if (confinedUsrPath(context.filesDir, path) == null) {
                     Logger.e(tag, "Refusing binary path with redirected ancestor in $packName: ${redactToken(path)}")
                     fail(packName, ToolchainFailure.INTERNAL, transferId)
                     return false
@@ -2134,7 +771,9 @@ class ToolchainManager(private val context: Context) {
                     fail(packName, ToolchainFailure.CORRUPT, transferId)
                     return true
                 }
-                if (confinedUsrPath("usr/bin/$linkName") == null || !isConfinedUsrTarget(target)) {
+                if (confinedUsrPath(context.filesDir, "usr/bin/$linkName") == null ||
+                    !isConfinedUsrTarget(context.filesDir, target)
+                ) {
                     Logger.e(tag, "Refusing symlink with redirected ancestor in $packName: ${redactToken(linkName)}")
                     fail(packName, ToolchainFailure.INTERNAL, transferId)
                     return false
@@ -2150,47 +789,33 @@ class ToolchainManager(private val context: Context) {
                     fail(packName, ToolchainFailure.CORRUPT, transferId)
                     return true
                 }
-                if (confinedUsrPath("usr/lib/$linkName") == null || !isConfinedUsrTarget("usr/lib/$targetName")) {
+                if (confinedUsrPath(context.filesDir, "usr/lib/$linkName") == null ||
+                    !isConfinedUsrTarget(context.filesDir, "usr/lib/$targetName")
+                ) {
                     Logger.e(tag, "Refusing lib symlink with redirected ancestor in $packName: ${redactToken(linkName)}")
                     fail(packName, ToolchainFailure.INTERNAL, transferId)
                     return false
                 }
             }
         }
-        // Before the marker and before an earlier install's files are settled, so an install refused for this changes
-        // nothing on disk ([firstPathInTheWay]). INTERNAL rather than STORAGE: freeing space does not move a folder out
-        // of the way, and the log names the path. On the Play path its copy is kept, as for the refusals below: a
-        // Retry in this process once the path is cleared installs from it, and so does the next launch for a first
-        // install. For a reinstall the next launch hands it back instead, since the record names the toolchain and no
-        // marker says an install is pending, so a later Retry fetches the pack again.
         firstPathInTheWay(usrSrc, File(context.filesDir, "usr"))?.let { blocked ->
             Logger.e(tag, "Not installing $packName: ${blocked.message}")
             fail(packName, ToolchainFailure.INTERNAL, transferId)
             return false
         }
-        // Written before a single byte is copied, because that ordering is the
-        // whole of it: this is the only durable record of where the copy is about
-        // to write, and the record that normally names it is written last. Moved
-        // after the copy, or after the record, it would say nothing the record
-        // does not already say, and would leave a kill during the copy exactly as
-        // unrecoverable as it was.
-        //
-        // The marker must land before any payload changes, so every interrupted copy
-        // remains distinguishable from the installed record it may be replacing.
         synchronized(stateLock) {
             if (readableState() == null) {
                 failUnreadableRecord(packName, transferId)
                 return false
             }
-            val previousMarker = installMarker(packName)
+            val previousMarker = installMarkerFile(packName)
             if (previousMarker.exists() || Files.isSymbolicLink(previousMarker.toPath())) {
                 val previous = runCatching { JSONObject(previousMarker.readText()) }.getOrNull()
                 if (previous == null || previous.optString("name") != name ||
-                    !toolchainPathsAreOwned(previous, manifest) && !reclaimPartialCopy(name, previous, reclaimSameRootOrphans = true)
+                    !uninstaller.toolchainPathsAreOwned(previous, manifest) &&
+                    !uninstaller.reclaimPartialCopy(name, previous, reclaimSameRootOrphans = true)
                 ) {
                     Logger.w(tag, "Keeping the previous install record for $packName until its files are settled")
-                    // Not a lack of room: an unreadable marker, one of another toolchain, or files it names that
-                    // could not be removed. Freeing space changes none of them, so the person is pointed at the log.
                     fail(packName, ToolchainFailure.INTERNAL, transferId)
                     return false
                 }
@@ -2198,56 +823,35 @@ class ToolchainManager(private val context: Context) {
         }
         installMarkerDir.mkdirs()
         manifest.put(KEY_INSTALL_ID, UUID.randomUUID().toString())
-        if (!writeAtomically(installMarker(packName)) { it.write(manifest.toString().toByteArray()) }) {
+        if (!writeAtomically(installMarkerFile(packName)) { it.write(manifest.toString().toByteArray()) }) {
             Logger.e(tag, "Could not record the pending install of $packName; leaving its files unchanged")
             fail(packName, ToolchainFailure.STORAGE, transferId)
             return false
         }
         Logger.i(tag, "Installing toolchain: $name (from $packName)")
 
-        // Copy all files from usr/ to filesDir/usr/
         try {
-            copyDirectoryRecursively(usrSrc, File(context.filesDir, "usr"))
+            copyDirectoryTree(usrSrc, File(context.filesDir, "usr"))
         } catch (e: IOException) {
-            // Caught here, where the two delivery paths meet, because
-            // neither of them could name this event afterwards. Left to
-            // unwind, the exception reached `catch (e: IOException)` in
-            // downloadViaHttp and was reported as NETWORK -- "Download
-            // failed. Check your connection and try again." for a disk that
-            // filled up after the download succeeded -- and on the Play path
-            // it reached `catch (e: Exception)` and was reported as INTERNAL,
-            // which asks the user to read a log. STORAGE is the remedy that
-            // fits both causes this can have: ENOSPC partway through the
-            // write, and a directory that cannot be listed, which
-            // `copyDirectoryTree` refuses rather than treating as empty. An
-            // entry that came into the pack's way after [firstPathInTheWay]
-            // looked is the one exception, and gets that check's answer.
             Logger.e(tag, "Could not copy $packName into usr/", e)
-            if (reclaimPartialCopy(name, manifest)) installMarker(packName).delete()
+            if (uninstaller.reclaimPartialCopy(name, manifest)) installMarkerFile(packName).delete()
             fail(packName, if (e is PathOccupied) ToolchainFailure.INTERNAL else ToolchainFailure.STORAGE, transferId)
-            // Play's copy is KEPT, exactly as for the record write below:
-            // freeing space and relaunching finishes this install from the
-            // delivery, with no download.
             return false
         }
 
         val binariesConfined = binaries == null || (0 until binaries.length()).all { i ->
-            val binFile = confinedUsrPath(binaries.getString(i))
+            val binFile = confinedUsrPath(context.filesDir, binaries.getString(i))
             binFile != null && !Files.isSymbolicLink(binFile.toPath())
         }
         if (!binariesConfined) {
             Logger.e(tag, "Refusing $packName: binary path escaped usr/ during install")
-            if (reclaimPartialCopy(name, manifest)) installMarker(packName).delete()
+            if (uninstaller.reclaimPartialCopy(name, manifest)) installMarkerFile(packName).delete()
             fail(packName, ToolchainFailure.INTERNAL, transferId)
             return false
         }
 
-        // chmod +x on the binaries the manifest names. Whether every one of them
-        // took the bit decides the repair marker written with the record below.
         val execBitsSet = applyManifestExecBits(manifest)
 
-        // Create symlinks in usr/bin/. A refused link sets what the failure reports: storage only while
-        // every refused link was refused for room, so one refused for anything else makes it INTERNAL.
         var failedLink: ToolchainFailure? = null
         val symlinks = manifest.optJSONObject("symlinks")
         if (symlinks != null) {
@@ -2255,7 +859,10 @@ class ToolchainManager(private val context: Context) {
             binDir.mkdirs()
             for (linkName in symlinks.keys()) {
                 val target = symlinks.getString(linkName)
-                if (!isSinglePathSegment(linkName) || confinedUsrPath("usr/bin/$linkName") == null || !isConfinedUsrTarget(target)) {
+                if (!isSinglePathSegment(linkName) ||
+                    confinedUsrPath(context.filesDir, "usr/bin/$linkName") == null ||
+                    !isConfinedUsrTarget(context.filesDir, target)
+                ) {
                     failedLink = ToolchainFailure.INTERNAL
                     Logger.w(tag, "Refusing symlink outside usr/: ${redactToken(linkName)} -> ${redactToken(target)}")
                     continue
@@ -2263,7 +870,6 @@ class ToolchainManager(private val context: Context) {
                 val targetAbsolute = "$filesDir/$target"
                 val linkFile = File(binDir, linkName)
 
-                // Remove existing link if stale
                 val linkExists = try { Os.lstat(linkFile.absolutePath); true } catch (e: Exception) { false }
                 if (linkExists) {
                     linkFile.delete()
@@ -2279,14 +885,15 @@ class ToolchainManager(private val context: Context) {
             }
         }
 
-        // Create library symlinks (versioned sonames like libruby.so.4.0 -> libruby.so)
-        // Android assets can't contain symlinks, so versioned sonames are created at install time.
         val libSymlinks = manifest.optJSONObject("libSymlinks")
         if (libSymlinks != null) {
             val libDir = File(context.filesDir, "usr/lib")
             for (linkName in libSymlinks.keys()) {
                 val targetName = libSymlinks.getString(linkName)
-                if (!isSinglePathSegment(linkName) || confinedUsrPath("usr/lib/$linkName") == null || !isConfinedUsrTarget("usr/lib/$targetName")) {
+                if (!isSinglePathSegment(linkName) ||
+                    confinedUsrPath(context.filesDir, "usr/lib/$linkName") == null ||
+                    !isConfinedUsrTarget(context.filesDir, "usr/lib/$targetName")
+                ) {
                     failedLink = ToolchainFailure.INTERNAL
                     Logger.w(tag, "Refusing lib symlink outside usr/: ${redactToken(linkName)} -> ${redactToken(targetName)}")
                     continue
@@ -2307,33 +914,12 @@ class ToolchainManager(private val context: Context) {
             }
         }
         failedLink?.let { why ->
-            // A tree without its links does not run, and recorded as installed nothing would look at it
-            // again: the card would read Installed with only Remove offered. So it is reclaimed, as a copy
-            // that cannot finish is, and the install is tried again; what the person is told follows the
-            // errno ([linkFailure]).
             Logger.e(tag, "Could not link $packName into usr/")
-            if (reclaimPartialCopy(name, manifest)) installMarker(packName).delete()
+            if (uninstaller.reclaimPartialCopy(name, manifest)) installMarkerFile(packName).delete()
             fail(packName, why, transferId)
             return false
         }
 
-        // Persist state. Read, mutate and write are one unit: on its own, each
-        // is safe, and interleaved with another instance's cycle the write puts
-        // back an array that predates whatever the other one added.
-        //
-        // Only this tail is held, not the copy above it. The copy moves up to
-        // 180 MB and holds nothing anyone else needs; the record is four lines
-        // and is what everything else reads.
-        //
-        // Flushed before the record, for the reason [flushWritesToMedia] gives:
-        // the record is the only thing that says these binaries exist, and
-        // repairInstalledToolchainsSync re-checks the tree with isDirectory,
-        // never its contents. A power cut with the record on the medium and the
-        // copy still in page cache leaves a toolchain listed as installed whose
-        // binaries are holes, and nothing later looks. Outside the lock, not
-        // inside: the copy it flushes is already finished here, and a sync waits
-        // on the whole device's dirty set, which is not something to hold a lock
-        // across.
         flushWritesToMedia()
 
         var replaced: JSONObject? = null
@@ -2342,7 +928,6 @@ class ToolchainManager(private val context: Context) {
                 failUnreadableRecord(packName, transferId)
                 return false
             }
-            // Remove any existing entry for this toolchain
             for (i in state.length() - 1 downTo 0) {
                 val entry = state.optJSONObject(i)
                 if (entry?.optString("name") == name) {
@@ -2350,161 +935,35 @@ class ToolchainManager(private val context: Context) {
                     state.remove(i)
                 }
             }
-            // Marked only when the chmod above actually took for every binary the
-            // manifest names. Written unconditionally, as it was, this recorded a
-            // toolchain as repaired over binaries whose chmod never happened --
-            // the loop skips a path that is not there and used to ignore what
-            // `setExecutable` returned -- and [repairInstalledToolchainsSync]
-            // skips a marked entry for ever, so nothing would look at it again.
-            // Left false, the next launch walks the tree once and marks it then.
             manifest.put(KEY_EXEC_REPAIRED, execBitsSet)
             state.put(manifest)
             backfillToolchainEnv(state)
-            // The record is what the install consists of, as far as everything
-            // else is concerned. Without it getInstalledToolchains() does not
-            // name the toolchain, the environment below is regenerated from a
-            // record that predates it, readState() re-reads the file, so it
-            // reads back the old one, and no manifest survives to tell
-            // uninstallLocked which files, symlinks and libraries the ~180 MB
-            // just copied consists of. Reporting COMPLETED on top of that is the
-            // part that makes it silent: the picker shows 100% and Done, the
-            // first-run queue moves on, and the card reads "Install" again after
-            // the next launch with nothing said.
             if (!writeState(state)) {
-                // Same reclaim as the copy failure above, because this is the same
-                // event a step later: the record naming the ~180 MB just copied does
-                // not exist, so nothing else can ever find those files. Uninstall
-                // works off this manifest, no card offers a Remove for a toolchain
-                // getInstalledToolchains() cannot name, and the repair pass only
-                // visits records that exist -- clearing app data was the way back.
-                // On the failure this is about, a full disk, they are exactly the
-                // bytes the retry the user is being asked to make needs.
-                //
-                // Safe over a reinstall: writeState false means the file still holds
-                // the previous record, so [reclaimPartialCopy] re-reads it, still
-                // sees the toolchain named, and keeps the working copy's files. The
-                // links, binaries and libraries go the way an uninstall takes them,
-                // from the manifest in hand, which is what the record that could
-                // not be written would have been consulted for.
-                if (reclaimPartialCopy(name, manifest)) installMarker(packName).delete()
+                if (uninstaller.reclaimPartialCopy(name, manifest)) installMarkerFile(packName).delete()
                 fail(packName, ToolchainFailure.STORAGE, transferId)
-                // Play's copy is KEPT, which is the whole of the return value
-                // above. The user is told to free space and try again, and the
-                // next launch's [reconcileDeliveredPacks] can finish this
-                // install from the delivery without downloading anything --
-                // but only while the delivery is still there.
                 return false
             }
-            regenerateDerivedFilesLocked()
-            clearPackReleaseMarker(packName)
+            derivedFiles.regenerateDerivedFilesLocked()
+            uninstaller.clearPackReleaseMarker(packName)
         }
 
-        removeSupersededTree(replaced, manifest)
+        uninstaller.removeSupersededTree(replaced, manifest)
 
-        // The record now says everything the marker was standing in for, so this
-        // is where it goes. Not in the caller's `finally`, which also ran for
-        // calls that never wrote one and for the throw the marker exists to
-        // survive.
-        installMarker(packName).delete()
+        installMarkerFile(packName).delete()
         Logger.i(tag, "Toolchain $name installed successfully")
         report(packName, AssetPackStatus.COMPLETED, 100, transferId)
         return true
     }
 
     /**
-     * Deletes the install root of the record a reinstall just replaced, when the new
-     * manifest names a different one, and the `usr/bin` links that were left pointing
-     * into it.
-     *
-     * The record was the only thing that named the old tree, and the new record has
-     * replaced it: Java 17's `usr/lib/jvm/java-17-openjdk` stayed on disk, 155 MB
-     * that no Remove could reach, when the toolchain moved to
-     * `usr/lib/jvm/java-21-openjdk`. A same-root reinstall overwrote its own tree and
-     * is none of this function's business.
-     *
-     * Skipped when either root contains the other, or when the old one leaves
-     * `filesDir`, since the new tree would go with it. A link is removed only when it
-     * now dangles; one that points anywhere that still exists is not ours to judge.
-     */
-    private fun removeSupersededTree(replaced: JSONObject?, manifest: JSONObject) {
-        val oldRoot = replaced?.optString("installRoot", "").orEmpty()
-        if (oldRoot.isEmpty() || oldRoot == manifest.optString("installRoot", "")) return
-        val base = runCatching { context.filesDir.canonicalFile }.getOrNull() ?: return
-        val old = File(base, oldRoot).absoluteFile
-        val parent = old.parentFile ?: return
-        // Delete a root link itself, but never descend through a redirected ancestor.
-        if (runCatching { parent.canonicalFile }.getOrNull() != parent.normalize()) return
-        val resolvedOld = runCatching { old.canonicalFile }.getOrNull() ?: return
-        val new = runCatching {
-            File(context.filesDir, manifest.optString("installRoot", "")).canonicalFile
-        }.getOrNull() ?: return
-        if (!resolvedOld.path.startsWith(base.path + File.separator)) return
-        if (new.path == resolvedOld.path || new.path.startsWith(resolvedOld.path + File.separator) ||
-            resolvedOld.path.startsWith(new.path + File.separator)
-        ) return
-        StorageManager.deleteRecursive(old, context.filesDir.parentFile)
-        Logger.i(tag, "Deleted the superseded install root: $oldRoot")
-        val kept = manifest.optJSONObject("symlinks")
-        val links = replaced?.optJSONObject("symlinks") ?: return
-        for (linkName in links.keys()) {
-            if (kept?.has(linkName) == true) continue
-            val link = confinedToolchainPath("usr/bin/$linkName") ?: continue
-            val dangling = try { Os.lstat(link.absolutePath); !link.exists() } catch (e: Exception) { false }
-            if (dangling) link.delete()
-        }
-    }
-
-    /**
-     * The options a JDK launcher's exec-table row carries, the table's counterpart of
-     * the shell function [regenerateEnvFileLocked] writes for it: the manifest's
-     * `jvmFlags`, and for `java`, `keytool` and `jshell` the home (and for `java` the
-     * temporary directory) that libjava would otherwise take from Termux's prefix.
-     *
-     * Without them a `make` recipe, a `process` task or a program's own `spawn("java")`
-     * got a JVM that warned on every start and could not create a temporary file.
-     * Values are expanded here, because the trampoline reads them as they are; the
-     * shell function takes the shell's own HOME and TMPDIR instead.
-     */
-    private fun jdkLauncherArgs(manifest: JSONObject, relPath: String, command: String): List<String> {
-        val args = jvmLauncherFlags(manifest, relPath).toMutableList()
-        val tmpDir = "${context.cacheDir.absolutePath}/tmp"
-        when (command) {
-            "java" -> args += listOf("-Duser.home=$homeDir", "-Djava.io.tmpdir=$tmpDir")
-            "keytool" -> args += "-J-Duser.home=$homeDir"
-            "jshell" -> args += listOf("-J-Djdk.lang.Process.launchMechanism=FORK", "-J-Duser.home=$homeDir")
-        }
-        return args
-    }
-
-    /**
-     * Gives the execute bit to every binary [manifest] names, and says whether
-     * they all have it now.
-     *
-     * The manifest's `binaries` array is the authoritative list, and it is the
-     * only thing that names the ELF objects a toolchain keeps outside its own
-     * install root: Ruby's interpreter is `usr/bin/ruby` while its install root
-     * is `usr/lib/ruby`, so a pass that walks the root alone cannot reach the
-     * one file the toolchain cannot run without.
-     *
-     * One function for the install and for [repairInstalledToolchainsSync],
-     * because the two were the same loop with different mistakes in it: the
-     * install ignored what `setExecutable` returned and then recorded the
-     * toolchain as repaired, and the repair could not see these paths at all.
-     *
-     * A path that is not there is not a failure. Nothing can give a bit to a
-     * file that does not exist, now or on any later launch. An install no longer
-     * reaches this with one missing, since it refuses the pack first, but a
-     * toolchain installed before that check can still name a binary its payload
-     * did not ship, and the repair walks those too.
-     *
-     * @return false when a file exists, lacks the bit, and would not take it
+     * Gives the execute bit to every binary [manifest] names, and says whether they all have it now.
      */
     private fun applyManifestExecBits(manifest: JSONObject): Boolean {
         val binaries = manifest.optJSONArray("binaries") ?: return true
         var allExecutable = true
         for (i in 0 until binaries.length()) {
             val binPath = binaries.getString(i)
-            val binFile = confinedUsrPath(binPath)
+            val binFile = confinedUsrPath(context.filesDir, binPath)
             if (binFile == null) {
                 Logger.w(tag, "Refusing to set execute bit outside usr/: ${redactToken(binPath)}")
                 allExecutable = false
@@ -2526,263 +985,8 @@ class ToolchainManager(private val context: Context) {
         return allExecutable
     }
 
-    private data class OrphanAnalysis(
-        val orphan: JSONObject,
-        val hasUnreclaimableOverlap: Boolean,
-        val overlapsInstalledExecutable: Boolean,
-    )
-
-    /**
-     * Computes the subset of [manifest] strictly owned by [manifest] that neither belongs to nor
-     * contains any path owned by [installed], while recording whether [manifest] overlaps any
-     * installed executable or unowned parent/child tree.
-     */
-    private fun analyzeOrphans(manifest: JSONObject, installed: JSONObject): OrphanAnalysis {
-        val installedPaths = toolchainRemovalPaths(installed)
-        val installedRoot = installed.optString("installRoot", "")
-        val installedTrees = buildSet {
-            installedRoot.takeIf { it.isNotEmpty() }?.let(::add)
-            ownedPaths(installed).forEach { add(it.relativeTo(context.filesDir).path) }
-        }
-        fun ownedByInstalled(path: String): Boolean =
-            path in installedPaths || installedTrees.any { path == it || path.startsWith("$it/") }
-        fun containsInstalled(tree: String): Boolean =
-            installedPaths.any { it == tree || it.startsWith("$tree/") } ||
-                installedTrees.any { it == tree || it.startsWith("$tree/") }
-
-        var hasUnreclaimableOverlap = false
-        var overlapsInstalledExecutable = false
-
-        val orphan = JSONObject().put("name", manifest.optString("name", ""))
-        val root = manifest.optString("installRoot", "")
-        if (root.isNotEmpty()) {
-            if (!ownedByInstalled(root) && !containsInstalled(root)) {
-                orphan.put("installRoot", root)
-            } else {
-                overlapsInstalledExecutable = true
-                if (root != installedRoot) {
-                    hasUnreclaimableOverlap = true
-                }
-            }
-        }
-        val orphanOwned = JSONArray()
-        for (path in ownedPaths(manifest)) {
-            val rel = path.relativeTo(context.filesDir).path
-            if (!ownedByInstalled(rel) && !containsInstalled(rel)) {
-                orphanOwned.put(rel)
-            } else {
-                overlapsInstalledExecutable = true
-                if (containsInstalled(rel) && rel !in installedTrees ||
-                    ownedByInstalled(rel) && rel !in installedPaths
-                ) {
-                    hasUnreclaimableOverlap = true
-                }
-            }
-        }
-        if (orphanOwned.length() > 0) orphan.put("ownedPaths", orphanOwned)
-
-        manifest.optJSONArray("binaries")?.let { binaries ->
-            val orphanBins = JSONArray()
-            for (i in 0 until binaries.length()) {
-                val bin = binaries.getString(i)
-                if (!ownedByInstalled(bin) && !containsInstalled(bin)) {
-                    orphanBins.put(bin)
-                } else {
-                    overlapsInstalledExecutable = true
-                }
-            }
-            if (orphanBins.length() > 0) orphan.put("binaries", orphanBins)
-        }
-        manifest.optJSONObject("symlinks")?.let { symlinks ->
-            val orphanLinks = JSONObject()
-            for (key in symlinks.keys()) {
-                if (!ownedByInstalled("usr/bin/$key")) orphanLinks.put(key, symlinks.getString(key))
-            }
-            if (orphanLinks.length() > 0) orphan.put("symlinks", orphanLinks)
-        }
-        manifest.optJSONObject("libSymlinks")?.let { libSymlinks ->
-            val orphanLibLinks = JSONObject()
-            for (key in libSymlinks.keys()) {
-                if (!ownedByInstalled("usr/lib/$key")) orphanLibLinks.put(key, libSymlinks.getString(key))
-            }
-            if (orphanLibLinks.length() > 0) orphan.put("libSymlinks", orphanLibLinks)
-        }
-        manifest.optJSONArray("libs")?.let { libs ->
-            val orphanLibs = JSONArray()
-            for (i in 0 until libs.length()) {
-                val lib = libs.getString(i)
-                if (!ownedByInstalled("usr/lib/$lib")) orphanLibs.put(lib)
-            }
-            if (orphanLibs.length() > 0) orphan.put("libs", orphanLibs)
-        }
-        return OrphanAnalysis(orphan, hasUnreclaimableOverlap, overlapsInstalledExecutable)
-    }
-
-    /**
-     * Restores shared `usr/bin` and `usr/lib` symlinks declared by both [installed] and [aborted]
-     * when the aborted upgrade removed them or left them dangling at a reclaimed tree.
-     */
-    private fun restoreSharedSymlinks(installed: JSONObject, aborted: JSONObject) {
-        val installedLinks = installed.optJSONObject("symlinks")
-        val abortedLinks = aborted.optJSONObject("symlinks")
-        if (installedLinks != null && abortedLinks != null) {
-            for (key in installedLinks.keys()) {
-                if (!abortedLinks.has(key) || !isSinglePathSegment(key)) continue
-                val targetRel = installedLinks.optString(key, "")
-                val linkFile = confinedUsrPath("usr/bin/$key") ?: continue
-                if (!isConfinedUsrTarget(targetRel)) continue
-                val targetFile = confinedUsrPath(targetRel) ?: continue
-                if (!targetFile.exists()) continue
-                val expected = "$filesDir/$targetRel"
-                val abortedTargetRel = abortedLinks.optString(key, "")
-                val abortedExpected = if (abortedTargetRel.isNotEmpty()) "$filesDir/$abortedTargetRel" else null
-                val missing = !pathExistsNoFollow(linkFile)
-                val current = if (missing) null else runCatching { Os.readlink(linkFile.absolutePath) }.getOrNull()
-                val stale = current != null && current != expected &&
-                    (current == abortedExpected || !File(current).exists())
-                if (missing || stale) {
-                    runCatching {
-                        if (!missing) linkFile.delete()
-                        File(context.filesDir, "usr/bin").mkdirs()
-                        Os.symlink(expected, File(context.filesDir, "usr/bin/$key").absolutePath)
-                    }
-                }
-            }
-        }
-
-        val installedLibLinks = installed.optJSONObject("libSymlinks")
-        val abortedLibLinks = aborted.optJSONObject("libSymlinks")
-        if (installedLibLinks != null && abortedLibLinks != null) {
-            for (key in installedLibLinks.keys()) {
-                if (!abortedLibLinks.has(key) || !isSinglePathSegment(key)) continue
-                val targetName = installedLibLinks.optString(key, "")
-                val targetRel = "usr/lib/$targetName"
-                val linkFile = confinedUsrPath("usr/lib/$key") ?: continue
-                if (!isConfinedUsrTarget(targetRel)) continue
-                val targetFile = confinedUsrPath(targetRel) ?: continue
-                if (!targetFile.exists()) continue
-                val expected = File(context.filesDir, targetRel).absolutePath
-                val abortedTargetName = abortedLibLinks.optString(key, "")
-                val abortedExpected = if (abortedTargetName.isNotEmpty()) {
-                    File(context.filesDir, "usr/lib/$abortedTargetName").absolutePath
-                } else {
-                    null
-                }
-                val missing = !pathExistsNoFollow(linkFile)
-                val current = if (missing) null else runCatching { Os.readlink(linkFile.absolutePath) }.getOrNull()
-                val stale = current != null && current != expected &&
-                    (current == abortedExpected || !File(current).exists())
-                if (missing || stale) {
-                    runCatching {
-                        if (!missing) linkFile.delete()
-                        File(context.filesDir, "usr/lib").mkdirs()
-                        Os.symlink(expected, File(context.filesDir, "usr/lib/$key").absolutePath)
-                    }
-                }
-            }
-        }
-    }
-
-    /**
-     * Deletes the files an install that did not finish had already written, when
-     * nothing else lays claim to them.
-     *
-     * For a failed cross-root upgrade over a recorded install, only paths strictly
-     * owned by the failed upgrade (and not by the installed version, other toolchains,
-     * or base `usr/lib`) are reclaimed, preserving the installed toolchain and
-     * clearing the stale pending marker so future upgrades are not blocked.
-     */
-    private fun reclaimPartialCopy(
-        name: String,
-        manifest: JSONObject,
-        reclaimSameRootOrphans: Boolean = false,
-        restoreSymlinks: Boolean = true,
-    ): Boolean = synchronized(stateLock) {
-        val state = readableState() ?: return@synchronized false
-        val installed = (0 until state.length()).mapNotNull { state.optJSONObject(it) }
-            .firstOrNull { it.optString("name") == name }
-        if (installed != null) {
-            Logger.w(tag, "Keeping the files of $name: the record still names it")
-            val installId = manifest.optString(KEY_INSTALL_ID)
-            val installedId = installed.optString(KEY_INSTALL_ID)
-            if (installId.isNotEmpty() && installedId == installId &&
-                toolchainPathsAreOwned(manifest, installed)
-            ) return@synchronized true
-
-            val manifestRoot = manifest.optString("installRoot", "")
-            val installedRoot = installed.optString("installRoot", "")
-            val crossRoot = manifestRoot.isNotEmpty() && installedRoot.isNotEmpty() && manifestRoot != installedRoot
-            val analysis = analyzeOrphans(manifest, installed)
-            val hasOrphans = toolchainRemovalPaths(analysis.orphan).isNotEmpty()
-            val canReclaimOrphans = hasOrphans && (
-                crossRoot ||
-                    (reclaimSameRootOrphans && (installId.isEmpty() || installId != installedId))
-                )
-            var reclaimedAllOrphans = false
-            if (canReclaimOrphans) {
-                val outcome = removeToolchainFiles(name, analysis.orphan, state)
-                if (restoreSymlinks && outcome != RemovalOutcome.UNCHANGED) {
-                    restoreSharedSymlinks(installed, manifest)
-                }
-                reclaimedAllOrphans = outcome == RemovalOutcome.COMPLETE
-                if (reclaimedAllOrphans) {
-                    Logger.i(tag, "Reclaimed orphaned partial upgrade files for $name")
-                } else {
-                    Logger.w(tag, "Could not fully reclaim orphaned partial upgrade files for $name")
-                }
-            } else if (restoreSymlinks && crossRoot) {
-                restoreSharedSymlinks(installed, manifest)
-            }
-
-            if (analysis.overlapsInstalledExecutable || !canReclaimOrphans) {
-                // Once per attempt: the marker stands until a retry finishes and the launch pass comes back to it every
-                // launch, while the tree changes only when an attempt writes. Asked each time, the repair re-read the whole
-                // tree under the state lock on every launch. A marker with no identity counts as one attempt.
-                val asked = installed.has(KEY_EXEC_RESET_FOR) && installed.optString(KEY_EXEC_RESET_FOR) == installId
-                if (!asked) {
-                    installed.put(KEY_EXEC_REPAIRED, false)
-                    installed.put(KEY_EXEC_RESET_FOR, installId)
-                    if (!writeState(state)) return@synchronized false
-                }
-            }
-            if (canReclaimOrphans && reclaimedAllOrphans && !analysis.hasUnreclaimableOverlap) {
-                return@synchronized true
-            }
-            return@synchronized false
-        }
-        val settled = removeToolchainFiles(name, manifest, state) == RemovalOutcome.COMPLETE
-        if (settled) {
-            Logger.i(tag, "Reclaimed the partial $name files")
-        } else {
-            Logger.w(tag, "Could not fully reclaim the partial $name files")
-        }
-        settled
-    }
-
-    // -- HTTP fallback (sideloaded installs) --
-
     /**
      * Returns true if the app was NOT installed via Play Store.
-     * On sideloaded/debug builds, Play Asset Delivery silently fails,
-     * so we download toolchain ZIPs from GitHub Releases instead.
-     *
-     * Asked once per manager and remembered, because who installed the app
-     * cannot change while the process runs and asking is a binder round trip.
-     * The refusal below is remembered too, deliberately: the query names this
-     * app's own package, so it does not fail because a service was busy, it
-     * fails because the platform will not answer it for this caller at all.
-     * Asking again would cost a round trip per install to be refused again.
-     * [reconcileDeliveredPacks] makes that call on the toolchain I/O thread,
-     * deliberately and with a comment saying why; [install] makes it on
-     * whichever thread tapped, which for both screens is the main one. Caching
-     * removes the repeat: the first-run queue installs pack after pack through
-     * one manager, and so does every later tap on the toolchain screen.
-     *
-     * The first call still runs where its caller stands. Moving [install] onto
-     * [ioExecutor] instead would be worse than the round trip it saves: the
-     * decline checks it performs are what answer a tap on a pack already being
-     * fetched, and behind a transfer occupying that single thread they would be
-     * answered minutes later.
      */
     private fun shouldUseHttpFallback(): Boolean {
         installSourceIsPlay?.let { return !it }
@@ -2795,18 +999,6 @@ class ToolchainManager(private val context: Context) {
                 context.packageManager.getInstallSourceInfo(context.packageName).installingPackageName
             }
             Logger.d(tag, "Install source: $installer")
-            // `com.google.android.feedback` is the Play Store's own legacy
-            // package name and is still the installer of record on installs made
-            // by older versions of it. Treated as Play because it is Play: the
-            // HTTP fallback exists for installs Play cannot serve asset packs
-            // to, and this is not one of them.
-            //
-            // Everything else, INCLUDING a null, stays on the HTTP path. That is
-            // deliberate and is not a fail-open oversight: `adb install` and
-            // several package installers leave `installingPackageName` null, and
-            // those are precisely the sideloads the ZIP path exists for, so
-            // reading an unknown installer as Play would leave them fetching
-            // asset packs Play will never deliver, silently.
             installer in PLAY_INSTALLERS
         } catch (e: Exception) {
             Logger.w(tag, "Could not determine install source, using HTTP fallback: ${e.message}")
@@ -2816,2124 +1008,31 @@ class ToolchainManager(private val context: Context) {
         return !isPlay
     }
 
-    /**
-     * The bytes free for a toolchain copy that needs [required], measured again after the strays of a killed copy
-     * under `usr/` are removed when they are what stands between the two. A copy killed partway leaves its temporary
-     * file beside the file it was replacing, as large as the largest library a pack ships, and only the next write into
-     * that folder removes it, after this check. First-run setup's checks of free room do the same
-     * ([sweepStrayTempsUnder]).
-     */
-    private fun freeBytesFor(required: Long): Long {
-        val free = StatFs(context.filesDir.absolutePath).availableBytes
-        if (free >= required || confinedToolchainPath("usr") == null) return free
-        if (sweepStrayTempsUnder(File(context.filesDir, "usr")) == 0L) return free
-        return StatFs(context.filesDir.absolutePath).availableBytes
-    }
+    internal fun usesHttpFallback(): Boolean = shouldUseHttpFallback()
 
-    /**
-     * The existing payload the record names for this build, without shared directories or links.
-     *
-     * [downloadViaHttp] gates on free space before the ZIP carrying the incoming
-     * manifest has been fetched, so the persisted record is the only witness
-     * available then of where a previous install of this toolchain put its files.
-     * A lookup by name rather than through the registry, because an entry can
-     * outlive its registry row and because the record is what those files were
-     * actually written from.
-     *
-     * No credit unless the record's `displayName` is [displayName], the registry's name for
-     * the build about to be downloaded. A reinstall only overwrites the recorded tree
-     * when the root stays put, and the one pack that moved it, Java 17 to 21, kept
-     * the name `java`: the old tree would be credited against one written beside it.
-     * A record that names no build gets no credit either.
-     */
-    private fun recordedInstallSpace(name: String, displayName: String?, recordedBytes: Long): InstalledTree {
-        val state = readState()
-        for (i in 0 until state.length()) {
-            val entry = state.optJSONObject(i) ?: continue
-            if (entry.optString("name") != name) continue
-            if (displayName == null || entry.optString("displayName") != displayName) return InstalledTree.NONE
-            val paths = buildSet {
-                add(entry.optString("installRoot", ""))
-                ownedPaths(entry).forEach { add(it.relativeTo(context.filesDir).path) }
-                entry.optJSONArray("binaries")?.let { values ->
-                    for (j in 0 until values.length()) add(values.optString(j, ""))
-                }
-                entry.optJSONArray("libs")?.let { values ->
-                    for (j in 0 until values.length()) add("usr/lib/${values.optString(j, "")}")
-                }
-            }.filter(::isOwnedPathName).mapNotNull(::confinedToolchainPath)
-                .filterNot { Files.isSymbolicLink(it.toPath()) }
-            var bytes = 0L
-            var largest = 0L
-            for (path in paths) {
-                // A binary or owned subtree may already be covered by another recorded root.
-                if (paths.any { it != path && path.toPath().startsWith(it.toPath()) }) continue
-                // A killed copy's temporary file in the tree is not a file a reinstall writes over, and the write that
-                // would remove it comes after this check: it is removed here, before the tree is measured.
-                val found = installedTreeSpace(path, context.filesDir, recordedBytes) { tree ->
-                    sweepStrayTempsUnder(tree)
-                    measureInstalledTree(tree)
-                }
-                bytes = minOf(recordedBytes, bytes + found.bytes)
-                largest = maxOf(largest, found.largestFile)
-            }
-            return InstalledTree(bytes, minOf(bytes, largest))
-        }
-        return InstalledTree.NONE
-    }
+    // -- Derived files (delegated to ToolchainDerivedFiles) --
 
-    /**
-     * Downloads a toolchain ZIP from GitHub Releases, extracts it, and installs.
-     * Runs entirely on ioExecutor. Fires onStateChange with AssetPackStatus constants.
-     */
-    private fun downloadViaHttp(
-        packName: String,
-        url: String,
-        unpackedBytes: Long,
-        downloadBytes: Long,
-    ) {
-        // Admission and removal claims must agree before either queues file work.
-        val download = synchronized(packOperationLock) {
-            if (packName in installsInFlight) null
-            else HttpDownload().takeIf { httpDownloads.putIfAbsent(packName, it) == null }
-        }
-        if (download == null) {
-            Logger.i(tag, "An install of $packName is already outstanding; not starting another")
-            report(packName, AssetPackStatus.UNKNOWN, 0)
-            return
-        }
-        // Published before the task is queued rather than reset once it starts.
-        // A cancellation can arrive while this pack is still waiting behind
-        // another one, and it has to survive the wait: resetting at task start
-        // would discard it just as reliably as the shared flag did.
-        report(packName, AssetPackStatus.PENDING, 0, download.transferId)
+    fun regenerateDerivedFiles() = synchronized(stateLock) { derivedFiles.regenerateDerivedFilesLocked() }
 
-        ioExecutor.execute {
-            // Per download, not per class. The finally below deletes this
-            // directory whole, and it used to be one constant path shared by
-            // every ToolchainManager in the process: multiple call sites each build
-            // their own, ioExecutor is an instance field so it serialises
-            // nothing across them, and rotating ToolchainActivity or cancelling
-            // the first-run queue leaves an earlier download still running. Two
-            // downloads then wrote one zip path and each finally deleted the
-            // other's tree, which surfaces as a digest mismatch, the alarm for
-            // tampering, fired by a race with ourselves.
-            val tempDir = toolchainTempDir(context.cacheDir, packName)
-            val zipFile = File(tempDir, "$packName.zip")
-            val extractDir = File(tempDir, packName)
+    internal fun regenerateDerivedFilesInternal() = derivedFiles.regenerateDerivedFilesLocked()
 
-            try {
-                // Asked before anything else, the space pre-flight included.
-                // Every other check of this flag sits past the manifest fetch,
-                // so a pack cancelled while queued still spent a request and,
-                // on a stalled connection, up to three read timeouts of it,
-                // with the first-run queue waiting behind. The pre-flight has
-                // to come after it because the pre-flight fails the pack: a
-                // download cancelled while it waited behind another transfer,
-                // on a device short of the reservation, was reported as a
-                // storage failure, a Retry badge and a "not enough space" toast
-                // for a transfer the user had just stopped, and only then as
-                // CANCELED by the finally below.
-                if (download.cancelled) {
-                    Logger.i(tag, "HTTP download cancelled for $packName")
-                    return@execute
-                }
-
-                // Reserve the stage that holds the most at once, crediting a tree of
-                // this build that is already installed. The incoming payload is not
-                // on disk yet, so the credit comes from the RECORD: its payload paths
-                // are where a previous install of this toolchain put its files, and it
-                // only counts when the record names the build about to be downloaded
-                // ([recordedInstallSpace] compares `displayName`; Java 17 and 21 share
-                // a pack name and not a root). The credit is an assumption about a
-                // payload nobody has read, so a credited install is measured again
-                // from the real files once they are extracted, below. Free space is
-                // read after the credit, which first gives back what a killed copy
-                // left in the recorded tree ([recordedInstallSpace]).
-                val installed = recordedInstallSpace(
-                    toolchainShortName(packName),
-                    ToolchainRegistry.find(packName)?.displayName,
-                    unpackedBytes,
-                )
-                val requiredBytes = toolchainInstallBytes(unpackedBytes, downloadBytes, installed)
-                val availableBytes = freeBytesFor(requiredBytes)
-                if (availableBytes < requiredBytes) {
-                    Logger.e(tag, "Not enough disk space: ${availableBytes / 1_000_000} MB available, " +
-                            "${requiredBytes / 1_000_000} MB required")
-                    fail(packName, ToolchainFailure.STORAGE, download.transferId)
-                    return@execute
-                }
-
-                tempDir.mkdirs()
-
-                // Asked again after the pre-flight: a cancel that lands while the
-                // StatFs above is being read is otherwise not seen until after
-                // the manifest fetch, which is the request this flag exists to
-                // save on a stalled connection.
-                if (download.cancelled) {
-                    Logger.i(tag, "HTTP download cancelled for $packName")
-                    return@execute
-                }
-
-                // Once, before either request, so the manifest and the payload
-                // name the same release however long the transfer takes. Falls
-                // back to the unpinned URL, which is what shipped before this.
-                val pinnedUrl = pinLatest(url, download)
-
-                // Resolved before the payload, not after. A release that cannot
-                // vouch for this ZIP should cost a few hundred bytes and a clear
-                // refusal, rather than 179 MB and then a refusal.
-                val expectedDigest = publishedDigestFor(pinnedUrl, download)
-
-                // Download
-                retrying(packName, download) {
-                    try {
-                        downloadFile(packName, pinnedUrl, zipFile, downloadBytes, download)
-                    } catch (e: RangeRefused) {
-                        // Between attempts, because it is the only thing that
-                        // changes what the next one asks for. [downloadFile]
-                        // derives its `Range` from the bytes on disk, so a
-                        // refusal of that offset is a refusal every attempt
-                        // repeats verbatim: all three fail identically and the
-                        // user is shown a network error for an origin that is
-                        // answering. Dropping the partial file is what turns the
-                        // resume back into a fresh request for the whole asset.
-                        // Reachable when the release asset is re-uploaded
-                        // smaller between attempts, and when an earlier attempt
-                        // wrote more bytes than the origin declared.
-                        Logger.w(tag, "$packName: the origin refuses to resume; starting again", e)
-                        zipFile.delete()
-                        throw e
-                    }
-                }
-
-                if (download.cancelled) {
-                    Logger.i(tag, "HTTP download cancelled for $packName")
-                    return@execute
-                }
-
-                // The check this path did not have. Content-Length says the
-                // transfer finished; only this says the bytes are the ones the
-                // release published. Everything below it -- extraction, chmod,
-                // symlinks into usr/ -- treats the archive as trusted, so this
-                // is the last point at which it can be refused.
-                val actualDigest = sha256Of(zipFile)
-                if (!actualDigest.equals(expectedDigest, ignoreCase = true)) {
-                    Logger.e(
-                        tag,
-                        "Digest mismatch for $packName: the release publishes $expectedDigest, " +
-                            "the download hashes to $actualDigest. Not installing it.",
-                    )
-                    fail(packName, ToolchainFailure.DIGEST, download.transferId)
-                    return@execute
-                }
-                Logger.i(tag, "$packName matches the digest the release publishes")
-
-                // Asked again, because the digest above hashes the whole archive
-                // and the card offers Cancel throughout it. Everything past this
-                // line writes: the extraction fills a staging tree the size of the
-                // unpacked toolchain, and the copy after it is ~180 MB into `usr/`.
-                if (download.cancelled) {
-                    Logger.i(tag, "HTTP download cancelled for $packName")
-                    return@execute
-                }
-
-                // Extract: report as TRANSFERRING (file copy phase)
-                download.percent = 90
-                report(packName, AssetPackStatus.TRANSFERRING, 90, download.transferId)
-                StorageManager.deleteRecursive(extractDir, context.filesDir.parentFile)
-                if (extractDir.exists() || Files.isSymbolicLink(extractDir.toPath())) {
-                    fail(packName, ToolchainFailure.STORAGE, download.transferId)
-                    return@execute
-                }
-                extractDir.mkdirs()
-                try {
-                    extractZip(zipFile, extractDir, isCancelled = { download.cancelled })
-                } catch (e: IOException) {
-                    if (download.cancelled) {
-                        Logger.i(tag, "HTTP download cancelled for $packName")
-                        return@execute
-                    }
-                    Logger.e(tag, "Could not unpack $packName", e)
-                    fail(packName, ToolchainFailure.STORAGE, download.transferId)
-                    return@execute
-                }
-                // Before the copy, which is the other half of the peak. The
-                // digest was checked above and nothing reads the archive again,
-                // so holding it through installFromDirectory buys nothing and
-                // costs a device its whole download size in headroom.
-                zipFile.delete()
-
-                // The last point at which stopping leaves nothing behind, and the
-                // reason the check is here rather than inside the copy. Extraction
-                // has just spent seconds on a tree the size of the toolchain, and
-                // the card has been offering Cancel for all of it; but
-                // [installFromDirectoryHoldingPack] copies into the shared `usr/`
-                // tree and only then writes the manifest naming what it put there,
-                // so a copy abandoned partway leaves files no uninstall can name,
-                // which is worse than the unwanted install this check refuses. The
-                // staging tree above is this download's own and the finally below
-                // deletes it whole.
-                if (download.cancelled) {
-                    Logger.i(tag, "HTTP download cancelled for $packName")
-                    return@execute
-                }
-
-                // The measurement the pre-flight could not make: the files about to
-                // be written against the files they replace, which is the check the
-                // Play path makes before its copy and with the same arithmetic. Only
-                // when the pre-flight leaned on a credit. A first install was charged
-                // for both trees in full and has nothing to confirm, and holding it to
-                // the buffer again here would refuse a copy that fits after a
-                // neighbouring app took a few megabytes during the download.
-                //
-                // Refused here, the copy has written nothing: a half-replaced
-                // toolchain is the thing the atomic replacement exists to avoid, and
-                // the cost of getting here is a download the retry repeats.
-                if (installed.bytes > 0) {
-                    val space = toolchainCopySpace(File(extractDir, "usr"), File(context.filesDir, "usr"))
-                    val needed = toolchainCopyBytes(unpackedBytes, space)
-                    val free = freeBytesFor(needed)
-                    if (free < needed) {
-                        Logger.e(
-                            tag,
-                            "Not enough disk space to replace $packName: " +
-                                "${free / 1_000_000} MB available, ${needed / 1_000_000} MB required",
-                        )
-                        fail(packName, ToolchainFailure.STORAGE, download.transferId)
-                        return@execute
-                    }
-                }
-
-                // Install from extracted directory (same path as Play Asset Delivery)
-                //
-                // The answer is not read here, unlike the Play path: a decline
-                // leaves this task with nothing to undo. The finally below
-                // deletes a staging directory this download owns alone, so it
-                // cannot reach whatever the install that holds the pack is
-                // reading.
-                installFromDirectory(packName, extractDir, readsDeliveredPack = false, transferId = download.transferId)
-
-            } catch (e: MissingFromRelease) {
-                // Ahead of the IOException it extends, because they are not the
-                // same event to a user: this one will not succeed on a better
-                // connection, and only a release changes it.
-                Logger.e(tag, "Not published in the release: $packName", e)
-                fail(packName, ToolchainFailure.NOT_PUBLISHED, download.transferId)
-            } catch (e: IOException) {
-                if (download.cancelled) {
-                    Logger.i(tag, "HTTP download cancelled for $packName")
-                } else {
-                    Logger.e(tag, "HTTP download failed for $packName", e)
-                    fail(packName, ToolchainFailure.NETWORK, download.transferId)
-                }
-            } catch (e: SecurityException) {
-                Logger.e(tag, "Zip security violation for $packName", e)
-                fail(packName, ToolchainFailure.CORRUPT, download.transferId)
-            } catch (e: Exception) {
-                Logger.e(tag, "Unexpected error downloading $packName", e)
-                fail(packName, ToolchainFailure.INTERNAL, download.transferId)
-            } finally {
-                // Remove only this task's token before publishing its cancellation. Under the token's
-                // monitor, so a cancel either finds the token and sets the flag before this, and is
-                // reported below, or finds it gone ([cancel] says which to the screen).
-                val heldThePack = synchronized(download) { httpDownloads.remove(packName, download) }
-                // Clean up temp files
-                StorageManager.deleteRecursive(tempDir, context.filesDir.parentFile)
-                // The cancellation, said out loud. Every `return@execute` on the
-                // flag above leaves without reporting, and a report goes to the
-                // manager that began this download and to no other, so what the
-                // silence withheld was withheld from the only party that could
-                // act on it. The toolchain screen takes the pack out of its own
-                // outstanding set when Cancel is tapped, but that set belongs to
-                // the screen the tap happened on, while the token is process-wide
-                // precisely so a rebuilt screen can stop a transfer the destroyed
-                // one began. Cancelled that way, the destroyed screen's set kept
-                // the pack, and with it the Play Core registration
-                // `ToolchainActivity.shouldReleaseSubscription` hands back only
-                // when that set empties. The first-run queue is the other reader
-                // that needs an ending: it advances on a terminal status, so the
-                // row sat where it was with every pack behind it waiting.
-                //
-                // Here rather than at each of those exits, so a check added later
-                // at a new expensive boundary cannot forget it, and after the
-                // bookkeeping above so a listener asking [packsDownloading] on
-                // its way through does not read this transfer as still running.
-                // Only while this token still held the pack: once a later request
-                // has replaced it, that download owns what is said about the pack.
-                //
-                // CANCELED, because nothing failed and every listener already has
-                // a branch for it -- Play emits it on the other delivery path. A
-                // cancel landing during the final copy is reported after that
-                // copy's COMPLETED, which costs nothing: the card reads CANCELED
-                // against the install record and draws Remove, and the first-run
-                // queue has already moved past the pack.
-                if (heldThePack && download.cancelled) {
-                    report(packName, AssetPackStatus.CANCELED, 0, download.transferId)
-                }
-            }
-        }
-    }
-
-    /**
-     * Runs [attempt] up to MAX_RETRIES + 1 times with exponential backoff.
-     *
-     * Shared by both things this class fetches, and that is a correctness
-     * property rather than deduplication. It was written for the ZIP alone, and
-     * putting the manifest fetch in front of it without routing it through
-     * meant a zero-tolerance request ran ahead of a fault-tolerant one: on
-     * mobile data, a stall that the ZIP would have absorbed ended the whole
-     * install after one read timeout, having transferred nothing. Hardening the
-     * payload is no good if it lowers the odds of getting one.
-     *
-     * The one thing it does not retry is [MissingFromRelease], which stays
-     * right for both: a ZIP not uploaded to the release will not appear on the
-     * third attempt, and neither will a manifest the release does not carry.
-     * Everything else gets all three.
-     */
-    @Throws(IOException::class)
-    private fun <T> retrying(what: String, download: HttpDownload, attempt: () -> T): T {
-        var lastException: IOException? = null
-        for (n in 0..MAX_RETRIES) {
-            if (download.cancelled) throw IOException("Download cancelled")
-            try {
-                if (n > 0) {
-                    val backoffMs = (1L shl n) * 1000  // 2s, 4s
-                    Logger.i(tag, "Retry $n/$MAX_RETRIES for $what after ${backoffMs}ms")
-                    download.waitBackoff(backoffMs)
-                    if (download.cancelled) throw IOException("Download cancelled")
-                }
-                return attempt()
-            } catch (e: MissingFromRelease) {
-                // Must precede the IOException catch below, which it extends.
-                // The release does not carry this file; asking twice more only
-                // spends six seconds arriving at the same answer.
-                throw e
-            } catch (e: IOException) {
-                lastException = e
-                if (download.cancelled) throw e
-                Logger.w(tag, "Attempt $n failed for $what: ${e.message}")
-            }
-        }
-        throw lastException ?: IOException("$what failed after ${MAX_RETRIES + 1} attempts")
-    }
-
-    /** Binds [conn] to [download] so cancellation disconnects it immediately, or throws if already cancelled. */
-    @Throws(IOException::class)
-    private fun bindActiveConnection(download: HttpDownload?, conn: HttpURLConnection) {
-        if (download == null) return
-        val cancelled = synchronized(download) {
-            if (download.cancelled) true
-            else {
-                download.activeConnection = conn
-                false
-            }
-        }
-        if (cancelled) {
-            conn.disconnect()
-            throw IOException("Download cancelled")
-        }
-    }
-
-    private fun clearActiveConnection(download: HttpDownload?, conn: HttpURLConnection) {
-        if (download == null) return
-        synchronized(download) {
-            if (download.activeConnection === conn) download.activeConnection = null
-        }
-    }
-
-    @Throws(IOException::class)
-    private fun <T> withRedirects(
-        url: String,
-        what: String,
-        requestHeaders: Map<String, String> = emptyMap(),
-        download: HttpDownload? = null,
-        body: (HttpURLConnection) -> T,
-    ): T {
-        var currentUrl = url
-        var redirects = 0
-
-        while (redirects < MAX_REDIRECTS) {
-            if (download?.cancelled == true) throw IOException("Download cancelled")
-            val conn = URL(currentUrl).openConnection() as HttpURLConnection
-            bindActiveConnection(download, conn)
-            try {
-                conn.connectTimeout = HTTP_TIMEOUT_MS
-                conn.readTimeout = HTTP_TIMEOUT_MS
-                conn.instanceFollowRedirects = false
-                conn.setRequestProperty("User-Agent", "VSCodroid")
-                conn.setRequestProperty("Accept-Encoding", "identity")
-                requestHeaders.forEach { (name, value) -> conn.setRequestProperty(name, value) }
-
-                val responseCode = conn.responseCode
-                if (download?.cancelled == true) throw IOException("Download cancelled")
-
-                if (responseCode in 300..399) {
-                    val location = conn.getHeaderField("Location")
-                        ?: throw IOException("Redirect with no Location header from $currentUrl")
-                    currentUrl = nextRedirectUrl(currentUrl, location)
-                    redirects++
-                    continue
-                }
-
-                if (responseCode == 404) {
-                    throw MissingFromRelease("404 Not Found: $currentUrl ($what not uploaded to release?)")
-                }
-
-                if (responseCode == 416) {
-                    throw RangeRefused("416 Range Not Satisfiable: $currentUrl ($what)")
-                }
-
-                if (responseCode != 200 && responseCode != 206) {
-                    throw IOException("HTTP $responseCode from $currentUrl")
-                }
-
-                return body(conn)
-            } finally {
-                clearActiveConnection(download, conn)
-                conn.disconnect()
-            }
-        }
-
-        throw IOException("Too many redirects ($MAX_REDIRECTS) for $url")
-    }
-
-    @Throws(IOException::class)
-    private fun fetchManifest(url: String, download: HttpDownload): String =
-        withRedirects(url, "digest manifest", download = download) { conn ->
-            val buffer = CharArray(MANIFEST_MAX_CHARS)
-            conn.inputStream.bufferedReader().use { reader ->
-                var total = 0
-                while (total < buffer.size) {
-                    if (download.cancelled) throw IOException("Download cancelled")
-                    val n = reader.read(buffer, total, buffer.size - total)
-                    if (n < 0) break
-                    total += n
-                }
-                if (download.cancelled) throw IOException("Download cancelled")
-                String(buffer, 0, total)
-            }
-        }
-
-    /**
-     * [zipUrl] pointed at a concrete release, or [zipUrl] unchanged when none
-     * can be resolved.
-     *
-     * The release this build belongs to is preferred, and `latest` is the
-     * fallback rather than the first choice. `latest` names whichever release
-     * is newest at the moment of the request, which is not necessarily one this
-     * app was built alongside, and the gap is not theoretical. Measured
-     * 2026-08-19, with `latest` naming v1.1.0:
-     *
-     * ```
-     * releases/latest/download/toolchain_go.zip  -> 404
-     * releases/download/v1.0.0/toolchain_go.zip  -> 200
-     * ```
-     *
-     * An installed v1.0.0 offers Go in its picker, because its own registry
-     * lists it, and v1.1.0 does not publish that ZIP because the entry was
-     * retired. Through `latest` that install can no longer fetch a payload its
-     * own release still carries. The reverse costs the same: a release deleted
-     * after publication moves `latest` backwards, onto a release built before
-     * whatever the installed app now requires.
-     *
-     * Note what this cannot do, because the shape recurs. It ships in an app
-     * version, so it repairs the population that installs that version onward
-     * and nothing already on a device. v1.0.0 keeps resolving through `latest`
-     * forever.
-     *
-     * The manifest and the payload are two requests minutes apart, and both used
-     * to go through `latest` independently, so a release published between them
-     * handed back bytes to check against a digest read from the release before
-     * it. Resolving once and building both URLs from the answer is what closes
-     * that; [manifestUrlFor] derives the manifest beside the ZIP, so pinning the
-     * ZIP pins the manifest for free.
-     *
-     * One HEAD, one hop, no body. `releases/latest` answers `releases/tag/<tag>`
-     * and involves no asset, which is why it is asked rather than the asset URL:
-     * that one redirects twice and ends at a signed CDN address carrying no tag.
-     *
-     * **Falls back to the unpinned URL when the resolution fails, deliberately.**
-     * A wrong pin would 404 every toolchain for everyone, while the unpinned URL
-     * is what shipped before this existed.
-     *
-     * That floor covers a failure to resolve and nothing more, which is narrower
-     * than this once claimed. Once a pin IS returned, both requests use it and
-     * neither falls back: a 404 on the pinned release becomes
-     * [MissingFromRelease], which [retrying] rethrows on the first attempt, and
-     * the install is refused. So a release published inside the one request
-     * between the HEAD and the manifest fetch pins to the older one and fails
-     * where the unpinned path would have taken both files from the newer.
-     *
-     * That window is one request wide against a transfer measured in minutes,
-     * it fails closed, and retrying succeeds, so it is the price of closing the
-     * wide window rather than a defect in the trade. It is written down because
-     * the sentence it replaces asserted the price could not exist, and the next
-     * reader would have believed it.
-     */
-    private fun pinLatest(zipUrl: String, download: HttpDownload): String {
-        // Before the request, for the reason the check above this call records: a
-        // pack cancelled while queued must not spend one, and this one carries a
-        // 30 s connect and a 30 s read timeout that nothing else here would
-        // interrupt.
-        if (download.cancelled) return zipUrl
-        ownReleaseAssetUrl(zipUrl, download)?.let {
-            Logger.i(tag, "Pinned this install to ${it.substringBeforeLast('/')}")
-            return it
-        }
-        if (download.cancelled) return zipUrl
-        val latestUrl = latestReleaseUrlFor(zipUrl) ?: return zipUrl
-        val pinned = try {
-            val conn = URL(latestUrl).openConnection() as HttpURLConnection
-            bindActiveConnection(download, conn)
-            try {
-                conn.connectTimeout = HTTP_TIMEOUT_MS
-                conn.readTimeout = HTTP_TIMEOUT_MS
-                conn.instanceFollowRedirects = false
-                conn.requestMethod = "HEAD"
-                conn.setRequestProperty("User-Agent", "VSCodroid")
-                val code = conn.responseCode
-                val location = if (code in 300..399) conn.getHeaderField("Location") else null
-                location?.let { releaseTagFromLocation(it) }?.let { pinnedAssetUrl(zipUrl, it) }
-            } finally {
-                clearActiveConnection(download, conn)
-                conn.disconnect()
-            }
-        } catch (e: IOException) {
-            Logger.w(tag, "Could not resolve the latest release: ${e.message}")
-            null
-        }
-        if (pinned == null) {
-            Logger.w(
-                tag,
-                "Falling back to the unpinned release URL; the digest and the payload " +
-                    "may come from different releases if one is published mid-download",
-            )
-            return zipUrl
-        }
-        Logger.i(tag, "Pinned this install to ${pinned.substringBeforeLast('/')}")
-        return pinned
-    }
-
-    /**
-     * [zipUrl] served from this build's own release, or null.
-     *
-     * Null covers three different things on purpose, because the caller does
-     * the same thing with all of them: this build's version does not name a
-     * tag, no release carries that tag, or the release carries it but not this
-     * asset. Each leaves `latest` as the answer, which is what shipped before
-     * this existed.
-     *
-     * One HEAD against the asset itself rather than against the release page,
-     * because the asset is the question. Measured 2026-08-19, redirects not
-     * followed: a published asset answers 302 and both a missing asset and a
-     * missing tag answer 404, so one request separates every case that matters.
-     * Asking the release page instead would answer 200 for a release whose
-     * toolchain step failed, pin to it, and turn a fallback into a refused
-     * install two requests later.
-     */
-    private fun ownReleaseAssetUrl(zipUrl: String, download: HttpDownload): String? {
-        val ownTag = appReleaseTag(BuildConfig.VERSION_NAME) ?: return null
-        val url = pinnedAssetUrl(zipUrl, ownTag) ?: return null
-        if (assetIsPublished(url, download)) return url
-        Logger.i(
-            tag,
-            "Release $ownTag does not publish ${zipUrl.substringAfterLast('/')}; " +
-                "falling back to the latest release",
-        )
-        return null
-    }
-
-    /**
-     * Whether the server will serve [url], asked with a HEAD and no body.
-     *
-     * Redirects are not followed, so the 302 that a published asset answers is
-     * the success and there is no transfer behind it. Any failure to ask counts
-     * as no: the caller's fallback is the behaviour that shipped before this,
-     * and a network that cannot answer this cannot serve the payload either.
-     */
-    private fun assetIsPublished(url: String, download: HttpDownload): Boolean = try {
-        val conn = URL(url).openConnection() as HttpURLConnection
-        bindActiveConnection(download, conn)
-        try {
-            conn.connectTimeout = HTTP_TIMEOUT_MS
-            conn.readTimeout = HTTP_TIMEOUT_MS
-            conn.instanceFollowRedirects = false
-            conn.requestMethod = "HEAD"
-            conn.setRequestProperty("User-Agent", "VSCodroid")
-            conn.responseCode in 200..399
-        } finally {
-            clearActiveConnection(download, conn)
-            conn.disconnect()
-        }
-    } catch (e: IOException) {
-        Logger.w(tag, "Could not ask whether $url is published: ${e.message}")
-        false
-    }
-
-    /**
-     * The digest the release publishes for [zipName], or a refusal.
-     *
-     * Fetched before the ZIP rather than after, so a release that cannot vouch
-     * for its payload costs a few hundred bytes instead of 179 MB.
-     *
-     * There is no fallback, and that is the whole change: silently installing
-     * what nothing vouches for is the behaviour being removed, so it cannot be
-     * what happens when the manifest is missing. A release without one -- or
-     * with one that does not name this ZIP -- fails the install and says why.
-     * Releases cannot reach that state unnoticed: the same step in `release.yml`
-     * that packages the ZIPs writes this manifest and fails the release if a ZIP
-     * named in [ToolchainRegistry] is missing from either.
-     *
-     * Retried on the same terms as the payload. Being first in the sequence and
-     * less tolerant than what follows it is the one way this check could make
-     * installs worse rather than safer.
-     */
-    @Throws(IOException::class)
-    private fun publishedDigestFor(zipUrl: String, download: HttpDownload): String {
-        val zipName = zipUrl.substringAfterLast('/')
-        val manifest = retrying("$zipName digest manifest", download) {
-            fetchManifest(manifestUrlFor(zipUrl), download)
-        }
-        return digestFromManifest(manifest, zipName)
-            // [MissingFromRelease], not the plain IOException it extends. The two are
-            // caught in that order and mean different things to the user, and this
-            // case was landing in the wrong one: the manifest was fetched, so nothing
-            // about the network is at fault, yet `catch (e: IOException)` reported
-            // "Download failed. Check your connection and try again." A better
-            // connection cannot produce a manifest entry that is not there.
-            //
-            // The release is incomplete, which is exactly what NOT_PUBLISHED already
-            // says: "not in the current release, try again after the next app update."
-            // `digestFromManifest` also answers null for two conflicting entries, and
-            // that is the same answer for the same reason -- nothing here can say
-            // which one vouches for the payload.
-            ?: throw MissingFromRelease(
-                "The release's digest manifest does not name $zipName; refusing to install a " +
-                    "payload nothing vouches for"
-            )
-    }
-
-    /**
-     * Downloads the toolchain ZIP, reporting progress as DOWNLOADING.
-     *
-     * Refuses a body shorter or longer than the server said it would send, which
-     * is worth stating as narrowly as it holds: it catches a transfer that ends
-     * early -- a connection dropped mid-stream, a proxy closing a chunked body
-     * without finishing it -- and it says nothing at all about whether the bytes
-     * are the right ones. A payload that arrives complete and wrong matches its
-     * own Content-Length and passes here.
-     *
-     * That second question is answered by the caller rather than here, against
-     * the digest the release publishes; see [publishedDigestFor]. The two checks
-     * are kept apart because they fail differently: a short read is a transfer
-     * fault and worth retrying, so it is thrown from inside the retry loop,
-     * while a complete body whose digest is wrong is not going to become right
-     * on the third attempt.
-     *
-     * A retry picks up where the last attempt stopped rather than starting
-     * again. [retrying] gives three attempts, and each of them used to open the
-     * destination truncating and ask for the whole file: a mobile connection
-     * that dropped at 50 MB of the 55.4 MB Java ZIP spent those 50 MB again, up
-     * to about 166 MB of a metered allowance for one toolchain. So a second
-     * attempt that finds bytes already written asks for the rest with `Range`
-     * and appends. The staging directory belongs to this download alone
-     * ([toolchainTempDir]), so what is on disk can only be this transfer's own
-     * earlier bytes.
-     *
-     * A server that ignores the header answers 200 with the whole body, which is
-     * why the response code decides whether the stream appends or truncates
-     * rather than the request doing so. A server that honours it wrongly, from
-     * an offset other than the one asked for, produces an archive whose digest
-     * does not match what the release published, and the caller refuses it: this
-     * cannot install anything the digest check would not have installed anyway.
-     * A server that refuses the offset outright answers 416, which is
-     * [RangeRefused] and is the one failure the caller has to act on rather than
-     * repeat; see where [retrying] wraps this call.
-     */
-    @Throws(IOException::class)
-    private fun downloadFile(
-        packName: String,
-        url: String,
-        destFile: File,
-        expectedTransferBytes: Long,
-        download: HttpDownload,
-    ) {
-        // Read before the request, because it is what the request asks for. Zero
-        // on a first attempt: the file does not exist yet.
-        val alreadyHave = destFile.length()
-        val headers =
-            if (alreadyHave > 0) mapOf("Range" to "bytes=$alreadyHave-") else emptyMap()
-        withRedirects(url, "toolchain ZIP", headers, download = download) { conn ->
-            // 206 means the server is sending the remainder and the bytes on disk
-            // stand; anything else means it is sending the file from the start and
-            // they do not.
-            val resumed = conn.responseCode == 206
-            val startAt = if (resumed) alreadyHave else 0L
-            if (alreadyHave > 0 && !resumed) {
-                Logger.i(tag, "$packName: the server did not honour Range, starting again")
-            }
-            // Two different numbers, kept apart. The progress denominator may
-            // fall back to the registry's download figure, which is a constant
-            // written by hand; the completeness check may not,
-            // because that constant goes stale the moment a payload is
-            // rebuilt and would then fail every download of a healthy file.
-            // Only a length the server actually sent is evidence of
-            // anything -- and on a 206 that length is the remainder, which is
-            // what the check below compares against and why the bar adds the
-            // part already on disk to it.
-            val declaredBytes = conn.contentLengthLong
-            val totalBytes = if (declaredBytes > 0) startAt + declaredBytes else expectedTransferBytes
-
-            fun percentOf(bytes: Long): Int =
-                if (totalBytes > 0) ((bytes * 85) / totalBytes).toInt().coerceAtMost(85) else 0
-
-            // The figure a resumed transfer starts from, not zero: reporting zero
-            // here would walk the bar backwards on every retry.
-            val startPercent = percentOf(startAt)
-            report(packName, AssetPackStatus.DOWNLOADING, startPercent, download.transferId)
-            download.percent = startPercent
-
-            var bytesRead = 0L
-            // What the last report said, so the loop below reports a figure rather
-            // than an iteration. Starts at the figure just reported, which is also
-            // the whole of what a transfer with no length to divide by can ever say.
-            var lastReported = startPercent
-            BufferedInputStream(conn.inputStream).use { input ->
-                FileOutputStream(destFile, resumed).use { output ->
-                    val buffer = ByteArray(DOWNLOAD_BUFFER_SIZE)
-                    var len: Int
-
-                    while (input.read(buffer).also { len = it } != -1) {
-                        if (download.cancelled) {
-                            throw IOException("Download cancelled")
-                        }
-                        output.write(buffer, 0, len)
-                        bytesRead += len
-                        val percent = percentOf(startAt + bytesRead)
-                        // On the token as well as in the report: the report reaches
-                        // only the manager that began this download, and a screen
-                        // rebuilt mid-transfer holds a different one. Written every
-                        // iteration, unlike the report, because it costs a field
-                        // store and it is what [packsDownloading] hands the screens
-                        // that were never subscribed.
-                        download.percent = percent
-                        // Only when the figure has moved. The buffer is 8 KB and
-                        // `percent` takes 86 values, so a 55 MB toolchain reported
-                        // 6,763 times to say 86 different things, and both consumers
-                        // post every one of them onto the main thread: the card
-                        // rebinds and the first-run row re-formats its text. The poll
-                        // channel on the toolchain screen already refuses to push an
-                        // unchanged snapshot for exactly this reason.
-                        if (percent != lastReported) {
-                            lastReported = percent
-                            report(packName, AssetPackStatus.DOWNLOADING, percent, download.transferId)
-                        }
-                    }
-                }
-            }
-
-            if (!isCompleteTransfer(declaredBytes, bytesRead)) {
-                // The counts belong in the message. They were held out of it and
-                // logged separately, because retryability was decided by looking
-                // for "404" as a substring and a byte count that happened to read
-                // 404 would have turned a retryable truncation into an immediate
-                // failure. That predicate is a type now, so the workaround has
-                // nothing left to work around, and the retry loop logs the message
-                // on every attempt.
-                throw IOException(
-                    "Incomplete download for $packName: received $bytesRead bytes of $declaredBytes declared"
-                )
-            }
-
-            Logger.i(tag, "Downloaded $packName: ${destFile.length() / 1_000_000} MB")
-        }
-    }
-
-    /**
-     * Extracts a ZIP archive to the destination directory.
-     * Enforces zip-slip protection, cancellation checks, and total byte/entry limits.
-     */
-    @Throws(IOException::class, SecurityException::class)
-    private fun extractZip(
-        zipFile: File,
-        destDir: File,
-        isCancelled: () -> Boolean = { false },
-        maxBytes: Long = MAX_EXTRACT_BYTES,
-        maxEntries: Int = MAX_EXTRACT_ENTRIES,
-    ) {
-        extractToolchainZip(
-            zipFile = zipFile,
-            destDir = destDir,
-            appRoot = context.filesDir.parentFile,
-            isCancelled = isCancelled,
-            maxBytes = maxBytes,
-            maxEntries = maxEntries,
-        )
-        Logger.i(tag, "Extracted ${zipFile.name} to ${destDir.absolutePath}")
-    }
-
-    // -- Shared file operations --
-
-    private fun copyDirectoryRecursively(src: File, dest: File) =
-        copyDirectoryTree(src, dest)
-
-    // -- Environment file generation --
-
-    /**
-     * Regenerates both files derived from the installed set.
-     *
-     * `~/.vscodroid/toolchain-env.sh` is sourced by `.bashrc` and by the
-     * `BASH_ENV` file, so a terminal and a `bash -c` pick up the toolchain's
-     * environment and its loader wrappers. `~/.vscodroid/toolchain-exec.tsv`
-     * and the symlinks beside it answer the same question for every caller that
-     * never reaches bash.
-     */
-    fun regenerateDerivedFiles() = synchronized(stateLock) { regenerateDerivedFilesLocked() }
-
-    /**
-     * Everything derived from `toolchains.json`, regenerated together.
-     *
-     * The two generators answer the same question for two different readers:
-     * `toolchain-env.sh` tells bash what a toolchain command means, and
-     * `toolchain-exec.tsv` tells the execution trampoline the same thing for
-     * every caller that never reaches bash. They are called as one because the
-     * three moments the installed set changes are the three moments both have to
-     * be rewritten, and a call site that remembered one and forgot the other
-     * would leave the terminal working while a task or a `make` recipe answered
-     * exit 127, which reads as the toolchain not being installed.
-     *
-     * Caller must hold [stateLock].
-     */
-    private fun regenerateDerivedFilesLocked() {
-        regenerateEnvFileLocked()
-        regenerateExecTableLocked()
-    }
-
-    /**
-     * Path to the system dynamic linker, which is the only way a toolchain
-     * binary runs at all.
-     *
-     * SELinux denies `execute_no_trans` on `app_data_file`, so the kernel
-     * refuses to `execve` anything whose inode is under `filesDir` -- which is
-     * every byte a downloaded toolchain consists of. Measured on an API 37
-     * emulator, `user` build, SELinux enforcing, from inside the app's own
-     * process: a valid ELF copied there with mode 0755 fails with EACCES, and
-     * it fails identically when reached through a symlink, because the check is
-     * on the resolved inode's label rather than on the path. `chmod` cannot
-     * reach it.
-     *
-     * Handing the same file to a loader that lives somewhere the app *may*
-     * execute from does run it: `/system/bin/linker64 <binary>` returned 0 and
-     * the program's own output, arguments and quoting survived, a non-zero exit
-     * code came back intact, and `$0` was the binary's path rather than the
-     * loader's. It is the shape the bundled Claude Code CLI already relies on.
-     */
-    private val systemLoader = "/system/bin/linker64"
-
-    /**
-     * Caller must hold [stateLock]. This file is derived from `toolchains.json`,
-     * so regenerating it from a state another instance is midway through
-     * changing produces an environment for a set of toolchains that never
-     * existed.
-     */
-    private fun regenerateEnvFileLocked() {
-        val installed = readableState()
-        if (installed == null) {
-            // Damage is not absence. The state file this could not parse was written
-            // by a build that truncated it in place, and the devices carrying one
-            // are upgrading from exactly that build. Reading it as "no toolchains"
-            // deletes the env file below, the only working record of how to run
-            // what is still on disk, and every launch deletes it again. Leaving
-            // the last good file is what the bashrc repair does for the same damage.
-            Logger.w(tag, "toolchains.json is unreadable; keeping the env file as it stands")
-            return
-        }
-        if (installed.length() == 0) {
-            if (envFile.exists()) envFile.delete()
-            return
-        }
-
-        val sb = StringBuilder()
-        sb.appendLine("# Auto-generated by ToolchainManager: do not edit")
-        sb.appendLine("# Sourced by .bashrc for toolchain environment variables")
-        sb.appendLine()
-
-        val extraPaths = mutableListOf<String>()
-
-        for (i in 0 until installed.length()) {
-            val tc = installed.optJSONObject(i) ?: continue
-            val name = tc.optString("name", "unknown")
-            val env = tc.optJSONObject("env") ?: continue
-            val preloadOnly = isPreloadOnly(tc)
-
-            sb.appendLine("# $name toolchain")
-            for (key in env.keys()) {
-                // $HOME is deliberately left alone: the shell expands it when
-                // it sources this file, which is what the manifest intends. It
-                // used to be "replaced" with itself, which reads as a deliberate
-                // transformation and is not one.
-                val value = env.getString(key)
-                    .replace("\$FILESDIR", "\$PREFIX/..")
-                if (!isShellSafeEnvEntry(key, value)) {
-                    Logger.w(tag, "No export for $name's ${redactToken(key)}: not a line that is " +
-                        "safe to put in a file every terminal sources")
-                    continue
-                }
-                if (key in OPTION_LIST_VARS) {
-                    // Added to what the parent passed, once. A plain export put
-                    // `-rrubygems` over the `-rbundler/setup` of a `bundle exec`, so
-                    // a bash started under it (BASH_ENV runs this file in every one)
-                    // lost the Gemfile's gems.
-                    sb.appendLine(
-                        "case \" \${$key-} \" in *\" $value \"*) ;; " +
-                            "*) export $key=\"\${$key:+\$$key }$value\" ;; esac"
-                    )
-                } else {
-                    sb.appendLine("export $key=\"$value\"")
-                }
-            }
-            sb.appendLine()
-
-            // Binary wrappers. Nothing under filesDir can be execve'd, so every
-            // name PATH would resolve to is shadowed by a shell function that
-            // hands the file to the system loader instead. Functions rather than
-            // scripts for the same reason npm and npx are functions: a shebang
-            // file under filesDir cannot be executed either.
-            //
-            // Only ELF objects are wrapped here. A manifest's `binaries` list
-            // also carries interpreter scripts -- Ruby's `gem` and `rake` are
-            // Ruby source -- and those are handled by scriptWrappers below,
-            // which routes them through their interpreter. That interpreter is
-            // itself one of these functions, so the two layers compose.
-            //
-            // A toolchain that is [isPreloadOnly] gets no function at all. A
-            // comment in the file says so instead, so that a missing `clang`
-            // function is explained where someone looks for it.
-            val scriptNames = tc.optJSONObject("scriptWrappers")
-                ?.optJSONObject("scripts")?.keys()?.asSequence()?.toSet().orEmpty()
-            val binaries = if (preloadOnly) null else tc.optJSONArray("binaries")
-            if (preloadOnly) {
-                sb.appendLine("# $name programs start through the terminal's preloaded exec, so no wrappers")
-                sb.appendLine()
-            }
-            if (binaries != null) {
-                val lines = mutableListOf<String>()
-                for (i in 0 until binaries.length()) {
-                    val relPath = binaries.getString(i)
-                    val command = relPath.substringAfterLast('/')
-                    if (command.isEmpty() || command in scriptNames || !isPathCommand(tc, relPath)) continue
-                    // The JVM flags the manifest names reach every launcher in the JDK's
-                    // bin/: `java` takes them as they are, every tool beside it takes
-                    // them as -J options. A manifest without any (an install made while
-                    // the pack carried JDK 17, which has no such flag) gets none.
-                    val toolFlags = jvmLauncherFlags(tc, relPath).joinToString("") { "$it " }
-                    // A name bash cannot use as a function is skipped rather than
-                    // written. The manifests are regenerated from upstream packages
-                    // at build time, so a future version can introduce a binary
-                    // called something like `[`, coreutils' own name for `test`,
-                    // without anyone here choosing it -- and this file is sourced by
-                    // .bashrc, so one unusable name is a parse error that takes out
-                    // *every* new terminal, not just that command. Losing one
-                    // wrapper is the smaller failure, and it says so in the log.
-                    //
-                    // The bar is [isShellFunctionName], which refuses a name
-                    // carrying any of the measured unsafe characters. It is wider
-                    // than a shell identifier: `2to3` and `foo-bar` pass it, and
-                    // `ShellFunctionNameTest` establishes against a real bash that
-                    // they are genuinely usable. This skips fewer names than it
-                    // looks like it does, which is the intent. The exec table is
-                    // generated over the full list either way, since a trampoline
-                    // symlink has no naming constraint at all.
-                    if (!isShellFunctionName(command)) {
-                        Logger.w(tag, "No wrapper for $command: not a name bash can " +
-                            "use as a function, so it would break every terminal")
-                        continue
-                    }
-                    if (!isElfFile(File(context.filesDir, relPath))) continue
-                    if (command == "jshell") {
-                        // jshell's default engine runs snippets in a second JVM that it
-                        // execs by absolute path. Under filesDir that exec is refused
-                        // wherever the exec interceptor is not preloaded, and this file
-                        // is sourced there too (BASH_ENV, a terminal with LD_PRELOAD
-                        // switched off), so jshell fails to launch; `--execution local`
-                        // keeps the snippets in jshell's own JVM. jshell refuses a
-                        // repeated --execution and accepts abbreviations of it, hence
-                        // the guard. It reads each argument on its own: matching " -ex"
-                        // in the joined "$*" took a path holding that for an engine
-                        // choice, and missed a later --execution under an IFS that does
-                        // not start with a space.
-                        // It also steps over the value of each option that takes one,
-                        // because jshell's parser (jopt-simple, in jdk.internal.opt)
-                        // hands such an option the next argument whatever it looks
-                        // like: in `--startup -extras.jsh` that is a file name. The
-                        // patterns follow that parser's grammar: one dash or two, any
-                        // unambiguous abbreviation (`--st`, and `-c` or `-m` alone for
-                        // --class-path and --module-path), `-R` or `-C` alone, and any
-                        // of `-R`, `-C`, `-c` and `-m` closing a cluster of flags such
-                        // as `-qR`. A value given with `=`, or written on after the
-                        // letter as in `-cfoo` and `-R-Dx`, takes nothing more. `--`
-                        // ends the options. `-J` arguments are the launcher's: it
-                        // hands them to the JVM before jshell parses, so they are
-                        // nobody's value. A class path that itself starts with `-J`
-                        // is not modelled: right after an exact `-cp`, `-classpath`
-                        // or `--class-path` the launcher also passes such an
-                        // argument on to jshell, and then drops the last argument of
-                        // the line.
-                        // FORK lets jline start stty, without which Tab and ArrowUp
-                        // do not work: the default mechanism starts a spawn helper
-                        // under filesDir, which fails where the exec interceptor is
-                        // not preloaded. VFORK did the same until JDK 25, which
-                        // prints a deprecation notice on every start; FORK does not.
-                        // user.home replaces Termux's compiled-in
-                        // home, where the preferences store cannot be written and
-                        // exit stalls.
-                        lines.add(
-                            "jshell() { local arg skip= chosen=; for arg in \"\$@\"; do " +
-                                "case \"\$arg\" in -J*) continue ;; esac; " +
-                                "if [ -n \"\$skip\" ]; then skip=; continue; fi; " +
-                                "case \"\$arg\" in --) break ;; -ex*|--ex*) chosen=1; break ;; *=*) ;; " +
-                                "--c*|--m*|--add-[em]*|--st*|--fe*|--[RC]|-add-[em]*|-st*|-fe*) skip=1 ;; " +
-                                "-c*) case class-path in \"\${arg#-}\"*) skip=1 ;; esac ;; " +
-                                "-m*) case module-path in \"\${arg#-}\"*) skip=1 ;; esac ;; " +
-                                "-*[RCcm]) case \"\${arg%?}\" in -*[!nqsvhX?]*) ;; *) skip=1 ;; esac ;; " +
-                                "esac; done; " +
-                                "[ -n \"\$chosen\" ] || set -- --execution local \"\$@\"; " +
-                                "$systemLoader \"\$PREFIX/../$relPath\" " +
-                                toolFlags +
-                                "-J-Djdk.lang.Process.launchMechanism=FORK " +
-                                "-J-Duser.home=\"\$HOME\" \"\$@\"; }"
-                        )
-                        continue
-                    }
-                    if (command == "java" || command == "keytool") {
-                        // Termux compiled its own paths into libjava as the defaults of
-                        // `user.home` (/data/data/com.termux/files/home) and
-                        // `java.io.tmpdir` (/data/data/com.termux/files/usr/tmp/), which
-                        // this app can neither read nor create. Measured on an API 33
-                        // emulator: File.createTempFile and an embedded web server's
-                        // work directory fail on the second, keytool's default keystore
-                        // on the first. The shell has the right values, so they are
-                        // handed over unless the caller sets its own later on the line
-                        // (the last -D wins). A variable that is not set adds nothing.
-                        // keytool is a launcher that takes them as -J options and has
-                        // no use for a temporary directory.
-                        val properties = if (command == "java") {
-                            "\${HOME:+\"-Duser.home=\$HOME\"} \${TMPDIR:+\"-Djava.io.tmpdir=\$TMPDIR\"}"
-                        } else {
-                            "\${HOME:+\"-J-Duser.home=\$HOME\"}"
-                        }
-                        lines.add("$command() { $systemLoader \"\$PREFIX/../$relPath\" $toolFlags$properties \"\$@\"; }")
-                        continue
-                    }
-                    lines.add("$command() { $systemLoader \"\$PREFIX/../$relPath\" $toolFlags\"\$@\"; }")
-                }
-                if (lines.isNotEmpty()) {
-                    sb.appendLine("# $name binaries (SELinux blocks exec under filesDir)")
-                    lines.forEach(sb::appendLine)
-                    sb.appendLine()
-                }
-            }
-
-            // Script wrappers: bash functions for scripts that can't execute directly
-            // on Android: SELinux denies execute_no_trans under filesDir, so a shebang
-            // never runs. Invokes scripts via their interpreter instead.
-            val scriptWrappers = if (preloadOnly) null else tc.optJSONObject("scriptWrappers")
-            if (scriptWrappers != null) {
-                val interpreter = scriptWrappers.optString("interpreter", "")
-                val scripts = scriptWrappers.optJSONObject("scripts")
-                if (interpreter.isNotEmpty() && scripts != null) {
-                    val lines = mutableListOf<String>()
-                    for (scriptName in scripts.keys()) {
-                        // The same bar the binaries above are held to, and for
-                        // the same reason: these names are not this repository's
-                        // choice either. `download-ruby.sh` takes each one from
-                        // the `basename` of whatever upstream ships in the
-                        // package's bin directory, splitting binaries from
-                        // scripts by reading the file rather than by naming it,
-                        // so a future package can introduce a name nobody here
-                        // chose. This file is sourced by .bashrc, so a name bash
-                        // cannot use as a function costs every wrapper written
-                        // after it in every new terminal, not just this command.
-                        // The exec table below carries it regardless: a
-                        // trampoline symlink has no naming constraint.
-                        if (!isShellFunctionName(scriptName)) {
-                            Logger.w(tag, "No wrapper for $scriptName: not a name bash can " +
-                                "use as a function, so it would break every terminal")
-                            continue
-                        }
-                        val scriptPath = scripts.getString(scriptName)
-                        lines.add("$scriptName() { $interpreter \"\$PREFIX/../$scriptPath\" \"\$@\"; }")
-                    }
-                    if (lines.isNotEmpty()) {
-                        sb.appendLine("# $name script wrappers (SELinux blocks exec under filesDir)")
-                        lines.forEach(sb::appendLine)
-                        sb.appendLine()
-                    }
-                }
-            }
-
-            // Collect extra PATH dirs
-            val pathDirs = tc.optJSONArray("pathDirs")
-            if (pathDirs != null) {
-                for (j in 0 until pathDirs.length()) {
-                    val dir = pathDirs.getString(j)
-                    if (!isShellSafePathDir(dir)) {
-                        Logger.w(tag, "No PATH entry for $name's ${redactToken(dir)}: not a directory " +
-                            "name that is safe to put in a file every terminal sources")
-                        continue
-                    }
-                    extraPaths.add("\$PREFIX/../$dir")
-                }
-            }
-        }
-
-        if (extraPaths.isNotEmpty()) {
-            sb.appendLine("# Toolchain PATH additions")
-            // Appended, never prepended. These directories hold the raw payload:
-            // `usr/bin/ruby` is the interpreter itself and the JDK's bin holds
-            // `java`, both ELF objects under filesDir that SELinux refuses to
-            // execve. The trampoline directory that CAN start them is already on
-            // PATH ahead of them, put there by
-            // [Environment.buildProcessEnvironment], and a shell that prepended
-            // these would restore the unexecutable copies in front of it for
-            // itself and for every child it spawns. Bash function lookup happens
-            // before PATH either way, so this line only decides what a
-            // non-bash child of a bash shell resolves.
-            //
-            // They are kept rather than dropped as insurance for a future
-            // manifest whose `binaries` list is incomplete: behind the
-            // trampoline directory they cost nothing.
-            //
-            // Each directory is added once per PATH. Every bash this file reaches
-            // sources it again, and a plain `export PATH="$PATH:..."` made a bash
-            // started from a terminal's bash carry every directory twice.
-            sb.appendLine(
-                "for __vscodroid_d in ${extraPaths.distinct().joinToString(" ") { "\"$it\"" }}; do " +
-                    "case \":\$PATH:\" in *\":\$__vscodroid_d:\"*) ;; *) PATH=\"\$PATH:\$__vscodroid_d\" ;; esac; done; " +
-                    "export PATH; unset __vscodroid_d"
-            )
-        }
-
-        envFile.parentFile?.mkdirs()
-        // Atomic for the same reason as the state file, with a different cost on
-        // failure: `.bashrc` sources this unconditionally, so a truncated copy is
-        // not an absent environment but a sourcing error printed into every new
-        // terminal, possibly with PATH half-built.
-        if (!writeAtomically(envFile) { it.write(sb.toString().toByteArray()) }) {
-            Logger.e(tag, "Could not write toolchain-env.sh; it still holds the previous environment")
-            return
-        }
-        Logger.i(tag, "Regenerated toolchain-env.sh (${installed.length()} toolchains)")
-    }
-
-    /**
-     * Writes the table the execution trampoline reads, then repoints the
-     * symlinks that put its names on PATH.
-     *
-     * The shell functions [regenerateEnvFileLocked] emits reach one shell
-     * family, and only once it has been told to read that file. Everything that
-     * resolves a bare command name and execve's the result went on failing with
-     * EACCES: a direct `spawn("ruby", args)` from an extension or a language
-     * server, a `make` recipe (whose shell `patch-default-shell.py` compiled to
-     * `/system/bin/sh`, which is mksh and has never heard of `BASH_ENV`), Node's
-     * own `exec()` for the same reason, bash invoked as `sh`, and a
-     * `"type": "process"` task. This file is what those callers reach instead.
-     *
-     * Two record shapes, matching the two the env file already emits, each with optional
-     * arguments the trampoline puts between the target and the caller's own:
-     *
-     *   `<command>\t<absolute path of an ELF>[\t<argument>...]`
-     *   `<command>\t<absolute path of the interpreter>\t<absolute path of a script>`
-     *
-     * The arguments are what makes a JDK launcher start the way its shell function
-     * does, for the callers the function does not reach (see [jdkLauncherArgs]).
-     *
-     * and a third for the environment, with an empty command field:
-     *
-     *   `\t<variable>\t<value>`
-     *
-     * The environment travels here as well as in the env file because of when
-     * each reader looks. Bash re-reads `toolchain-env.sh` in every shell; the
-     * server process reads [getAllToolchainEnv] once, at start, and every
-     * non-bash child inherits that snapshot. A toolchain installed while the
-     * server ran therefore had its commands on PATH within the second and its
-     * variables only after the next restart: measured on an API 37 emulator, a
-     * `"type": "process"` task ran the trampoline's `ruby` with RUBYLIB unset, a
-     * load path inside Termux's prefix and `LoadError` on `require "json"`,
-     * while the same probe through bash worked. The empty command field is what
-     * keeps the row harmless to a trampoline built before it existed: a
-     * basename is never empty, so such a reader walks past it.
-     *
-     * Absolute, and expanded here rather than written as `$PREFIX/../` the way
-     * the env file does. The trampoline is a C program and not a shell; a
-     * `$PREFIX` in the table would be a literal path component that does not
-     * exist.
-     *
-     * Two deliberate differences from the env file, each of which would be a
-     * defect if it were quietly made symmetrical:
-     *
-     *   * [isShellFunctionName] is NOT applied. That filter exists because one
-     *     name bash cannot use as a function is a parse error that takes out
-     *     every new terminal, and it refuses any name carrying a measured unsafe
-     *     character: coreutils' `[` is a real file name it turns away. A symlink
-     *     has no naming constraint at all, so reusing the filter here would drop
-     *     exactly the commands the trampoline was built to reach, and the only
-     *     sign would be one missing command.
-     *   * A later toolchain wins a name collision, which is what sourcing the
-     *     env file top to bottom already does to a redefined bash function.
-     *
-     * Caller must hold [stateLock]. This is derived from `toolchains.json`, so
-     * generating it from a state another instance is midway through changing
-     * describes a set of toolchains that never existed.
-     */
-    private fun regenerateExecTableLocked() {
-        val readable = readableState()
-        // No early return for an empty record any more. The table is no longer
-        // only about toolchains: the row this app owns below has to exist on a
-        // device that has never installed one, which is most devices.
-
-        // Insertion-ordered so the file is stable between runs: a table that
-        // reordered itself on every launch would make every diff of it
-        // unreadable, and this file is one of the first things to look at when
-        // a command goes missing.
-        val rows = LinkedHashMap<String, String>()
-        // Where `gem install` puts commands, with the Ruby that runs them, for
-        // [addInstalledScriptRows] after the loop.
-        var gemBin: Pair<File, String>? = null
-        // Keyed by variable, so a later toolchain wins a collision: the same
-        // outcome sourcing the env file top to bottom gives a redefined export.
-        val envRows = LinkedHashMap<String, String>()
-        if (readable == null) {
-            // Damage is not absence, exactly as in [regenerateEnvFileLocked].
-            // Deleting the table over a state file this could not parse would
-            // take every toolchain command off PATH on every launch, while the
-            // payload it names is still on disk and still runnable. So the rows
-            // the last good pass wrote are carried, when every path they name is
-            // still there. Nothing more than that: returning here instead, as this
-            // once did, also froze the rows below that name nativeLibraryDir and
-            // the links into it, which the next app update moves, so xdg-open and
-            // every pip command stopped starting on such a device for good.
-            Logger.w(tag, "toolchains.json is unreadable; carrying the previous toolchain rows")
-            execTable.takeIf { it.isFile }?.readLines()?.forEach { line ->
-                val fields = line.split('\t')
-                if (fields.size < 2) return@forEach
-                if (fields[0].isEmpty()) {
-                    envRows[fields[1]] = line
-                } else if (fields.drop(1).filter { !it.startsWith("-") }
-                        .all { it.startsWith("$filesDir/") && File(it).exists() }
-                ) {
-                    rows[fields[0]] = line
-                }
-            }
-        }
-        val installed = readable ?: JSONArray()
-        for (i in 0 until installed.length()) {
-            val tc = installed.optJSONObject(i) ?: continue
-            val name = tc.optString("name", "unknown")
-            val scriptNames = tc.optJSONObject("scriptWrappers")
-                ?.optJSONObject("scripts")?.keys()?.asSequence()?.toSet().orEmpty()
-
-            val env = tc.optJSONObject("env")
-            if (env != null) {
-                for (key in env.keys()) {
-                    val value = expandToolchainValue(env.getString(key))
-                    // A tab or a line break in the name, or a line break in the
-                    // value, is a torn record: the trampoline reads what follows
-                    // as a row of its own. `=` is what setenv itself refuses.
-                    if (key.isEmpty() || key.any { it == '=' || it == '\t' || it == '\n' } ||
-                        '\n' in value
-                    ) {
-                        Logger.w(tag, "No environment row for $name's $key: not a name " +
-                            "the table can carry")
-                        continue
-                    }
-                    envRows[key] = "\t$key\t$value"
-                }
-            }
-
-            // Every ELF the manifest names, keyed by its command name, so the
-            // script rows below can resolve their interpreter to a real path.
-            //
-            // Not for a toolchain that is [isPreloadOnly]. A row starts a program
-            // as `linker64 <file>` through the trampoline, which is the start
-            // such a toolchain's programs must not have, and a link in tcbin is
-            // what would put that row ahead of the real command on PATH.
-            val preloadOnly = isPreloadOnly(tc)
-            val elfPaths = mutableMapOf<String, String>()
-            val binaries = if (preloadOnly) null else tc.optJSONArray("binaries")
-            if (binaries != null) {
-                for (j in 0 until binaries.length()) {
-                    val relPath = binaries.getString(j)
-                    val command = relPath.substringAfterLast('/')
-                    if (command.isEmpty() || command in scriptNames || !isPathCommand(tc, relPath)) continue
-                    if (!isElfFile(File(context.filesDir, relPath))) continue
-                    val absolute = "$filesDir/$relPath"
-                    elfPaths[command] = absolute
-                    val args = jdkLauncherArgs(tc, relPath, command)
-                    if (!fitsTableRow(args)) {
-                        Logger.w(tag, "No row for $name's $command: its options are not a list of at most " +
-                            "$MAX_ROW_ARGS the table can carry")
-                        continue
-                    }
-                    rows[command] = (listOf(command, absolute) + args).joinToString("\t")
-                }
-            }
-
-            val scriptWrappers = if (preloadOnly) null else tc.optJSONObject("scriptWrappers")
-            val interpreter = scriptWrappers?.optString("interpreter", "").orEmpty()
-            val scripts = scriptWrappers?.optJSONObject("scripts")
-            if (interpreter.isNotEmpty() && scripts != null) {
-                // The manifest names the interpreter as a bare word because the
-                // env file's wrapper is read by a shell, which resolves it
-                // against PATH. Nothing resolves it for the trampoline, and it
-                // must not resolve it itself: searching PATH from inside the
-                // trampoline would let a poisoned PATH decide which program runs
-                // a toolchain's own scripts.
-                val interpreterPath = elfPaths[interpreter]
-                if (interpreterPath == null) {
-                    Logger.w(tag, "No exec-table rows for $name scripts: its interpreter " +
-                        "$interpreter is not an ELF this manifest ships")
-                } else {
-                    for (scriptName in scripts.keys()) {
-                        val scriptPath = scripts.getString(scriptName)
-                        // Held to what the binary loop above already asks of an
-                        // ELF: a row naming a file that is not there is a command
-                        // on PATH that always fails, which reads as the toolchain
-                        // being broken rather than absent. `isFile` and not
-                        // `exists`, so a directory left where a script should be
-                        // is refused too.
-                        if (!File(context.filesDir, scriptPath).isFile) {
-                            Logger.w(tag, "No row for $name's $scriptName: $scriptPath is not on disk")
-                            continue
-                        }
-                        rows[scriptName] = "$scriptName\t$interpreterPath\t$filesDir/$scriptPath"
-                    }
-                }
-            }
-
-            addLauncherRows(tc, name, rows)
-
-            val gemHome = env?.optString("GEM_HOME", "").orEmpty()
-            val ruby = elfPaths["ruby"]
-            if (gemHome.isNotEmpty() && ruby != null) {
-                gemBin = File(expandToolchainValue(gemHome), "bin") to ruby
-            }
-        }
-
-        // A row this app owns rather than a toolchain. `putIfAbsent`, and
-        // after the loop, so a toolchain shipping its own `xdg-open` keeps the
-        // name: rows are keyed by command and the toolchain's went in first, and
-        // an opener that came with a toolchain knows more about it than this does.
-        //
-        // Node's browser helpers spawn the literal command `xdg-open` on Android,
-        // and nothing on PATH answered to it, so a preview server could only print
-        // that it had given up. The interpreter form is used rather than a plain
-        // path because the program is a JavaScript file under `filesDir`, which
-        // SELinux will not `execve`; naming `libnode.so` in `nativeLibraryDir` as
-        // its interpreter is the same shape the script wrappers above use, and the
-        // reason this launch pass has to rewrite the table at all is that Android
-        // hands out a new `nativeLibraryDir` on every reinstall.
-        rows.putIfAbsent(
-            "xdg-open",
-            "xdg-open\t${Environment.getNodePath(context)}\t$filesDir/server/xdg-open.js",
-        )
-        addNpmRows(rows)
-        addCodexRows(rows, installed, stateKnown = readable != null)
-        val setAside = addGitHelperRows(rows, GIT_EXTENSION_DIST, GIT_HELPER_SCRIPTS) +
-            addGitHelperRows(rows, REMOTE_CLI_DIR, listOf(REMOTE_CLI)) +
-            addGitHelperRows(rows, GIT_CORE_DIR, GIT_CORE_SCRIPTS)
-        linkServerNode()
-        val binDir = File(context.filesDir, "usr/bin")
-        addInstalledScriptRows(rows, binDir, File(binDir, "python3").absolutePath, "python", "pip")
-        gemBin?.let { (dir, ruby) -> addInstalledScriptRows(rows, dir, ruby, "ruby", "gem") }
-
-        val body = (envRows.values + rows.values).joinToString("\n", postfix = "\n")
-        execTable.parentFile?.mkdirs()
-        // Atomic for a reason of its own, not by imitation: a torn line is a
-        // truncated path, and the trampoline would refuse it naming a file the
-        // user never chose. A rename means a concurrent reader sees the whole of
-        // the old table or the whole of the new one.
-        if (!writeAtomically(execTable) { it.write(body.toByteArray()) }) {
-            Logger.e(tag, "Could not write toolchain-exec.tsv; it still holds the previous table")
-            return
-        }
-        // Git finds these helpers through its extension paths or GIT_EXEC_PATH;
-        // the remote CLI is already on PATH. None needs a second link here.
-        refreshTrampolineLinks(rows.keys - setAside)
-        Logger.i(tag, "Regenerated toolchain-exec.tsv (${rows.size} commands, " +
-            "${envRows.size} variables)")
-    }
-
-    /**
-     * Rows for the binaries a manifest's `launchers` object names, each with the
-     * arguments the row carries ahead of the caller's own:
-     * `{"usr/bin/clangd": ["--resource-dir=$FILESDIR/usr/lib/clang/21"]}`.
-     *
-     * The way into the table for a program of a [isPreloadOnly] toolchain that
-     * a client starts by itself. clangd is the one: a language client spawns it
-     * with no terminal and so no interceptor, and a compiler's own start does
-     * not need this. Started as `linker64 <file>` it takes the loader's
-     * directory for its own and puts `-resource-dir=/apex/.../lib/clang/<major>`
-     * on every compile command, so stddef.h is not found; the argument gives it
-     * the real directory. Everything else it needs comes from the `clang` it
-     * finds on PATH, which is `usr/bin/clang`, and that is why `clang` never gets
-     * a row here: a link in tcbin would be found first and send its sysroot to
-     * `usr/libexec`.
-     *
-     * A launcher is held to what the table can carry. Its path has to be one of
-     * the manifest's own `binaries` and an ELF on disk, and its arguments have to
-     * fit the trampoline's row ([MAX_ROW_ARGS]) and contain neither a tab nor a
-     * line break, which would read as a field or a record of their own ([fitsTableRow]).
-     * A launcher that is not is skipped and logged, and nothing else about the
-     * toolchain changes.
-     */
-    private fun addLauncherRows(tc: JSONObject, name: String, rows: MutableMap<String, String>) {
-        val launchers = tc.optJSONObject("launchers") ?: return
-        val shipped = tc.optJSONArray("binaries")
-            ?.let { list -> (0 until list.length()).map { list.optString(it) }.toSet() }.orEmpty()
-        for (relPath in launchers.keys()) {
-            val command = relPath.substringAfterLast('/')
-            val argList = launchers.optJSONArray(relPath)
-            val args = argList?.let { list ->
-                (0 until list.length()).map { expandToolchainValue(list.optString(it)) }
-            }
-            when {
-                command.isEmpty() || relPath !in shipped ->
-                    Logger.w(tag, "No launcher row for $name's $relPath: not one of its binaries")
-                args == null || !fitsTableRow(args) ->
-                    Logger.w(tag, "No launcher row for $name's $command: its arguments " +
-                        "are not a list of at most $MAX_ROW_ARGS the table can carry")
-                !isElfFile(File(context.filesDir, relPath)) ->
-                    Logger.d(tag, "No launcher row for $name's $command: $relPath is not on disk")
-                else -> rows[command] = (listOf(command, "$filesDir/$relPath") + args).joinToString("\t")
-            }
-        }
-    }
-
-    /**
-     * Whether [args] fit a row after its target: at most [MAX_ROW_ARGS], and none holding a tab or a line break, which
-     * would read as a field or a record of their own. Asked of every row that carries arguments, launcher and JDK
-     * rows alike.
-     */
-    private fun fitsTableRow(args: List<String>): Boolean =
-        args.size <= MAX_ROW_ARGS && args.none { '\t' in it || '\n' in it }
-
-    /**
-     * Gives `npm` and `npx` rows, so a program that starts either by name finds it.
-     *
-     * In bash both are functions ([FirstRunSetup.createNpmWrappers]), because
-     * npm's CLI is a `#!` script under filesDir that SELinux will not execve, and
-     * a function does not exist for anything that looks the name up on PATH
-     * itself. Measured in the app's terminal: create-vite's
-     * `spawnSync("npm", ["install"])` failed with ENOENT and `timeout 20 npm
-     * --version` with "exec npm: No such file or directory"; `sh -c`, a git hook
-     * and an extension's spawn are the same case. Bash looks a function up before
-     * PATH, so a shell goes on running the function.
-     *
-     * Not the `xdg-open` shape, Node with the CLI as its one argument, because
-     * that cannot run what the functions run. The trampoline passes a row one
-     * argument and applies its environment rows to every command, which leaves no
-     * place for `--prefer-offline` on npm alone or for `VSCODROID_PLATFORM_FIX` on
-     * this one process. It also starts Node through linker64, which leaves
-     * `process.execPath` naming the linker (measured), and npm hands that to its
-     * scripts as `$NODE` and runs it again to prepare a git dependency. So each
-     * row runs a generated script with the system shell, the git helpers' shape.
-     * The script puts back the platform-fix preload a spawn from the extension
-     * host lacks, as BASH_ENV does for a shell, and then `exec`s Node itself: one
-     * process, which a signal reaches directly, and no shell left behind to print
-     * the shared-storage note the npm function adds to a failure.
-     *
-     * Rewritten when its text changes, which a reinstall causes by moving
-     * nativeLibraryDir. With no npm on disk, as on the first pass of a fresh
-     * install, there is no row and the name stays unknown, rather than becoming a
-     * command that always fails. A name a toolchain already took stays its own.
-     */
-    private fun addNpmRows(rows: LinkedHashMap<String, String>) {
-        val cliDir = "$filesDir/usr/lib/node_modules/npm/bin"
-        val node = Environment.getNodePath(context)
-        val platformFix = "$filesDir/server/platform-fix.js"
-        for ((command, cli, flags) in listOf(
-            Triple("npm", "npm-cli.js", " --prefer-offline"),
-            Triple("npx", "npx-cli.js", ""),
-        )) {
-            if (command in rows || !File(cliDir, cli).isFile) continue
-            val launcher = File(execTable.parentFile, "$command.sh")
-            val body = """
-                |# Auto-generated by ToolchainManager: do not edit
-                |# $command for a program that starts it by name, run through the exec
-                |# trampoline with /system/bin/sh. Bash runs the $command() function instead.
-                |case " ${'$'}{NODE_OPTIONS-} " in
-                |    *"/server/platform-fix.js"*) ;;
-                |    *) export NODE_OPTIONS="--require=$platformFix${'$'}{NODE_OPTIONS:+ ${'$'}NODE_OPTIONS}" ;;
-                |esac
-                |export VSCODROID_PLATFORM_FIX=1
-                |exec '$node' '$cliDir/$cli'$flags "${'$'}@"
-                |""".trimMargin()
-            launcher.parentFile?.mkdirs()
-            if (runCatching { launcher.readText() }.getOrNull() != body &&
-                !writeAtomically(launcher) { it.write(body.toByteArray()) }
-            ) {
-                Logger.w(tag, "Could not write ${launcher.name}; $command stays a bash function only")
-                continue
-            }
-            rows[command] = "$command\t$SYSTEM_SHELL\t${launcher.absolutePath}"
-        }
-    }
-
-    /**
-     * The `codex` command: a launcher this app writes, because the engine cannot
-     * be started the way a toolchain's binaries are.
-     *
-     * Started as `linker64 <engine>`, which is all a table row can ask for, the
-     * engine is told by the kernel that it is the loader, and it looks for its
-     * code-mode helper beside the loader, in `/apex/com.android.runtime/bin`.
-     * Measured with the extension: every request the agent got ended in "the
-     * execution tool failed to start". Two things put that right and a row can
-     * carry neither: the engine's real path in `TERMUX_EXEC__PROC_SELF_EXE`,
-     * which `libselfexe.so` hands to its `readlink`, and the exec interceptor in
-     * `LD_PRELOAD`, which is what lets it start that helper, a file under
-     * filesDir, and the commands the agent runs.
-     *
-     * A launcher whose preload names a file that is not there takes the engine
-     * and everything it starts down with it, because Bionic aborts every exec in
-     * such an environment. So it checks all three files first and stops at the
-     * first one missing, naming it.
-     *
-     * Only for an installed toolchain whose engine is on disk: a row for a command
-     * that always fails reads as the toolchain being broken. Written through the
-     * table pass, like the npm launcher, so a moved filesDir is followed, and
-     * deleted by the same pass when the toolchain is no longer installed.
-     *
-     * Damage is not absence, as in the carry-over at the top of
-     * [regenerateExecTableLocked]. Over a record that could not be parsed
-     * ([stateKnown] false) the record says nothing, and the one thing that does is
-     * the launcher the last good pass wrote, which only an installed toolchain gets
-     * and which the same pass deletes when it is removed. It stands in for the
-     * record then, so the command does not leave PATH until the record is readable
-     * again while the engine is still on disk and still runs; an engine that is
-     * gone still takes the launcher with it.
-     */
-    private fun addCodexRows(rows: LinkedHashMap<String, String>, installed: JSONArray, stateKnown: Boolean) {
-        val engine = File(context.filesDir, CODEX_ENGINE)
-        val launcher = File(execTable.parentFile, "codex.sh")
-        val recorded = if (stateKnown) {
-            (0 until installed.length()).any { installed.optJSONObject(it)?.optString("name") == "codex" }
-        } else {
-            launcher.isFile
-        }
-        if ("codex" in rows || !recorded || !engine.isFile) {
-            // Written beside the table, outside what a removal deletes, and named
-            // by no row once the record is gone, so it goes with the toolchain.
-            launcher.delete()
-            return
-        }
-        val preload = Environment.getExecPreloadPath(context)
-        val selfExe = Environment.getSelfExePreloadPath(context)
-        val body = """
-            |# Auto-generated by ToolchainManager: do not edit
-            |# The Codex engine, started through the loader with what it needs, for a
-            |# program that starts it by name (the extension) and for a terminal.
-            |engine='${engine.absolutePath}'
-            |for file in "${'$'}engine" '$preload' '$selfExe'; do
-            |    [ -f "${'$'}file" ] || { echo "codex: ${'$'}file is missing" >&2; exit 127; }
-            |done
-            |TERMUX_EXEC__PROC_SELF_EXE="${'$'}engine" LD_PRELOAD='$preload:$selfExe' exec $systemLoader "${'$'}engine" "${'$'}@"
-            |""".trimMargin()
-        launcher.parentFile?.mkdirs()
-        if (runCatching { launcher.readText() }.getOrNull() != body &&
-            !writeAtomically(launcher) { it.write(body.toByteArray()) }
-        ) {
-            Logger.w(tag, "Could not write ${launcher.name}; codex stays off PATH")
-            return
-        }
-        rows["codex"] = "codex\t$SYSTEM_SHELL\t${launcher.absolutePath}"
-    }
-
-    /**
-     * Gives every command `pip` or `gem` has installed a row, so it can actually run.
-     *
-     * `pip install black` succeeds, reports success, and writes an executable
-     * `usr/bin/black` that is already on PATH, and then the command does not run:
-     *
-     *     bash: .../usr/bin/black: .../usr/bin/python3: bad interpreter: Permission denied
-     *
-     * Measured in the app's own terminal, which is the only place it can be
-     * measured: `run-as` runs in the `runas_app` SELinux domain rather than
-     * `untrusted_app`, and there the same command succeeds. A shebang script has
-     * to be `execve`d on its own inode to reach its interpreter, and the kernel
-     * refuses that for anything under `filesDir`. This is the same wall the npm
-     * and pip shell functions were written for, and those cover exactly two names
-     * and only for bash; a formatter extension spawning a command reaches neither.
-     *
-     * The interpreter form settles it: the trampoline is a real binary in
-     * `nativeLibraryDir`, so it starts, and it then runs the bundled Python ELF
-     * with the script as an argument. Nothing is `execve`d under `filesDir` at any
-     * point, which is why this works where the shebang does not.
-     *
-     * For pip, only `usr/bin`, because that is where pip puts a console script when
-     * the interpreter's prefix is the one the app ships, and only regular files there:
-     * every other name in that directory is a symlink [FirstRunSetup.setupToolSymlinks]
-     * made onto an ELF that already runs. For gem, `$GEM_HOME/bin` from the Ruby
-     * manifest, which is where RubyGems writes a gem's executables when GEM_HOME is
-     * not its default directory, with a `#!` naming Ruby's ELF under `filesDir`: the
-     * same refusal, and on no PATH either.
-     *
-     * Only a shebang naming [shebangWord]. A script naming some other interpreter is
-     * not one this can help, and handing it to Python or Ruby would turn a command
-     * that does not start into one that starts and does the wrong thing.
-     *
-     * The interpreter named is the `usr/bin/python3` link, never the `.so` it points
-     * at. linker64 hands Python the path it was given as argv[0], and Python keeps
-     * that as `sys.executable`. Measured on an API 33 emulator: given the `.so`,
-     * `sys.executable` is a path under `nativeLibraryDir`, which moves on every
-     * update, so an environment `virtualenv` or `poetry` builds and a kernelspec
-     * `ipython kernel install` writes stop starting after the next one. Given the
-     * link, it is the same `usr/bin/python3` a terminal reports, and
-     * [FirstRunSetup.setupToolSymlinks] repoints that on every launch.
-     *
-     * Rows already present win, so a toolchain's own command and the app's own
-     * `xdg-open` keep their meaning.
-     *
-     * The table is rewritten by the launch pass and whenever the editor returns to
-     * the foreground (`MainActivity.refreshToolchainCommands`), so a command installed
-     * while the app is in front becomes reachable after switching away and back,
-     * in a new terminal, rather than at once. Worth knowing before reading a bug
-     * report that says a fresh `pip install` still is not found.
-     */
-    private fun addInstalledScriptRows(
-        rows: LinkedHashMap<String, String>,
-        binDir: File,
-        interpreter: String,
-        shebangWord: String,
-        installer: String,
-    ) {
-        val names = binDir.list() ?: return
-        if (!File(interpreter).exists()) return
-
-        var added = 0
-        for (name in names.sorted()) {
-            if (name in rows) continue
-            // A tab or a newline in the name is a torn record: the trampoline
-            // splits a row on its tabs and would read what follows as a path the
-            // user never chose. These names come from a directory anyone can write
-            // to, unlike the toolchain manifests the rows above are built from.
-            if (name.any { it == '\t' || it == '\n' }) {
-                // Named, with the separator made visible: a warning that a name was
-                // refused and does not say which one leaves a user with one missing
-                // command and no way to learn that, or why.
-                Logger.w(
-                    tag,
-                    "No row for '" + name.replace("\t", "\\t").replace("\n", "\\n") +
-                        "': a command name carrying a tab or a newline cannot be written " +
-                        "to the exec table, which splits a row on its tabs",
-                )
-                continue
-            }
-            val script = File(binDir, name)
-            // readlink succeeds only for a symlink, which is how a bundled tool is
-            // told apart from a script without reaching for OsConstants.
-            val isSymlink = try {
-                Os.readlink(script.absolutePath); true
-            } catch (_: Exception) {
-                false
-            }
-            if (isSymlink || !script.isFile) continue
-            if (!shebangNames(script, shebangWord)) continue
-            rows[name] = "$name\t$interpreter\t${script.absolutePath}"
-            added++
-        }
-        if (added > 0) Logger.i(tag, "Exec table carries $added $installer-installed commands")
-    }
-
-    /**
-     * Whether [script] starts with a `#!` line naming [word], an interpreter.
-     *
-     * Reads a bounded head rather than the file: a console script is a few hundred
-     * bytes, but nothing stops a user putting something enormous in this directory,
-     * and this runs on every launch.
-     */
-    private fun shebangNames(script: File, word: String): Boolean = try {
-        script.inputStream().use { stream ->
-            val head = ByteArray(SHEBANG_HEAD_BYTES)
-            val read = stream.read(head)
-            if (read < 3) {
-                false
-            } else {
-                val first = String(head, 0, read, Charsets.ISO_8859_1).substringBefore('\n')
-                first.startsWith("#!") && first.contains(word)
-            }
-        }
-    } catch (e: Exception) {
-        Logger.d(tag, "Could not read ${script.name} to see what runs it: ${e.message}")
-        false
-    }
-
-    /**
-     * Puts one symlink per table entry in front of PATH, and sweeps the rest.
-     *
-     * Failure here is contained on purpose. The caller's next act may be to
-     * report an install as complete, and losing the links costs what this repair
-     * already costs on the next launch, while letting the exception out would
-     * lose the install record that names several hundred MB of files.
-     */
-    private fun refreshTrampolineLinks(commands: Set<String>) {
-        try {
-            refreshTrampolineLinksLocked(commands)
-        } catch (e: Exception) {
-            Logger.w(tag, "Could not refresh the toolchain trampoline links: ${e.message}")
-        }
-    }
-
-    /**
-     * Makes bundled shell helper scripts runnable, and answers the names it
-     * gave rows to.
-     *
-     * The built-in git extension exports `GIT_ASKPASS`, `SSH_ASKPASS` and
-     * `GIT_EDITOR` as absolute paths to `#!/bin/sh` scripts in its own `dist`
-     * directory, which is under filesDir, so the kernel refuses to execve them:
-     * every credential prompt git raised, from a terminal or from Source Control,
-     * ended in "cannot exec ... askpass.sh: Permission denied" (measured in the
-     * app's terminal on an API 33 emulator). The path is the extension's, so the
-     * file at it is what has to change. Each script is renamed aside with
-     * [GIT_HELPER_SUFFIX] and its name becomes a link to the trampoline, which
-     * dispatches on that name and runs the kept script with `/system/bin/sh`.
-     * Measured the same way: `git ls-remote` of a private URL then raised the
-     * GitHub sign-in and the Username box in the workbench.
-     *
-     * A regular file at the name is the script as the server tree ships it:
-     * setup writes it through a temporary name and a rename, on a fresh install
-     * and on every update, which replaces the link. So it always replaces the
-     * kept copy, and a script changed by an upstream bump is the one that runs.
-     * The link is rebuilt the way [refreshTrampolineLinksLocked] builds one, under
-     * a temporary name and renamed into place, because git may be starting a
-     * helper while the server runs.
-     *
-     * The server's own `vscodroid` command in [REMOTE_CLI_DIR] is the same kind
-     * of file and was refused the same way, with "Permission denied" from every
-     * terminal. The kept copy stays in the same directory because the script
-     * finds the server tree from its own path.
-     * Git's own commands use the same links, while their sourced libraries stay
-     * readable under GIT_EXEC_PATH.
-     */
-    private fun addGitHelperRows(
-        rows: LinkedHashMap<String, String>,
-        dir: String,
-        names: List<String>,
-    ): Set<String> {
-        val dist = File(context.filesDir, dir)
-        if (!dist.isDirectory) return emptySet()
-        val target = Environment.getTrampolinePath(context)
-        val served = mutableSetOf<String>()
-        for (name in names) {
-            val link = File(dist, name)
-            val kept = File(dist, name + GIT_HELPER_SUFFIX)
-            // Under the lock setup writes the name with, because this pass also runs beside setup:
-            // a new script renamed in between the set-aside and the link was overwritten by the link,
-            // and the earlier build's copy ran behind it until the next update.
-            val linked = holdingWriteLock(link) {
-                val current = try { Os.readlink(link.absolutePath) } catch (e: Exception) { null }
-                if (current == null && link.isFile && !link.renameTo(kept)) {
-                    Logger.w(tag, "Could not set $name aside; it cannot run")
-                    return@holdingWriteLock false
-                }
-                kept.isFile && (current == target || relink(link, target))
-            }
-            if (!linked) continue
-            // git-sh-setup uses $0 for usage and can invoke it again; keep the
-            // runnable name while sourcing the saved text with the caller's arguments.
-            val arguments = if (dir == GIT_CORE_DIR) {
-                "-c\t. \"\$0$GIT_HELPER_SUFFIX\"\t${link.absolutePath}"
-            } else kept.absolutePath
-            rows.putIfAbsent(name, "$name\t$SYSTEM_SHELL\t$arguments")
-            served += name
-        }
-        return served
-    }
-
-    /**
-     * Every name in [commands] becomes a symlink onto the single trampoline
-     * binary in `nativeLibraryDir`; anything else in the directory is removed.
-     *
-     * The links point from filesDir INTO nativeLibraryDir and never the other
-     * way round, which is the shape `FirstRunSetup.setupToolSymlinks` has proved
-     * in production for ten binaries: the app cannot write to nativeLibraryDir,
-     * and execve judges the resolved inode, which there is on a partition the
-     * app may execute from.
-     *
-     * Rebuilt on every launch rather than only at install time, for the same
-     * reason those ten are: Android hands out a new `nativeLibraryDir` path on
-     * every reinstall, which dangles every absolute link into the old one.
-     * Staleness is decided by reading the link rather than by `File.exists()`,
-     * which follows a link and answers false for a dangling one, so a link
-     * pointing at a directory that no longer exists would be read as absent and
-     * then fail to be created.
-     *
-     * A link is created under a temporary name and renamed into place. The
-     * delete-then-create that `setupToolSymlinks` performs leaves a window in
-     * which the name does not exist at all, and unlike that pass this one runs
-     * while the server is alive and something may be resolving PATH through the
-     * directory. Rename within one directory is atomic, so a lookup sees the old
-     * link or the new one. The existing window is narrow and has caused no
-     * reported failure; this is the cheaper shape rather than a fix for
-     * something observed.
-     *
-     * The links are created even when the trampoline binary is missing, which is
-     * what a downgrade to a build without it produces. `execvp` treats ENOENT as
-     * "keep looking further along PATH", so a dangling link degrades to exactly
-     * today's behaviour rather than to something worse, and skipping the write
-     * would instead leave a link pointing into a `nativeLibraryDir` that a
-     * reinstall has already moved.
-     */
-    private fun refreshTrampolineLinksLocked(commands: Set<String>) {
-        val target = Environment.getTrampolinePath(context)
-        if (commands.isNotEmpty() && !tcBinDir.exists() && !tcBinDir.mkdirs()) {
-            Logger.w(tag, "Could not create ${tcBinDir.absolutePath}; " +
-                "toolchain commands stay unreachable to anything but bash")
-            return
-        }
-
-        var created = 0
-        var updated = 0
-        for (command in commands) {
-            val link = File(tcBinDir, command)
-            val current = try { Os.readlink(link.absolutePath) } catch (e: Exception) { null }
-            if (current == target) continue
-
-            val staging = File(tcBinDir, ".$command.tmp~")
-            staging.delete()
-            try {
-                Os.symlink(target, staging.absolutePath)
-                Os.rename(staging.absolutePath, link.absolutePath)
-                if (current == null) created++ else updated++
-            } catch (e: Exception) {
-                staging.delete()
-                Logger.d(tag, "Failed to link $command to the trampoline: ${e.message}")
-            }
-        }
-
-        // The sweep, and it is not tidiness. A name left behind after its
-        // toolchain was uninstalled still resolves, so the command answers exit
-        // 127 from the trampoline saying there is no entry for it, rather than
-        // the shell's own "command not found" for a command the user has just
-        // removed.
-        var removed = 0
-        for (entry in tcBinDir.listFiles().orEmpty()) {
-            if (entry.name in commands) continue
-            if (entry.delete()) removed++
-        }
-
-        if (created + updated + removed > 0) {
-            Logger.i(tag, "Trampoline links: $created created, $updated repointed, " +
-                "$removed removed in usr/libexec/tcbin/")
-        }
-    }
-
-    /**
-     * Links the server tree's `node` to the app's own Node, for the remote CLI.
-     *
-     * The `vscodroid` script ends by running `$ROOT/node`, and the build prunes
-     * that file because the one gulp packages is a GNU/Linux binary that cannot
-     * start here. Rebuilt on every pass because a reinstall moves
-     * `nativeLibraryDir`, which dangles the link.
-     */
-    private fun linkServerNode() {
-        val tree = File(context.filesDir, SERVER_TREE)
-        if (!tree.isDirectory) return
-        val node = File(tree, "node")
-        val target = Environment.getNodePath(context)
-        val current = try { Os.readlink(node.absolutePath) } catch (e: Exception) { null }
-        if (current != target) relink(node, target)
-    }
-
-    /**
-     * Points [link] at [target] under a temporary name renamed into place, so a
-     * program starting it meanwhile finds the old link or the new one. False,
-     * and logged, when that failed.
-     */
-    private fun relink(link: File, target: String): Boolean {
-        val staging = File(link.parentFile, ".${link.name}.tmp~")
-        staging.delete()
-        return try {
-            Os.symlink(target, staging.absolutePath)
-            Os.rename(staging.absolutePath, link.absolutePath)
-            true
-        } catch (e: Exception) {
-            staging.delete()
-            Logger.w(tag, "Could not link ${link.name} to $target: ${e.message}")
-            false
-        }
-    }
-
-    /**
-     * Whether this toolchain's programs start only through the exec interceptor
-     * a terminal preloads (`"preloadOnly": true` in its manifest).
-     *
-     * Both ways this class has of starting a program by hand, a bash function
-     * and a row in the exec table, hand the file to `/system/bin/linker64`
-     * directly. The loader then reports itself as the program's own path, and
-     * a program that locates its resource directory, its libraries or its
-     * sysroot from that path finds the loader's directory instead. clang is the
-     * one that does: it and libLLVM read the path the interceptor puts in
-     * `TERMUX_EXEC__PROC_SELF_EXE`, which a start by hand does not set. Such a
-     * toolchain is found through PATH and started by the exec of whatever runs
-     * the command, which in a terminal is the preloaded one.
-     *
-     * The cost is stated rather than hidden: where nothing preloads the
-     * interceptor, the command is a file under `filesDir` that the kernel will
-     * not execute, and nothing here makes it one. That is a terminal with
-     * `LD_PRELOAD` set to null, a `"type": "process"` task, and an extension
-     * that starts the command by its bare name or through a shell. An
-     * extension that starts it by its full path without a shell (`spawn`,
-     * `execFile` and their synchronous forms) has it from `platform-fix.js`,
-     * which hands such a start the interceptor and, through the linker, the
-     * program's path in `TERMUX_EXEC__PROC_SELF_EXE`.
-     *
-     * What still applies to it: the execute bit, `pathDirs`, `env` rows, removal,
-     * and the rows its `launchers` object names ([addLauncherRows]). Only the two
-     * ways of starting a program are skipped, for every binary it does not launch.
-     */
-    private fun isPreloadOnly(manifest: JSONObject): Boolean =
-        manifest.optBoolean("preloadOnly", false)
-
-    /**
-     * The paths a manifest's `ownedPaths` names that [isOwnedPathName] accepts,
-     * as files under `filesDir`.
-     *
-     * A name that is refused is logged and skipped, and nothing else about the
-     * list changes. The manifest is a signed pack's, but it is also persisted
-     * into `toolchains.json` and read back at every uninstall, and this is the
-     * one key whose whole job is to delete what it names: the install root has
-     * no such check, and its worst case is one toolchain's own directory.
-     */
-    private fun ownedPaths(manifest: JSONObject): List<File> {
-        val names = manifest.optJSONArray("ownedPaths") ?: return emptyList()
-        val out = mutableListOf<File>()
-        for (i in 0 until names.length()) {
-            val relative = names.optString(i, "")
-            if (isOwnedPathName(relative)) {
-                out.add(File(context.filesDir, relative))
-            } else {
-                Logger.w(tag, "Ignoring an owned path that is not one: ${redactToken(relative)}")
-            }
-        }
-        return out
-    }
-
-    /**
-     * A manifest value with its placeholders resolved to this install's paths.
-     *
-     * Shared by the server environment and the exec table, which are two
-     * readers of one promise: a value that expanded differently in the two
-     * would hand a task a different GEM_PATH from the one the terminal beside
-     * it was started with.
-     */
-    private fun expandToolchainValue(value: String): String =
-        value.replace("\$FILESDIR", filesDir).replace("\$HOME", homeDir)
-
-    /**
-     * Returns resolved environment variables for all installed toolchains.
-     * Used by Environment.kt to include in the Node.js server process env.
-     *
-     * Read once per server start, and that is the limit of what it can do: a
-     * toolchain installed while the server runs is not in the map the server
-     * already has. [regenerateExecTableLocked] writes the same variables into
-     * the trampoline's table for that case, and bash re-reads the env file on
-     * its own.
-     */
-    fun getAllToolchainEnv(): Map<String, String> {
-        val installed = readState()
-        val env = mutableMapOf<String, String>()
-        val extraPaths = mutableListOf<String>()
-
-        for (i in 0 until installed.length()) {
-            val tc = installed.optJSONObject(i) ?: continue
-            val tcEnv = tc.optJSONObject("env") ?: continue
-
-            for (key in tcEnv.keys()) {
-                env[key] = expandToolchainValue(tcEnv.getString(key))
-            }
-
-            val pathDirs = tc.optJSONArray("pathDirs")
-            if (pathDirs != null) {
-                for (j in 0 until pathDirs.length()) {
-                    extraPaths.add("$filesDir/${pathDirs.getString(j)}")
-                }
-            }
-        }
-
-        if (extraPaths.isNotEmpty()) {
-            env["__TOOLCHAIN_EXTRA_PATH"] = extraPaths.joinToString(":")
-        }
-
-        return env
-    }
+    fun getAllToolchainEnv(): Map<String, String> = derivedFiles.getAllToolchainEnv()
 
     // -- Repair of installs from earlier app versions --
 
-    /**
-     * Gives back the execute bit to binaries an older install left without one.
-     *
-     * A toolchain keeps the manifest it was installed with: it is persisted into
-     * `toolchains.json`, `filesDir` survives app updates, and nothing rewrites it
-     * at launch. So a packaging fix reaches new installs only, and the install
-     * that was already there stays exactly as wrong as it was.
-     *
-     * The execute bit is set on the manifest's `binaries` entries and nowhere
-     * else -- the recursive copy grants none, because `copyTo` does not carry
-     * modes -- and an earlier Go manifest named `go` and `gofmt` alone, leaving
-     * the `pkg/tool` binaries `go` forks without one.
-     *
-     * **This is necessary and it is not sufficient, and an earlier version of
-     * this comment claimed otherwise.** It said the bit was "the difference
-     * between working and not" for Go. It is not: SELinux denies
-     * `execute_no_trans` on `app_data_file`, so nothing under `filesDir` can be
-     * `execve`d whatever its mode. Measured from inside the app's own process on
-     * an API 37 emulator, `user` build, enforcing -- a valid ELF there with mode
-     * 0755 fails with EACCES, and fails identically through a symlink, because
-     * the check is on the resolved inode's label rather than the path. What
-     * actually makes a toolchain runnable is the loader indirection
-     * [regenerateEnvFileLocked] writes; this pass only removes a second obstacle
-     * sitting behind it.
-     *
-     * The bit is still worth restoring, because the loader will not run a file
-     * the mode denies either. The payload is already on disk, so this needs no
-     * download and no reinstall: every ELF object under the install root gets
-     * the bit, which is the same rule the packaging gates use to decide what is
-     * a binary. Scripts are deliberately not included -- they are wrapped in
-     * shell functions that route them through their interpreter instead.
-     *
-     * Runs once per toolchain, recorded in its own state entry. A tree of several
-     * thousand files is not something to walk on every launch, and an install
-     * that never had the problem is marked without being walked at all.
-     */
     fun repairInstalledToolchains() {
         ioExecutor.execute {
             try {
-                // First, and before the env file is rewritten below. A retired
-                // toolchain's wrappers go with it rather than being written out
-                // again, and the repair that follows does not spend the launch
-                // walking and chmod-ing several thousand files that are about to
-                // be deleted. Go's tree alone is that size.
                 removeRetiredToolchainsSync()
             } catch (e: Exception) {
                 Logger.w(tag, "Could not remove a retired toolchain: ${e.message}")
             }
             try {
-                // Before the repair rather than after it, because what it
-                // reclaims is what the repair's own space pre-flights read.
-                sweepAbandonedDownloadsSync()
+                httpDownloader.sweepAbandonedDownloadsSync()
             } catch (e: Exception) {
                 Logger.w(tag, "Could not sweep abandoned toolchain downloads: ${e.message}")
             }
             try {
-                // Here for both of the reasons the sweep above gives, and for one
-                // more. What frees disk runs before what needs it, and before the
-                // tree walk below. After the retired removal, so a retired
-                // toolchain the record still names is taken out by the pass that
-                // also drops its record entry, leaving this one nothing to find.
-                // Its own try/catch, like every other step: one throw here must
-                // not cost the repairs that follow.
                 reclaimInterruptedInstallsSync()
             } catch (e: Exception) {
                 Logger.w(tag, "Could not reclaim an interrupted toolchain install: ${e.message}")
@@ -4941,45 +1040,14 @@ class ToolchainManager(private val context: Context) {
             try {
                 repairInstalledToolchainsSync()
             } catch (e: Exception) {
-                // A failed repair leaves the marker unset, so the next launch
-                // tries again. Nothing else depends on it having run.
                 Logger.w(tag, "Toolchain repair pass failed: ${e.message}")
             }
             try {
-                // Before the derived files below are written from the record, so
-                // that the variable is in the env file and the exec table of this
-                // launch. Custom values in the record are kept.
                 backfillToolchainEnvSync()
             } catch (e: Exception) {
                 Logger.w(tag, "Could not add a toolchain's new environment: ${e.message}")
             }
             try {
-                // Unconditionally, and separately from the repair above, because
-                // the two answer different questions. The repair is marked done per
-                // toolchain and never runs again; this has to run on every launch,
-                // because the env file is otherwise written only by an install or an
-                // uninstall. A toolchain installed by an earlier version keeps the
-                // file that version wrote -- so the loader wrappers, which are what
-                // make a toolchain command runnable at all, reached new installs
-                // only. That is the same shape as the bundled-extension defect this
-                // release fixed: an improvement that skips exactly the installs that
-                // need it.
-                //
-                // Cheap enough to do every time: it reads toolchains.json, formats a
-                // few dozen lines and writes them atomically. With no toolchains
-                // installed it still writes a table: the exec table stopped being
-                // only about toolchains when this app put its own `xdg-open` row
-                // and the rows for pip-installed commands into it, and most
-                // devices never install a toolchain. It used to delete the file
-                // in that case, and a reader tracing why `usr/libexec/tcbin`
-                // exists on such a device was told by this comment that it
-                // should not.
-                //
-                // It is also where the trampoline table and its symlinks are
-                // rebuilt, and they need this launch pass for a second reason of
-                // their own: Android hands out a new nativeLibraryDir path on
-                // every reinstall, so the links an install created point into a
-                // directory that no longer exists until this repoints them.
                 regenerateDerivedFiles()
             } catch (e: Exception) {
                 Logger.w(tag, "Could not refresh the toolchain environment: ${e.message}")
@@ -4987,168 +1055,10 @@ class ToolchainManager(private val context: Context) {
         }
     }
 
-    /**
-     * Deletes staging directories left behind by a download that never reached
-     * its `finally`.
-     *
-     * [toolchainTempDir] gives every request a directory of its own, which is
-     * what stopped two downloads deleting each other's work, and it moved the
-     * cost of an abandoned one from "overwritten by the next attempt" to "kept
-     * for ever". The other sweep is the user's:
-     * `StorageManager.clearAbandonedToolchainDownloads`, reached from the Clear
-     * action on the storage screen, takes every directory whose pack has no
-     * transfer outstanding, however recent. This pass runs with nobody looking,
-     * so it is the cautious one and waits a day.
-     *
-     * The bytes are not idle. Every toolchain space pre-flight reads
-     * `StatFs(filesDir).availableBytes`, and `cacheDir` is on the same
-     * filesystem, so three attempts abandoned mid-transfer -- backgrounded and
-     * reclaimed, force-stopped, crashed -- leave roughly 170 MB apiece standing
-     * between the user and the retry, which then refuses for want of space.
-     *
-     * Only entries older than [ABANDONED_DOWNLOAD_AGE_MS] are touched, and a
-     * directory whose timestamp cannot be read is left alone. A pack with a
-     * transfer or install outstanding keeps all its staging directories, even
-     * when a clock change makes the active one look old.
-     */
-    private fun sweepAbandonedDownloadsSync() {
-        val root = File(context.cacheDir, "toolchain-download")
-        val entries = root.listFiles() ?: return
-        // A transfer publishes its claim before creating its directory, so list first.
-        val inFlight = packsDownloading().keys + installsInFlight
-        val now = System.currentTimeMillis()
-        var removed = 0
-        for (entry in entries) {
-            if (inFlight.any { entry.name.startsWith("$it-") }) continue
-            if (!isAbandonedDownload(entry.lastModified(), now)) continue
-            StorageManager.deleteRecursive(entry, context.filesDir.parentFile)
-            if (!entry.exists() && !Files.isSymbolicLink(entry.toPath())) removed++
-        }
-        if (removed > 0) {
-            Logger.i(tag, "Removed $removed abandoned toolchain download directories")
-        }
-    }
+    private fun reclaimInterruptedInstallsSync() = uninstaller.reclaimInterruptedInstallsSync()
 
-    /**
-     * Gives back the tree of an install the system stopped part-way through.
-     *
-     * Every other pass in [repairInstalledToolchains] reads `toolchains.json`,
-     * and an install killed during its copy never got that far, so all of them
-     * step straight over up to 180 MB that nothing in the app can name. The
-     * marker [installMarkerDir] holds is the one witness that survives the kill,
-     * and reading the install root out of it rather than out of
-     * [ToolchainRegistry] is what lets a withdrawn toolchain's orphan be
-     * reclaimed at all: `find` answers null for one, and [RETIRED_TOOLCHAINS]
-     * carries sizes and no paths.
-     *
-     * The decision itself stays [reclaimPartialCopy]'s. It keeps the files when
-     * the record still names the toolchain (an install that finished and only
-     * lost its marker delete, or a reinstall over a working copy), and otherwise
-     * takes what the manifest names under the guards an uninstall applies to a
-     * library the base install or another toolchain also ships. Reusing it is
-     * what keeps this pass and the two in-process failure paths from
-     * disagreeing about what a partial install is.
-     *
-     * The `installsInFlight` claim is taken first, and it is not bookkeeping:
-     * `SplashActivity` fires this pass on one manager's executor while
-     * [reconcileDeliveredPacks] runs on another's, and that one can be copying
-     * the very pack a marker names. A pack already held is left for the next
-     * launch rather than waited on, which is the call every other contender for
-     * this claim makes.
-     *
-     * ⚠️ A tree stranded by a build older than the marker has none, so this pass
-     * cannot see it and neither can the space credit. Nothing on disk can.
-     */
-    private fun reclaimInterruptedInstallsSync() {
-        val markers = installMarkerDir.listFiles() ?: return
-        for (marker in markers) {
-            // A killed atomic write can leave a uniquely named .tmp~ sibling.
-            // Its name proves no ownership, so only the complete .json markers are consumed.
-            if (!marker.name.endsWith(".json")) continue
-            val packName = marker.name.removeSuffix(".json")
-            val claimed = synchronized(packOperationLock) {
-                !httpDownloads.containsKey(packName) && claimPack(packName, readsDeliveredPack = false)
-            }
-            if (!claimed) continue
-            try {
-                val manifest = runCatching { JSONObject(marker.readText()) }.getOrNull()
-                val name = manifest?.optString("name", "").orEmpty()
-                if (manifest != null && name.isNotEmpty()) {
-                    Logger.i(tag, "Reclaiming an install of $name that did not finish")
-                    // Unknown ownership keeps valid markers available for another launch.
-                    if (!reclaimPartialCopy(name, manifest)) continue
-                }
-                // Settled, or a marker that names nothing a later launch could reclaim.
-                marker.delete()
-            } finally {
-                // A claim never given back declines every later install of that
-                // pack for the life of the process, which is why this is a finally
-                // and not a line at the end of the body.
-                releasePackClaim(packName)
-            }
-        }
-    }
+    private fun removeRetiredToolchainsSync() = uninstaller.removeRetiredToolchainsSync()
 
-    /**
-     * Removes a toolchain the app no longer offers.
-     *
-     * A toolchain leaves [ToolchainRegistry.available] when it stops being worth
-     * its payload, and that alone would strand every install that already has
-     * it. The card list is built from the registry
-     * ([ToolchainCardState.items]), so the Remove button disappears with the
-     * entry, while the install record, the payload and the loader wrappers are
-     * all read from `toolchains.json` and carry on. The result is a toolchain
-     * the user cannot get rid of and cannot use, which is worse than either.
-     *
-     * So the removal is done for them, once, on the first launch that carries
-     * the retirement. [uninstallLocked] reads the install record rather than the
-     * registry, so it can still find what it is deleting.
-     *
-     * No marker is kept and none is needed: a retired pack has no registry entry
-     * and no download URL, so nothing can put it back, and the pass costs one
-     * state read on every later launch. That is the same read
-     * [regenerateEnvFileLocked] does immediately afterwards.
-     *
-     * The one removal that reaches [uninstallLocked] without taking the
-     * [installsInFlight] claim [uninstallSync] takes, and safe for the same
-     * reason the paragraph above gives: [install] resolves through
-     * [ToolchainRegistry.find] and refuses a name it does not know, so nothing
-     * can be installing a pack that has left the registry.
-     */
-    private fun removeRetiredToolchainsSync() = synchronized(stateLock) {
-        val installed = readState()
-        val present = mutableListOf<String>()
-        for (i in 0 until installed.length()) {
-            val name = installed.optJSONObject(i)?.optString("name").orEmpty()
-            if (name.isNotEmpty() && toolchainShortName(name) in RETIRED_TOOLCHAINS) {
-                present.add(name)
-            }
-        }
-        for (name in present) {
-            Logger.i(tag, "Removing $name: this build no longer offers it")
-            uninstallLocked(name)
-        }
-    }
-
-    /**
-     * Holds [stateLock] across the tree walk as well as the record update, and
-     * that is the deliberate cheaper half of a trade. The walk is bounded, and
-     * normally one-time -- an entry is marked afterwards and skipped from then
-     * on -- so the contention it can cause is a background install's record write
-     * waiting a fraction of a second, once, after a download that took minutes.
-     * Splitting it into read-walk-relock would buy that back at the cost of
-     * reasoning about a state that changed underneath the walk. Readers are
-     * unaffected either way: [readState] does not take the lock.
-     *
-     * "Normally" is the honest word, and what it excludes is worth pricing. An
-     * entry goes unmarked when a binary the manifest names is present and will
-     * not take the execute bit, and that entry is walked again on the next
-     * launch: for Java 25 a `walkTopDown` over about 185 MB reading the first
-     * four bytes of every file, under this lock, for as long as the condition
-     * lasts. Retrying is still the right call -- a toolchain whose interpreter
-     * has no execute bit is unusable, and the walk is the only thing that can
-     * put it back -- but the cost is per launch, not once.
-     */
     private fun repairInstalledToolchainsSync() = synchronized(stateLock) {
         val state = readState()
         var changed = false
@@ -5165,7 +1075,7 @@ class ToolchainManager(private val context: Context) {
                 Logger.w(tag, "Skipping repair walk for $name: installRoot is outside managed usr/ subtree")
                 null
             } else {
-                confinedUsrPath(installRoot).also {
+                confinedUsrPath(context.filesDir, installRoot).also {
                     if (it == null) {
                         Logger.w(tag, "Skipping repair walk for $name: installRoot has a redirected ancestor")
                     }
@@ -5173,24 +1083,12 @@ class ToolchainManager(private val context: Context) {
             }
 
             if (root != null && !Files.isSymbolicLink(root.toPath()) && root.isDirectory) {
-                val fixed = markExecutablesUnder(root)
+                val fixed = markExecutablesIn(root)
                 if (fixed > 0) {
                     Logger.i(tag, "Restored the execute bit on $fixed binaries in $name")
                 }
             }
-            // What the walk above cannot reach, and for Ruby that is the whole
-            // point of the pass: its install root is `usr/lib/ruby` while the
-            // interpreter is `usr/bin/ruby`, so the one file the toolchain
-            // cannot run without sits outside the tree being walked. The
-            // manifest names it, along with every other command a payload puts
-            // in a directory it shares with the base install.
             val binariesRepaired = applyManifestExecBits(entry)
-            // Marked when nothing is left for a later launch to do, which
-            // includes a toolchain with no install root and one whose tree is
-            // gone: this pass can do nothing for either now or ever. A binary
-            // that is there and would not take the bit is the one case that is
-            // worth trying again, so it goes unmarked and the next launch
-            // revisits it.
             if (binariesRepaired) {
                 entry.put(KEY_EXEC_REPAIRED, true)
                 changed = true
@@ -5200,18 +1098,11 @@ class ToolchainManager(private val context: Context) {
         if (changed) writeState(state)
     }
 
-    /**
-     * Adds missing [ENV_BACKFILL] variables and repairs Ruby's legacy gem path.
-     *
-     * Runs on every launch and writes only when a record changes. Existing values
-     * are kept except for the exact unversioned GEM_PATH shipped with Ruby.
-     */
     private fun backfillToolchainEnvSync() = synchronized(stateLock) {
         val state = readState()
         if (backfillToolchainEnv(state)) writeState(state)
     }
 
-    /** Repairs older manifests in memory, so an install needs only its existing record write. */
     private fun backfillToolchainEnv(state: JSONArray): Boolean {
         var changed = false
         for (i in 0 until state.length()) {
@@ -5228,7 +1119,6 @@ class ToolchainManager(private val context: Context) {
             if (entry.optString("name") == "ruby" && env.optString("GEM_PATH") == legacyGemPath) {
                 val rubyLib = env.optString("RUBYLIB").substringBefore(':')
                 val abi = rubyLib.removePrefix("\$FILESDIR/usr/lib/ruby/")
-                // The record names the installed ABI, which can predate this app.
                 if (abi != rubyLib && Regex("""\d+\.\d+\.\d+""").matches(abi)) {
                     env.put("GEM_PATH", "$legacyGemPath/$abi")
                     changed = true
@@ -5237,15 +1127,6 @@ class ToolchainManager(private val context: Context) {
         }
         return changed
     }
-
-    /**
-     * Marks every ELF object under [root] executable, returning how many needed it.
-     *
-     * Symlinks are stepped over rather than followed: the link's target may sit
-     * outside this toolchain -- `usr/lib` is shared with the base install -- and
-     * a repair has no business changing permissions there.
-     */
-    private fun markExecutablesUnder(root: File): Int = markExecutablesIn(root)
 
     // -- State persistence --
 
@@ -5259,15 +1140,8 @@ class ToolchainManager(private val context: Context) {
         }
     }
 
-    /**
-     * [readState] for the caller that cannot afford damage to read as absence.
-     *
-     * Returns null when the file exists and nothing can parse it, and an empty
-     * array only when there is genuinely no record: the empty branch of
-     * [regenerateEnvFileLocked] deletes the env file, which is right for a
-     * machine with nothing installed and wrong for one whose record is a
-     * half-written relic of the version that installed everything.
-     */
+    internal fun readStateFile(): JSONArray = readState()
+
     private fun readableState(): JSONArray? {
         if (!stateFile.exists() && !Files.isSymbolicLink(stateFile.toPath())) return JSONArray()
         return try {
@@ -5277,28 +1151,8 @@ class ToolchainManager(private val context: Context) {
         }
     }
 
-    /**
-     * Replaces `toolchains.json` in one step, or leaves the previous record
-     * exactly where it was.
-     *
-     * `writeText` truncates before it writes, so a process killed in that window
-     * left a zero-length or half-written file -- and [readState] answers a
-     * malformed file with an empty array, on the reasonable-looking grounds that
-     * it cannot do better. The two together are silent: every installed
-     * toolchain disappears from the app's view while its several hundred MB stay
-     * on disk, and the manifest naming the files, symlinks and libraries an
-     * uninstall would remove is gone with it. There is no way back from that
-     * short of reinstalling each toolchain over itself.
-     *
-     * [writeAtomically] writes a sibling and renames it, and rename is the
-     * operation that either happened or did not. A failure now costs the update
-     * rather than the record.
-     *
-     * @return false when the record on disk is still the previous one. Keeping
-     *   the old record is the right outcome; reporting the update as if it
-     *   landed is not, and a caller whose next act is to tell the user the
-     *   toolchain is installed has to ask. [installFromDirectory] is that caller.
-     */
+    internal fun readableStateFile(): JSONArray? = readableState()
+
     private fun writeState(state: JSONArray): Boolean = synchronized(stateLock) {
         stateFile.parentFile?.mkdirs()
         val written = writeAtomically(stateFile) { it.write(state.toString(2).toByteArray()) }
@@ -5307,1087 +1161,41 @@ class ToolchainManager(private val context: Context) {
         }
         written
     }
+
+    internal fun writeStateFile(state: JSONArray): Boolean = writeState(state)
 }
-
-/**
- * A staging directory belonging to one download rather than to the class.
- *
- * The path used to be a constant, and the `finally` that cleans up deletes the
- * directory whole. Multiple call sites each construct their own `ToolchainManager`
- * and `ioExecutor` is an instance field, so it serialises nothing between them:
- * rotating the toolchain screen, or cancelling the first-run queue and reaching
- * the picker again, leaves an earlier download still running against the same
- * path. Each one's cleanup then deleted the other's archive and tree, which
- * surfaces as a digest mismatch, the alarm that exists for tampering, raised by
- * a race with ourselves.
- *
- * A process killed mid-download leaves one directory behind, which Android
- * reclaims under storage pressure. The shared path leaked the same way and was
- * merely overwritten by the next attempt rather than reclaimed.
- */
-internal fun toolchainTempDir(cacheDir: File, packName: String): File =
-    File(cacheDir, "toolchain-download/$packName-${System.nanoTime()}")
-
-/**
- * How far along a Play delivery is, as a percentage.
- *
- * Zero when Play has not said how big the pack is yet, which it does not until
- * the download is under way: dividing by that total unguarded is the one way
- * this arithmetic can fail, and it fails on the first update of every download.
- *
- * At file scope because two callers need the same answer: the state callback,
- * and [ToolchainManager.readPlayDownloads] asking after the fact.
- */
-internal fun packDownloadPercent(bytesDownloaded: Long, totalBytes: Long): Int =
-    if (totalBytes > 0) ((bytesDownloaded * 100) / totalBytes).toInt() else 0
-
-/** How long an idle toolchain I/O thread is kept before it is given back. */
-internal const val IO_THREAD_KEEPALIVE_MS = 30_000L
-
-/**
- * The single-thread executor each [ToolchainManager] does its file work on.
- *
- * One thread, an unbounded queue and therefore the same serialisation
- * `Executors.newSingleThreadExecutor` gives, with one difference: the thread
- * times out when it has been idle for [IO_THREAD_KEEPALIVE_MS] and is created
- * again on the next submission. A core thread never times out, and that default
- * is what made the lifetime a problem here, because nothing in this class or in
- * any caller ever shuts one down: multiple call sites each construct their own
- * manager, `SplashActivity.onCreate` constructs two of them per launch and
- * submits on both, and the process outlives the screens because the server runs
- * in a foreground service. Every launch therefore parked two more threads that
- * had already finished their work.
- *
- * Shutting the executors down instead would need an owner for each manager, and
- * there is none: `Environment` and `AndroidBridge` build one where they stand.
- * Reclaiming an idle thread costs nothing and needs no owner.
- *
- * At file scope so the configuration can be asserted without reaching into a
- * manager's private field.
- */
-internal fun toolchainIoExecutor(
-    keepAliveMs: Long = IO_THREAD_KEEPALIVE_MS,
-): ThreadPoolExecutor = ThreadPoolExecutor(
-    1,
-    1,
-    keepAliveMs,
-    TimeUnit.MILLISECONDS,
-    LinkedBlockingQueue(),
-) { r -> Thread(r, "toolchain-io").apply { isDaemon = true } }
-    .apply { allowCoreThreadTimeOut(true) }
-
-/**
- * How stale a toolchain staging directory has to be before it is swept.
- *
- * A day, and generously so. The only thing this has to be longer than is a
- * download that is still running, and the directory's own timestamp is a weak
- * witness of that: creating the archive and the extraction directory touches it,
- * but writing 56 MB into a file that already exists does not. A day is far
- * beyond any transfer this app performs and costs at most one day of disk.
- */
-internal const val ABANDONED_DOWNLOAD_AGE_MS = 24L * 60 * 60 * 1000
-
-/**
- * Whether a staging directory last touched at [lastModifiedMs] belongs to a
- * download nothing is performing any more.
- *
- * Zero is `File.lastModified`'s answer for a timestamp it could not read, and it
- * is treated as "cannot tell" rather than as the epoch: deleting a directory a
- * download is writing into is the failure worth avoiding, and an extra day of
- * disk is the price.
- */
-internal fun isAbandonedDownload(lastModifiedMs: Long, nowMs: Long): Boolean =
-    lastModifiedMs > 0L && lastModifiedMs < nowMs - ABANDONED_DOWNLOAD_AGE_MS
 
 /** Free space asked for beyond what the install itself needs. */
 internal const val SPACE_BUFFER = 50_000_000L
 
 /**
- * What an HTTP toolchain install needs free, given its sizes and the tree of this
- * build that is already installed.
- *
- * The run has two peaks and this charges for the taller:
- *
- *  - unpacking, holding the archive and the staging tree at once;
- *  - copying, holding the staging tree and what the copy adds to `usr/`. A first
- *    install adds the whole tree, which is why it is charged twice. A reinstall
- *    adds only what the tree on disk does not already hold, and replaces each of
- *    those files by writing a sibling and renaming it over the old one, so one
- *    file's worth of both versions exists at a time: [InstalledTree.largestFile].
- *
- * The archive is deleted after extraction and before the copy, so it is never on
- * disk beside the second tree. A fully credited reinstall puts the second peak
- * below the first, which is why the credit is handed in here instead of being
- * subtracted from a single figure afterwards.
- *
- * So a toolchain that is already installed is charged roughly one tree plus its
- * largest file, where a first install is charged two trees.
- */
-internal fun toolchainInstallBytes(
-    unpackedBytes: Long,
-    downloadBytes: Long,
-    installed: InstalledTree = InstalledTree.NONE,
-): Long = maxOf(
-    downloadBytes + unpackedBytes,
-    unpackedBytes * 2 - installed.bytes + installed.largestFile,
-) + SPACE_BUFFER
-
-/**
- * What the copy into `usr/` needs free once the incoming tree is on disk and
- * already counted, given what [toolchainCopySpace] measured against the files it
- * will replace.
- *
- * One tree rather than two: the staged copy exists before this is asked. The new
- * allocation is the tree less the bytes of matching files it replaces, never less
- * than the working margin, plus room to write the largest replacement beside its
- * original before the rename. Both delivery paths ask it, so a device is not told
- * yes by one and no by the other about the same toolchain.
- */
-internal fun toolchainCopyBytes(unpackedBytes: Long, space: ToolchainCopySpace): Long =
-    (packInstallBytes(unpackedBytes) - minOf(unpackedBytes, space.creditedBytes))
-        .coerceAtLeast(SPACE_BUFFER) + space.replacementBytes
-
-/**
- * What an installed tree holds that a reinstall can reuse: its bytes, links
- * excluded, and its largest single file.
- */
-internal data class InstalledTree(val bytes: Long, val largestFile: Long) {
-    companion object {
-        val NONE = InstalledTree(0L, 0L)
-    }
-}
-
-/**
- * Measures the tree under [root] that a reinstall of the build now downloading
- * would write over, or [InstalledTree.NONE].
- *
- * Clamped at [recordedBytes], because a directory can hold more than the pack
- * writes back, and a credit for those bytes is space the copy never returns. A
- * root that resolves outside [within] credits nothing: `..` escapes
- * `File(base, relative)` while an absolute string is re-nested under it, and a
- * credit is the first decision taken on that string. Measuring the whole app
- * data directory would clamp to the pack's own size and leave the gate asking for
- * nothing but the buffer. Links are neither followed nor counted, as in
- * `StorageManager.dirSize`.
- */
-internal fun installedTreeSpace(
-    root: File?,
-    within: File,
-    recordedBytes: Long,
-    measure: (File) -> InstalledTree = ::measureInstalledTree,
-): InstalledTree {
-    if (root == null) return InstalledTree.NONE
-    val base = runCatching { within.canonicalFile }.getOrNull() ?: return InstalledTree.NONE
-    val resolved = runCatching { root.canonicalFile }.getOrNull() ?: return InstalledTree.NONE
-    if (!generateSequence(resolved) { it.parentFile }.any { it == base }) return InstalledTree.NONE
-    val found = measure(resolved)
-    val bytes = minOf(recordedBytes, found.bytes).coerceAtLeast(0)
-    return InstalledTree(bytes, minOf(found.largestFile, bytes))
-}
-
-/** The bytes and the largest file under [dir], without following or counting links. */
-internal fun measureInstalledTree(dir: File): InstalledTree {
-    if (!dir.exists()) return InstalledTree.NONE
-    var bytes = 0L
-    var largest = 0L
-    val stack = ArrayDeque<File>()
-    stack.addLast(dir)
-    while (stack.isNotEmpty()) {
-        val f = stack.removeLast()
-        if (Files.isSymbolicLink(f.toPath())) continue
-        if (f.isFile) {
-            val length = f.length()
-            bytes += length
-            largest = maxOf(largest, length)
-        } else if (f.isDirectory) {
-            f.listFiles()?.forEach { stack.addLast(it) }
-        }
-    }
-    return InstalledTree(bytes, largest)
-}
-
-/**
- * The unpacked size recorded for [packName], or null when none is.
- *
- * Null rather than zero, and the distinction is the whole reason this exists.
- * `ToolchainRegistry.find` answers null for a retired pack, by design: that
- * pass-through is what keeps uninstalling one working after its row is dropped.
- * A caller that spells the lookup as `find(...)?.estimatedSize ?: 0L` therefore
- * turns "I do not know" into "it needs nothing", and a space gate built on that
- * reserves the bare buffer for a tree of any size. Zero is a real answer here
- * only for a pack that genuinely occupies nothing, which none do.
- *
- * [RETIRED_TOOLCHAINS] is consulted second because the packs most likely to be
- * on a device right now are the ones installed before a withdrawal, and the
- * registry is exactly where they are not.
- * The prefix is stripped here rather than through `toolchainShortName`, which
- * resolves through the registry and returns a retired name unchanged.
- */
-internal fun packUnpackedBytes(packName: String): Long? =
-    ToolchainRegistry.find(packName)?.estimatedSize
-        ?: RETIRED_TOOLCHAINS[packName.removePrefix("toolchain_")]
-
-/**
- * What a Play Asset Delivery install needs free, given its unpacked size.
- *
- * One tree rather than two, because by the time this is asked the first copy is
- * already written and already counted. The figure is right; the reason given for
- * it was not, and the wrong reason is worth naming because a later change rested
- * on it.
- *
- * ⚠️ Play does NOT write the pack outside `filesDir`, which this used to claim.
- * Verified from asset-delivery 2.2.2's bytecode: `bh` builds
- * `new File(context.getFilesDir(), "assetpacks")`. The delivered tree therefore
- * sits on exactly the filesystem `StatFs(context.filesDir)` measures, and it is
- * already occupying space when the caller takes that reading. So the only NEW
- * allocation the install makes is the copy into `usr/`, which is what this
- * charges for; peak usage is two trees, and `removePack` frees Play's afterwards.
- *
- * The consequence that matters is elsewhere: deleting Play's copy when an install
- * is refused for space does not improve the next attempt, because the retry
- * re-extracts the same bytes into the same place. See the refusal branch in
- * [ToolchainManager.installDeliveredPack], which keeps it for that reason.
- */
-internal fun packInstallBytes(unpackedBytes: Long): Long =
-    unpackedBytes + SPACE_BUFFER
-
-/**
- * Copies a tree, refusing rather than shrugging when a directory cannot be read.
- *
- * `listFiles` answers null both for a directory that is empty of readable
- * entries and for one it could not enumerate at all, and this used to adopt the
- * benign reading with a bare `return`. The caller then wrote the install record
- * and reported the toolchain COMPLETED: a subtree that was never copied, symlinks
- * pointing at files that are not there, a green card, and a command that does not
- * run. The file already states the principle elsewhere, that damage is not
- * absence; this is the one place it was not applied.
- *
- * At file scope with the lister injected so the refusing branch can be driven
- * from a JVM test, which is the only way to reach it: producing a real
- * unreadable directory needs a filesystem fault or a concurrent deletion.
- *
- * Each entry is checked with [pathInTheWay] where it is written, as well as by
- * [firstPathInTheWay] before the copy starts, so an entry that comes into the way
- * in between is still refused as what it is rather than as a failed write.
- *
- * @param list how children are enumerated, defaulting to the real filesystem
- * @throws PathOccupied if an entry of the wrong kind stands where the tree writes
- * @throws IOException if a directory exists but cannot be listed, or a write fails
- */
-internal fun copyDirectoryTree(
-    src: File,
-    dest: File,
-    list: (File) -> Array<File>? = File::listFiles,
-) {
-    pathInTheWay(src, dest)?.let { throw it }
-    if (src.isDirectory) {
-        dest.mkdirs()
-        val children = list(src)
-            ?: throw IOException(
-                "Cannot list ${src.absolutePath}; the toolchain tree is incomplete"
-            )
-        for (child in children) {
-            copyDirectoryTree(child, File(dest, child.name), list)
-        }
-    } else {
-        dest.parentFile?.mkdirs()
-        var cause: String? = null
-        val copied = writeAtomically(dest, onError = { cause = it }) { output ->
-            src.inputStream().use { it.copyTo(output) }
-        }
-        if (!copied) {
-            throw IOException(cause ?: "Could not replace ${dest.name}")
-        }
-    }
-}
-
-/**
- * An entry in `usr/` of the wrong kind for what a pack writes there: a link where the pack writes into a folder (it
- * would write wherever the link points), a file where it needs a folder, or a folder where it writes a file. Freeing
- * space changes none of these, so it is not a lack of storage, and the install reports it as INTERNAL with the path in
- * the log. A link where the pack writes a FILE is not one: the write replaces the link, as it replaces a file.
- */
-internal class PathOccupied(path: File, why: String) : IOException("$why: ${path.absolutePath}")
-
-/** Why [dest] cannot take [src] as the copy writes it, or null when it can, decided before anything is made there. */
-internal fun pathInTheWay(src: File, dest: File): PathOccupied? {
-    val path = dest.toPath()
-    return when {
-        !src.isDirectory -> if (!Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)) null
-            else PathOccupied(dest, "A folder holds the name of a file the pack writes")
-        Files.isSymbolicLink(path) -> PathOccupied(dest, "A link stands where the pack writes into a folder")
-        Files.exists(path, LinkOption.NOFOLLOW_LINKS) && !Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS) ->
-            PathOccupied(dest, "A file holds the name of a folder the pack writes into")
-        else -> null
-    }
-}
-
-/**
- * The first entry under [dest] that [copyDirectoryTree] would refuse with [PathOccupied], or null. Asked before the
- * install writes its marker or a byte of the copy, so a pack that cannot finish for this reason changes nothing: a copy
- * stopped halfway left a reinstall half replaced, and on the Play path every launch tried it again from the delivery.
- * Only folders that already exist are entered, since nothing below a missing one can be in the way.
- */
-internal fun firstPathInTheWay(src: File, dest: File): PathOccupied? {
-    pathInTheWay(src, dest)?.let { return it }
-    if (!src.isDirectory || !Files.isDirectory(dest.toPath(), LinkOption.NOFOLLOW_LINKS)) return null
-    return src.listFiles()?.firstNotNullOfOrNull { firstPathInTheWay(it, File(dest, it.name)) }
-}
-
-internal data class ToolchainCopySpace(val creditedBytes: Long, val replacementBytes: Long)
-
-/** Credits only matching files, retaining room for one atomic replacement. */
-internal fun toolchainCopySpace(src: File, dest: File): ToolchainCopySpace {
-    var credit = 0L
-    var replacement = 0L
-    if (Files.isSymbolicLink(dest.toPath())) return ToolchainCopySpace(0, 0)
-    val base = dest.canonicalFile
-    src.walkTopDown().forEach { file ->
-        if (!file.isFile) return@forEach
-        val relative = file.relativeTo(src).path
-        val target = File(dest, relative).absoluteFile
-        if (!target.isFile || Files.isSymbolicLink(target.toPath()) ||
-            target.parentFile.canonicalFile != File(base, relative).parentFile
-        ) return@forEach
-        val reusable = minOf(file.length(), target.length())
-        credit += reusable
-        replacement = maxOf(replacement, reusable)
-    }
-    return ToolchainCopySpace(credit, replacement)
-}
-
-/**
- * Gives the execute bit to every ELF object under [root], returning how many
- * needed it.
- *
- * At file scope and taking its symlink predicate as a parameter so a test can
- * reach it. [isSymlink] uses `Os.lstat`, which cannot run in a JVM unit test --
- * it throws, the catch turns that into "not a link", and every entry then looks
- * like a regular file. Injecting the predicate is what lets the skip-links
- * behaviour be asserted rather than assumed; production still passes
- * [isSymlink].
- *
- * Links are stepped over rather than followed: a toolchain's `usr/lib` is shared
- * with the base install, so a link there can point at a file this pass has no
- * business changing the permissions of.
- *
- * Only ELF objects. Scripts are deliberately excluded -- they are wrapped in
- * shell functions that route them through their interpreter, because nothing
- * under `filesDir` can be executed directly whatever its mode.
- */
-internal fun markExecutablesIn(root: File, isLink: (File) -> Boolean = ::isSymlink): Int {
-    var fixed = 0
-    root.walkTopDown()
-        .onEnter { !isLink(it) }
-        .forEach { file ->
-            if (!file.isFile || isLink(file)) return@forEach
-            if (!isElfFile(file)) return@forEach
-            if (file.canExecute()) return@forEach
-            if (file.setExecutable(true, true)) fixed++
-        }
-    return fixed
-}
-
-/**
- * Whether [name] is safe to write into `toolchain-env.sh` as a shell function.
- *
- * `.bashrc` sources that file unconditionally, and one unusable name does not cost
- * one command -- it costs the rest of the file. Measured: sourcing a file holding
- * `good() {...}`, then `a=b() {...}`, then `after() {...}` leaves `good` defined
- * and `after` gone. So a toolchain whose manifest carried a bad name would take
- * out every wrapper written after it, in every new terminal.
- *
- * The boundary is measured against bash rather than assumed, because assuming it
- * was wrong in both directions. An earlier version of this allowed only
- * `[A-Za-z_][A-Za-z0-9_]*`, which is the rule for shell *variables*; bash is far
- * more permissive about function names and happily defines `grpc-tool`, `2to3`,
- * `foo.bar` and even `café`. Refusing those would have dropped working wrappers.
- *
- * What actually goes wrong divides in two, and both are refused:
- *
- *  - `( ) < > = [ $ \ " ' `` ` ``` and whitespace make the definition a parse
- *    error, which is what kills the rest of the file.
- *  - `; | &` are worse than an error: they split the line, so bash defines a
- *    function under a *different* name and reports nothing. The wrapper is simply
- *    absent under the name the user will type.
- *
- * Everything else measured -- `- . + : @ % ^ ! , { } ] * ? # ~ /`, a leading
- * digit, non-ASCII -- defines correctly and is allowed. Every command name in
- * the shipped manifests passes, but those manifests are regenerated from
- * upstream packages at build time, so what they contain is not this repository's
- * choice to make.
- */
-internal fun isShellFunctionName(name: String): Boolean {
-    if (name.isEmpty() || name.startsWith("#") || name in SHELL_RESERVED_WORDS) return false
-    if (name.all { it in '0'..'9' }) return false
-    return name.none { it in SHELL_UNSAFE || it.isWhitespace() || it.isISOControl() }
-}
-
-/** Bash reserved words that cannot appear unquoted as a `name() { ...; }` function identifier. */
-private val SHELL_RESERVED_WORDS = setOf(
-    "if", "then", "else", "elif", "fi",
-    "case", "esac", "for", "select", "while", "until", "do", "done", "in",
-    "function", "time", "coproc",
-    "{", "}", "!", "[[", "]]",
-)
-
-/**
- * The characters measured to break a function definition or to silently define one
- * under another name. Not a guess at what looks dangerous: each was checked by
- * defining a function and asking `declare -F` whether that name exists.
- */
-private const val SHELL_UNSAFE = "()<>=[\$\\\"'`;|&"
-
-/** Whether [file] begins with the four bytes every ELF object starts with. */
-internal fun isElfFile(file: File): Boolean = try {
-    file.inputStream().use { input ->
-        val header = ByteArray(4)
-        input.read(header) == 4 && isElfHeader(header)
-    }
-} catch (e: Exception) {
-    false
-}
-
-/**
- * Whether these opening bytes are an ELF object's.
- *
- * The same four bytes the packaging gates read. Separated so the repair pass can
- * be checked against real files rather than a mock that would only agree with
- * the implementation it was written from.
- */
-internal fun isElfHeader(header: ByteArray): Boolean =
-    header.size >= 4 &&
-        header[0] == 0x7F.toByte() &&
-        header[1] == 'E'.code.toByte() &&
-        header[2] == 'L'.code.toByte() &&
-        header[3] == 'F'.code.toByte()
-
-/**
- * Whether a transfer that ended may be treated as the whole file.
- *
- * Separated from the socket for the same reason as the other decisions in this
- * package: the risk runs one way. Judging a complete download incomplete costs a
- * retry and then a visible failure, while judging an incomplete one complete
- * hands [ToolchainManager.extractZip] a truncated archive -- and a ZIP is read
- * entry by entry, so a cut one extracts happily up to the cut. What installs is
- * a toolchain that is simply missing whatever came after it, with the manifest
- * claiming it whole.
- *
- * @param declaredBytes the `Content-Length` the server sent, or a value <= 0
- *   when it sent none. Absence has to be accepted rather than treated as zero:
- *   the header is optional, a chunked response omits it, and refusing those
- *   would fail-closed on healthy downloads.
- * @param receivedBytes what the read loop actually counted
- */
-internal fun isCompleteTransfer(declaredBytes: Long, receivedBytes: Long): Boolean =
-    declaredBytes <= 0L || receivedBytes == declaredBytes
-
-/**
- * Where a redirect from [currentUrl] points, refusing one that would drop TLS.
- *
- * Redirects are followed by hand here (`instanceFollowRedirects = false`), and
- * that is exactly what removes the platform's own refusal: `HttpURLConnection`
- * will not automatically follow `https` to `http`, and a loop that reads
- * `Location` itself never asks it to. `network_security_config.xml` permits
- * cleartext app-wide, for the loopback server the editor runs on, so nothing
- * below this refuses the hop either.
- *
- * Both artifacts that decide whether a toolchain ZIP may be installed come
- * through this function: the payload, and the `sha256` manifest it is checked
- * against, whose URL is derived beside it. A chain that drops to cleartext
- * therefore carries the evidence and the thing it vouches for over the same
- * unprotected hop, and an on-path answer supplies a hostile archive together
- * with a manifest naming its digest. What installs is unpacked into
- * `filesDir/usr` and turned into shell functions that `.bashrc` sources for
- * every terminal.
- *
- * The origin sends no such redirect today, so this is a floor rather than a
- * repair. Upgrades are left alone: an `http` start may go anywhere, which is
- * what keeps a loopback fixture usable, and only a chain that began in `https`
- * is held to it.
- *
- * @throws IOException when following the hop would leave TLS behind
- */
-internal const val MAX_EXTRACT_BYTES = 2L * 1024 * 1024 * 1024 // 2 GiB
-internal const val MAX_EXTRACT_ENTRIES = 50_000
-
-/**
- * Extracts [zipFile] into [destDir] with zip-slip confinement, cancellation checks per entry and
- * per read chunk, and explicit upper bounds on total extracted bytes and entry count.
- */
-@Throws(IOException::class, SecurityException::class)
-internal fun extractToolchainZip(
-    zipFile: File,
-    destDir: File,
-    appRoot: File? = destDir.parentFile,
-    isCancelled: () -> Boolean = { false },
-    maxBytes: Long = MAX_EXTRACT_BYTES,
-    maxEntries: Int = MAX_EXTRACT_ENTRIES,
-) {
-    if (isCancelled()) throw IOException("Extraction cancelled")
-    val canonicalDest = destDir.canonicalPath
-    var entryCount = 0
-    var totalBytes = 0L
-    val buffer = ByteArray(8192)
-    val created = ArrayDeque<File>()
-
-    try {
-        ZipInputStream(zipFile.inputStream().buffered()).use { zis ->
-            var entry = zis.nextEntry
-            while (entry != null) {
-                if (isCancelled()) throw IOException("Extraction cancelled")
-                entryCount++
-                if (entryCount > maxEntries) {
-                    throw SecurityException("Zip entry limit exceeded ($maxEntries)")
-                }
-                val outFile = File(destDir, entry.name)
-                val canonicalOut = outFile.canonicalPath
-
-                if (entry.isDirectory) {
-                    if (!canonicalOut.startsWith(canonicalDest + File.separator) && canonicalOut != canonicalDest) {
-                        throw SecurityException("Zip slip detected: ${entry.name}")
-                    }
-                    if (canonicalOut != canonicalDest) {
-                        outFile.mkdirs()
-                        created.addLast(outFile)
-                    }
-                } else {
-                    if (!canonicalOut.startsWith(canonicalDest + File.separator)) {
-                        throw SecurityException("Zip slip detected: ${entry.name}")
-                    }
-                    outFile.parentFile?.mkdirs()
-                    if (Files.isSymbolicLink(outFile.toPath())) {
-                        throw SecurityException("Refusing to write zip entry through symlink: ${entry.name}")
-                    }
-                    created.addLast(outFile)
-                    FileOutputStream(outFile).use { out ->
-                        while (true) {
-                            if (isCancelled()) throw IOException("Extraction cancelled")
-                            val read = zis.read(buffer)
-                            if (read < 0) break
-                            totalBytes += read
-                            if (totalBytes > maxBytes) {
-                                throw SecurityException("Zip extracted size limit exceeded ($maxBytes bytes)")
-                            }
-                            out.write(buffer, 0, read)
-                        }
-                    }
-                }
-
-                zis.closeEntry()
-                entry = zis.nextEntry
-            }
-        }
-    } catch (e: Throwable) {
-        StorageManager.deleteRecursive(destDir, appRoot)
-        while (created.isNotEmpty()) {
-            val path = created.removeLast()
-            if (!Files.isSymbolicLink(path.toPath())) {
-                path.delete()
-            }
-        }
-        throw e
-    }
-}
-
-/** GitHub release and release-asset hosts allowed for HTTPS toolchain download redirects. */
-private fun isAllowedToolchainHost(host: String): Boolean {
-    val normalized = host.lowercase(java.util.Locale.ROOT).removeSuffix(".")
-    if (normalized.isEmpty() || normalized.split('.').any { it.isEmpty() }) return false
-    return normalized == "github.com" ||
-        (normalized.endsWith(".githubusercontent.com") && normalized.length > ".githubusercontent.com".length)
-}
-
-@Throws(IOException::class)
-internal fun nextRedirectUrl(currentUrl: String, location: String): String {
-    if (location.isBlank()) {
-        throw IOException("Refusing a redirect with a blank Location header from $currentUrl")
-    }
-    val current = URL(currentUrl)
-    val next = URL(current, location)
-    if (!next.protocol.equals("https", ignoreCase = true) && !next.protocol.equals("http", ignoreCase = true)) {
-        throw IOException("Refusing a redirect from $currentUrl to unsupported scheme ${next.protocol}")
-    }
-    if (current.protocol.equals("https", ignoreCase = true)) {
-        if (!next.protocol.equals("https", ignoreCase = true)) {
-            throw IOException("Refusing a redirect from $currentUrl to cleartext $next")
-        }
-        if (next.port != -1 && next.port != 443) {
-            throw IOException("Refusing a redirect from $currentUrl to non-standard port ${next.port}")
-        }
-        if (next.userInfo != null || !isAllowedToolchainHost(next.host)) {
-            throw IOException("Refusing a redirect from $currentUrl to disallowed host ${next.host}")
-        }
-    }
-    return next.toString()
-}
-
-/**
- * Why an install failed, in the terms the person looking at the screen can act in.
- *
- * The screen said "Failed" and nothing else, for every cause, while the reason
- * sat in logcat where no user reads it. These are grouped by WHAT TO DO rather
- * than by where the exception came from: a full disk and a failed state write
- * are both [STORAGE] because both are answered by freeing space, and a truncated
- * archive and a manifest missing its name are both [CORRUPT] because both are
- * answered by retrying.
- *
- * [NOT_PUBLISHED] is deliberately not [NETWORK], although it arrives as an
- * IOException on the same path: retrying on better signal cannot fix a file the
- * release does not contain, and telling someone to check their connection when
- * that is the problem sends them to look in the wrong place.
- */
-// `@param:` rather than a bare `@StringRes`, which Kotlin warns will start
-// applying to the backing field as well. Naming the target pins today's meaning
-// instead of letting a compiler upgrade choose a different one.
-enum class ToolchainFailure(@param:StringRes val message: Int) {
-    NETWORK(R.string.toolchain_failed_network),
-    STORAGE(R.string.toolchain_failed_storage),
-    NOT_PUBLISHED(R.string.toolchain_failed_not_published),
-    DIGEST(R.string.toolchain_failed_digest),
-    CORRUPT(R.string.toolchain_failed_corrupt),
-    // Reached from both delivery paths, so its message names what Play will not
-    // do rather than which build is running: a sideloaded install with no ZIP for
-    // this pack, and a Play install Play does not recognise as one of its own.
-    // Naming the build type is wrong for the second, which shouldUseHttpFallback
-    // has already classified as a Play install.
-    PLAY_REQUIRED(R.string.toolchain_failed_play),
-    INTERNAL(R.string.toolchain_failed_internal),
-    // A Remove that did not happen. Reported with UNKNOWN rather than FAILED, which a card draws as a failed install
-    // with a Retry that installs ([ToolchainManager.failRemoval]).
-    REMOVAL(R.string.toolchain_remove_failed),
-}
-
-/**
- * What a link the install could not make reports: [ToolchainFailure.STORAGE] only for a disk or a quota
- * with no room for another entry, ENOSPC or EDQUOT, and [ToolchainFailure.INTERNAL] for anything else.
- *
- * Every refusal used to be STORAGE, which was wrong for the common other cause: a folder that holds files
- * at the link's name, which `File.delete` leaves in place, so the link is refused with EEXIST. "Not enough
- * storage" sent the person to free space, which never helps there.
- *
- * Compared with the Linux numbers themselves rather than `OsConstants`, for the reason [isSymlinkMode]
- * gives: a JVM test reads every `OsConstants` field as 0, so each errno would compare equal to ENOSPC.
- * ENOSPC is 28 and EDQUOT 122 in the generic Linux table that arm64 uses.
- */
-internal fun linkFailure(e: Exception): ToolchainFailure = when ((e as? ErrnoException)?.errno) {
-    28, 122 -> ToolchainFailure.STORAGE
-    else -> ToolchainFailure.INTERNAL
-}
-
-/**
- * Why a Play fetch was refused before any state was ever delivered.
- *
- * [AssetPackException] carries the same error codes the state listener reports,
- * so a refusal maps to the same message as the equivalent mid-download failure.
- * Anything else is an exception the Play library does not classify, and INTERNAL
- * is the honest answer: the alternative is telling a user to check their
- * connection for something that was never a network problem.
- *
- * Separate from [toolchainFailureFor] because that one takes a code and this one
- * takes a throwable, and the cast is the whole of the difference.
- */
-internal fun playFetchFailure(e: Exception): ToolchainFailure =
-    (e as? AssetPackException)?.let { toolchainFailureFor(it.errorCode) }
-        ?: ToolchainFailure.INTERNAL
-
-/**
- * Play's error code for a failed asset pack, in the terms [ToolchainFailure] speaks.
- *
- * The Play delivery path reported FAILED with no reason at all. The code went to
- * logcat and stopped there, so a Play Store user was left with the bare word that
- * the HTTP path had already stopped showing, for a full disk and a dropped
- * connection alike. Nothing new is said here; the existing vocabulary is simply
- * reached from the other delivery path.
- *
- * Grouped by what the user can do, like the enum itself, and taken from what each
- * code is documented to mean rather than from what its name resembles:
- *
- *  - `NETWORK_ERROR` is "unable to obtain the asset pack details", so
- *    [ToolchainFailure.NETWORK]: a better connection is the answer.
- *  - `INSUFFICIENT_STORAGE` is a download refused for space, so
- *    [ToolchainFailure.STORAGE]: freeing space is the answer.
- *  - `PACK_UNAVAILABLE` is "the asset pack wasn't included in the App Bundle that
- *    was published", which is this app's own release not carrying it, so
- *    [ToolchainFailure.NOT_PUBLISHED]: waiting for an update is the only answer.
- *  - `APP_NOT_OWNED` and `UNRECOGNIZED_INSTALLATION` both say Play does not
- *    recognise this copy of the app as one it delivered, and Play serves asset
- *    packs only to copies it does, so [ToolchainFailure.PLAY_REQUIRED].
- *
- * Everything else is [ToolchainFailure.INTERNAL] on purpose, including codes with
- * an inviting name. `APP_UNAVAILABLE` is "the requesting app is unavailable",
- * which is about the app or the user's access to it and not about the pack, so
- * sending it to `NOT_PUBLISHED` would tell someone this toolchain is missing from
- * a release that carries it. `ACCESS_DENIED`, `API_NOT_AVAILABLE`,
- * `INVALID_REQUEST`, `DOWNLOAD_NOT_FOUND` and `CONFIRMATION_NOT_REQUIRED` name
- * conditions no message in the enum can act on, and the last three are this
- * app's own mistakes rather than the user's.
- *
- * Two documented codes cannot be named here at all: `PLAY_STORE_NOT_FOUND` (-11)
- * and `NETWORK_UNRESTRICTED` (-12) appear in the library's own IntDef listing but
- * are not declared by asset-delivery 2.2.2, so they arrive as numbers this build
- * has no constant for and fall through with the rest. Every code that lands in
- * INTERNAL is still in the log line beside this call, raw.
- */
-internal fun toolchainFailureFor(errorCode: Int): ToolchainFailure = when (errorCode) {
-    AssetPackErrorCode.NETWORK_ERROR -> ToolchainFailure.NETWORK
-    AssetPackErrorCode.INSUFFICIENT_STORAGE -> ToolchainFailure.STORAGE
-    AssetPackErrorCode.PACK_UNAVAILABLE -> ToolchainFailure.NOT_PUBLISHED
-    AssetPackErrorCode.APP_NOT_OWNED,
-    AssetPackErrorCode.UNRECOGNIZED_INSTALLATION -> ToolchainFailure.PLAY_REQUIRED
-    else -> ToolchainFailure.INTERNAL
-}
-
-/**
  * Toolchains no longer offered, against the space each still occupies on a
  * device that installed one before it was withdrawn.
- *
- * The size is here rather than left to `ToolchainRegistry.find`, which answers
- * null for anything it no longer offers. [packUnpackedBytes] is the one reader
- * of the size ([ToolchainManager.removeRetiredToolchainsSync] reads the keys),
- * and what it feeds is the Play install pre-flight: spelled
- * `find(...)?.estimatedSize ?: 0L`, that gate reserved the bare 50 MB buffer
- * before copying a tree of any size, which is the direction that admits a
- * device it should have refused and then fills it up partway through the copy.
- *
- * Keyed by short name, the form a manifest records itself under. [packUnpackedBytes]
- * strips the `toolchain_` prefix itself; [toolchainShortName] resolves through the
- * registry and hands a retired name back unchanged, so [ToolchainManager.removeRetiredToolchainsSync]
- * finds a record named `go` and would not find one named `toolchain_go`, which no
- * manifest writes.
- *
- * An entry belongs here when it has left [ToolchainRegistry.available]: see
- * [ToolchainManager.removeRetiredToolchainsSync] for why leaving it alone is the
- * one option that helps nobody.
- *
- * `go` is here because it could not compile. Android refuses to execute a file
- * under the app's data directory, and `go build` and `go run` fork the compiler,
- * assembler and linker themselves, so those forks are refused however the `go`
- * command itself is reached. Measured in the app's own SELinux domain, with a
- * control: a plain shell script placed there and marked executable is refused
- * too. It ran, it printed a version, and it could not build a program, for
- * 179 MB.
  */
 internal val RETIRED_TOOLCHAINS = mapOf("go" to 179_000_000L)
 
-/** The digest manifest's filename, as `release.yml` writes it beside the ZIPs. */
-private const val MANIFEST_NAME = "toolchains.sha256"
-
-/**
- * Where to find the digest manifest for a toolchain ZIP: beside it.
- *
- * Derived from the ZIP's own URL rather than written down separately, which
- * removes a second constant that could drift from the first. It does **not**
- * remove the window underneath, and that window is larger than it looks.
- *
- * Both URLs go through `releases/latest/download/`, which names whichever
- * release is newest at the moment of each request -- and the two requests are
- * not adjacent. The manifest is read first, then the payload transfers, with up
- * to two backed-off retries behind it: minutes for the largest pack, Go at
- * 179 MB, on a phone connection -- not an instant. A release published anywhere
- * in that span hands back new bytes to check against a digest read from the
- * release before it.
- *
- * That fails closed -- the digests disagree, nothing is installed -- so it costs
- * a refused install rather than a bad one, and retrying succeeds. What it costs
- * beyond that is diagnostic: in the log it is indistinguishable from the
- * tampering this check exists to catch.
- *
- * That window is closed before this is called, by [pinnedAssetUrl] and the
- * resolution in front of it: the ZIP URL handed here already names a concrete
- * release, so deriving the manifest beside it inherits the same one. The
- * paragraphs above describe what happens when that resolution fails and the
- * unpinned URL is used as a fallback, which is the old behaviour and the floor
- * this can never drop below.
- */
-internal fun manifestUrlFor(zipUrl: String): String =
-    zipUrl.substringBeforeLast('/') + "/" + MANIFEST_NAME
-
-/**
- * The release-level `latest` URL an asset URL resolves through, or null when
- * the URL is not of that shape.
- *
- * `https://host/o/r/releases/latest/download/x.zip` gives
- * `https://host/o/r/releases/latest`.
- *
- * Deliberately the RELEASE redirect and not the asset one. Measured 2026-08-16:
- * `releases/latest/download/<asset>` redirects to
- * `releases/download/<tag>/<asset>` and then again to a signed CDN URL that
- * carries no tag, so reading the end of that chain answers nothing and reading
- * its middle means depending on how many hops there are. `releases/latest`
- * redirects once, to `releases/tag/<tag>`, and involves no asset at all.
- */
-internal fun latestReleaseUrlFor(assetUrl: String): String? {
-    val i = assetUrl.indexOf(LATEST_DOWNLOAD)
-    return if (i < 0) null else assetUrl.substring(0, i) + "/releases/latest"
-}
-
-/**
- * The tag named by a `releases/latest` redirect, or null.
- *
- * `https://host/o/r/releases/tag/v1.2.3` gives `v1.2.3`.
- *
- * A tag that is not plainly a tag is refused rather than pasted into a URL.
- * Everything downstream falls back to the unpinned URL on null, so refusing
- * costs the old behaviour; accepting something with a slash or a space in it
- * would build a URL that 404s for every toolchain.
- */
-internal fun releaseTagFromLocation(location: String): String? {
-    val i = location.indexOf(RELEASES_TAG)
-    if (i < 0) return null
-    val tag = location.substring(i + RELEASES_TAG.length)
-        .substringBefore('?')
-        .substringBefore('#')
-        .trim('/')
-    return if (tag.isNotEmpty() && TAG_CHARS.matches(tag)) tag else null
-}
-
-/**
- * The release tag a build of [versionName] belongs to, or null.
- *
- * `1.1.0` gives `v1.1.0`, matching the tags `release.yml` publishes.
- *
- * `-debug` is stripped because it is a `versionNameSuffix` on the debug build
- * type and not part of any tag; a debug build belongs to the same release its
- * source does. Nothing else is stripped. A suffix this does not know about
- * yields a tag no release carries, the probe answers 404, and the caller falls
- * back to `latest` -- so an unknown suffix costs the old behaviour rather than
- * a wrong guess at which release the build came from.
- */
-internal fun appReleaseTag(versionName: String): String? {
-    val version = versionName.removeSuffix("-debug")
-    return if (version.isNotEmpty() && TAG_CHARS.matches(version)) "v$version" else null
-}
-
-/**
- * [assetUrl] with `latest` replaced by a concrete [tag], or null.
- *
- * `.../releases/latest/download/x.zip` and `v1.2.3` give
- * `.../releases/download/v1.2.3/x.zip`.
- *
- * Refuses an asset name containing a slash, because that would mean the URL was
- * not the flat `releases/latest/download/<name>` this is written for and the
- * result would name something else entirely.
- */
-internal fun pinnedAssetUrl(assetUrl: String, tag: String): String? {
-    val i = assetUrl.indexOf(LATEST_DOWNLOAD)
-    if (i < 0) return null
-    val asset = assetUrl.substring(i + LATEST_DOWNLOAD.length)
-    if (asset.isEmpty() || asset.contains('/')) return null
-    if (!TAG_CHARS.matches(tag)) return null
-    return assetUrl.substring(0, i) + "/releases/download/" + tag + "/" + asset
-}
-
-private const val LATEST_DOWNLOAD = "/releases/latest/download/"
-private const val RELEASES_TAG = "/releases/tag/"
-private val TAG_CHARS = Regex("""[A-Za-z0-9._-]+""")
-
-/**
- * The digest a `sha256sum` manifest publishes for [fileName], or null when it
- * publishes none it can be trusted to mean.
- *
- * Separated from the network for the same reason as the other decisions in this
- * package, and here the one-directional risk is the sharpest in the file:
- * returning null costs a refused install that a re-release fixes, while
- * returning a digest the manifest did not really state for this file defeats the
- * entire check -- and it defeats it silently, because the comparison downstream
- * then passes.
- *
- * So every doubt resolves to null:
- *
- *  - a line whose first field is not exactly 64 hex characters is not a digest,
- *    including a line the read bound cut in half, and is skipped;
- *  - two lines naming this file with *different* digests are ambiguous, and a
- *    manifest that cannot make up its mind is refused outright rather than
- *    resolved by taking the first or the last;
- *  - no line at all is a refusal, which is what a release published without a
- *    manifest entry for this ZIP produces.
- *
- * Names are compared as bare filenames. `sha256sum` writes whatever path it was
- * handed, and prefixes a `*` in binary mode; both are stripped so a manifest
- * generated from a build directory still matches the flattened asset name a
- * device downloads.
- */
-internal fun digestFromManifest(manifest: String, fileName: String): String? {
-    var found: String? = null
-    for (raw in manifest.lineSequence()) {
-        val line = raw.trim()
-        if (line.isEmpty() || line.startsWith("#")) continue
-
-        val parts = line.split(WHITESPACE, limit = 2)
-        if (parts.size != 2) continue
-
-        val digest = parts[0].lowercase()
-        if (!SHA256_HEX.matches(digest)) continue
-
-        val name = parts[1].trim().removePrefix("*").substringAfterLast('/')
-        if (name != fileName) continue
-
-        if (found != null && found != digest) return null
-        found = digest
+/** Emits a bash wrapper line for an ELF toolchain binary into `toolchain-env.sh`. */
+internal fun appendToolchainBinaryWrapperLine(
+    lines: MutableList<String>,
+    command: String,
+    systemLoader: String,
+    relPath: String,
+    toolFlags: String,
+    properties: String?,
+) {
+    if (properties != null) {
+        lines.add("$command() { $systemLoader \"\$PREFIX/../$relPath\" $toolFlags$properties \"\$@\"; }")
+    } else {
+        lines.add("$command() { $systemLoader \"\$PREFIX/../$relPath\" $toolFlags\"\$@\"; }")
     }
-    return found
 }
 
-private val WHITESPACE = Regex("""\s+""")
-private val SHA256_HEX = Regex("""^[0-9a-f]{64}$""")
-
-/**
- * The SHA-256 of [file], lowercase hex.
- *
- * Streamed rather than read whole: the payloads are up to 179 MB and this runs
- * on a phone, where holding one in a byte array to hash it is how a verification
- * step becomes the reason an install dies.
- */
-internal fun sha256Of(file: File): String {
-    val digest = MessageDigest.getInstance("SHA-256")
-    val buffer = ByteArray(64 * 1024)
-    file.inputStream().buffered().use { input ->
-        while (true) {
-            val read = input.read(buffer)
-            if (read < 0) break
-            digest.update(buffer, 0, read)
-        }
-    }
-    return digest.digest().joinToString("") { "%02x".format(it) }
-}
-
-/**
- * Whether `export [key]="[value]"` is a line `toolchain-env.sh` can carry.
- *
- * A manifest comes from the pack the app ships or the release ZIP whose digest the same
- * release publishes, so this is not a boundary against it: whoever can write a bad
- * manifest can already ship a binary. It is what [isShellFunctionName] is, a bar that
- * keeps one unusable entry from taking out the file every new terminal sources. `$FILESDIR`
- * and `$HOME` stay possible, because the manifests mean them; a command substitution, a
- * backtick, a double quote and a line break do not, and neither does a name that is not a
- * variable's.
- */
-internal fun isShellSafeEnvEntry(key: String, value: String): Boolean =
-    key.matches(Regex("[A-Za-z_][A-Za-z0-9_]*")) &&
-        value.none { it == '"' || it == '`' || it == '\\' || it == '\n' || it == '\r' } && "\$(" !in value
-
-/** Whether [dir], a manifest's `pathDirs` entry, can follow `$PREFIX/../` in the same file. */
-internal fun isShellSafePathDir(dir: String): Boolean =
-    dir.isNotEmpty() && !dir.startsWith("/") &&
-        dir.split('/').none { it == ".." || it.isEmpty() } &&
-        dir.none { it == '"' || it == '`' || it == '\\' || it == '\n' || it == '\r' || it == '$' }
-
-/**
- * Whether [relative] may name a path a toolchain owns, in a manifest's
- * `ownedPaths`: under `usr/`, at least three components deep, with no `.` or
- * `..` component and no empty one.
- *
- * Three deep is the line that matters. `usr/bin`, `usr/lib` and `usr/include`
- * are what a toolchain shares with the base install, so an entry naming one of
- * them is a manifest asking for the whole directory, and `usr` is everything
- * the app installed. What a toolchain may own is something inside them:
- * `usr/include/stdio.h`, `usr/lib/clang`, `usr/share/doc/libllvm`.
- *
- * At file scope and pure, so the refusals can be asserted without a filesystem.
- */
-internal fun isOwnedPathName(relative: String): Boolean {
-    if (!relative.startsWith("usr/")) return false
-    val parts = relative.split('/')
-    if (parts.size < 3) return false
-    return parts.none { it.isEmpty() || it == "." || it == ".." }
-}
-
-/**
- * The name a toolchain is persisted under, from either form callers use.
- *
- * `toolchain_ruby` and `ruby` name the same thing: the first is the asset pack and
- * the URL, the second is what goes in `toolchains.json` and what the shell
- * environment is built from. [ToolchainRegistry.find] already accepts both, so
- * this asks it and then takes the recorded form, rather than stripping the
- * prefix as a string operation -- a name that is not a known toolchain comes
- * back unchanged instead of being silently reshaped.
- *
- * That last part is why the fallback is the input rather than null: an entry can
- * outlive its registry row. A toolchain dropped from [ToolchainRegistry] in some
- * later release is still installed on the devices that have it, and its
- * uninstall has to keep working -- the alternative is files that nothing can
- * remove.
- */
-internal fun toolchainShortName(nameOrPack: String): String =
-    ToolchainRegistry.find(nameOrPack)?.packName?.removePrefix("toolchain_") ?: nameOrPack
-
-/**
- * Names the manifest `libs` entries an uninstall may delete from the shared
- * `usr/lib`, given what the base APK ships there.
- *
- * Separated from the filesystem because the risk is one-directional, the same
- * shape as [supersededPythonEntries]: removing one entry too few leaves a file
- * the next install overwrites, while removing one too many deletes a library
- * the base app loads -- and that stays broken until the next version bump
- * re-extracts assets, with the error naming the library rather than the
- * uninstall that removed it.
- *
- * @param libs the manifest's `libs` entries
- * @param baseShipped names the base APK ships in `usr/lib`, or null when the
- *   listing could not be read -- in which case nothing is safe to remove
- */
-internal fun toolchainLibsSafeToRemove(libs: List<String>, baseShipped: Set<String>?): List<String> {
-    if (baseShipped == null) return emptyList()
-    return libs.filter { it !in baseShipped }
-}
-
-/**
- * Every `usr/lib` entry the install record names for a toolchain other than
- * [exceptName].
- *
- * The uninstall's protected set is "what someone else in this directory owns",
- * and the base APK was the only someone else it counted. Another installed
- * toolchain owns its libraries on the same terms: the copy is one file, the
- * directory is shared, and whichever uninstall runs first would take it.
- *
- * @param state the parsed `toolchains.json`, which the caller already holds
- * @param exceptName the toolchain being removed, in the short form the record
- *   uses
- */
-internal fun otherToolchainLibs(state: JSONArray, exceptName: String): Set<String> {
-    val shared = mutableSetOf<String>()
-    for (i in 0 until state.length()) {
-        val entry = state.optJSONObject(i) ?: continue
-        if (entry.optString("name") == exceptName) continue
-        val libs = entry.optJSONArray("libs") ?: continue
-        for (j in 0 until libs.length()) shared.add(libs.getString(j))
-    }
-    return shared
-}
-
-/** Every `usr/lib` symlink key declared by another installed toolchain. */
-internal fun otherToolchainLibSymlinks(state: JSONArray, exceptName: String): Set<String> {
-    val shared = mutableSetOf<String>()
-    for (i in 0 until state.length()) {
-        val entry = state.optJSONObject(i) ?: continue
-        if (entry.optString("name") == exceptName) continue
-        val links = entry.optJSONObject("libSymlinks") ?: continue
-        links.keys().forEach { shared.add(it) }
-    }
-    return shared
-}
-
-/** Every `usr/bin` symlink key declared by another installed toolchain. */
-internal fun otherToolchainSymlinks(state: JSONArray, exceptName: String): Set<String> {
-    val shared = mutableSetOf<String>()
-    for (i in 0 until state.length()) {
-        val entry = state.optJSONObject(i) ?: continue
-        if (entry.optString("name") == exceptName) continue
-        val links = entry.optJSONObject("symlinks") ?: continue
-        links.keys().forEach { shared.add(it) }
-    }
-    return shared
-}
-
-/** Every manifest binary path declared by another installed toolchain. */
-internal fun otherToolchainBinaries(state: JSONArray, exceptName: String): Set<String> {
-    val shared = mutableSetOf<String>()
-    for (i in 0 until state.length()) {
-        val entry = state.optJSONObject(i) ?: continue
-        if (entry.optString("name") == exceptName) continue
-        val binaries = entry.optJSONArray("binaries") ?: continue
-        for (j in 0 until binaries.length()) shared.add(binaries.getString(j))
-    }
-    return shared
+/** Emits a bash wrapper line for an interpreted toolchain script into `toolchain-env.sh`. */
+internal fun appendToolchainScriptWrapperLine(
+    lines: MutableList<String>,
+    scriptName: String,
+    interpreter: String,
+    scriptPath: String,
+) {
+    lines.add("$scriptName() { $interpreter \"\$PREFIX/../$scriptPath\" \"\$@\"; }")
 }

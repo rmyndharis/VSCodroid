@@ -32,6 +32,7 @@ const { spawn, spawnSync } = require('child_process');
 const ASSETS = path.resolve(__dirname, '../android/app/src/main/assets');
 const SERVER_JS = path.join(ASSETS, 'server.js');
 const DNS_PROXY_JS = path.join(ASSETS, 'dns-proxy.js');
+const PROCESS_MONITOR_JS = path.join(ASSETS, 'process-monitor.js');
 const PLATFORM_FIX_JS = path.join(ASSETS, 'platform-fix.js');
 const PROCESS_MANAGER = path.resolve(
     __dirname, '../android/app/src/main/kotlin/com/vscodroid/service/ProcessManager.kt',
@@ -41,12 +42,12 @@ const PROCESS_MANAGER = path.resolve(
  * A fixture the bootstrap will accept: a server entry point and a product.json.
  *
  * `serverMain` replaces the entry point's body, and `null` leaves it out
- * altogether. `dnsProxy` copies the real proxy in beside the bootstrap, which is
- * what makes the preload reach it; a string writes that text as the proxy
- * instead, for the cases about what the bootstrap does with the file rather than
- * about what the proxy does once loaded.
+ * altogether. `dnsProxy` and `processMonitor` copy the real modules in beside
+ * the bootstrap, which is what makes the preloads reach them; a string writes
+ * that text as the file instead, for the cases about what the bootstrap does
+ * with the file rather than about what the module does once loaded.
  */
-function fixture(productJson, { serverMain = 'process.exit(0);\n', dnsProxy = false } = {}) {
+function fixture(productJson, { serverMain = 'process.exit(0);\n', dnsProxy = false, processMonitor = false } = {}) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vscodroid-bootstrap-'));
     fs.mkdirSync(path.join(dir, 'vscode-reh', 'out'), { recursive: true });
     fs.copyFileSync(SERVER_JS, path.join(dir, 'server.js'));
@@ -54,6 +55,11 @@ function fixture(productJson, { serverMain = 'process.exit(0);\n', dnsProxy = fa
         fs.writeFileSync(path.join(dir, 'dns-proxy.js'), dnsProxy);
     } else if (dnsProxy) {
         fs.copyFileSync(DNS_PROXY_JS, path.join(dir, 'dns-proxy.js'));
+    }
+    if (typeof processMonitor === 'string') {
+        fs.writeFileSync(path.join(dir, 'process-monitor.js'), processMonitor);
+    } else if (processMonitor) {
+        fs.copyFileSync(PROCESS_MONITOR_JS, path.join(dir, 'process-monitor.js'));
     }
     // Always beside the bootstrap, as in the app, where NODE_OPTIONS preloads it
     // and server.js hands it on to the editor server.
@@ -339,6 +345,85 @@ if (process.getuid && process.getuid() !== 0) {
     fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// 5a. A broken or missing process-monitor.js costs process metrics and nothing
+//     else: a truncated or unparseable preload must never prevent server-main.js
+//     from starting.
+{
+    const dir = fixture(UPSTREAM, {
+        serverMain: "require('fs').writeFileSync(require('path').join(__dirname, 'ran'), '1');\n",
+        processMonitor: 'this file was truncated mid-write(\n',
+    });
+    const run = boot(dir);
+    assert.ok(
+        fs.existsSync(path.join(dir, 'vscode-reh', 'out', 'ran')),
+        `a process-monitor.js that does not parse stopped the editor server starting:\n${run.output}`,
+    );
+    assert.strictEqual(run.status, 0, `the bootstrap should carry on without the monitor:\n${run.output}`);
+    assert.match(
+        run.output,
+        /process-monitor/,
+        `nothing in the output names the monitor that could not be loaded:\n${run.output}`,
+    );
+    fs.rmSync(dir, { recursive: true, force: true });
+}
+
+{
+    const dir = fixture(UPSTREAM, {
+        serverMain: "require('fs').writeFileSync(require('path').join(__dirname, 'ran'), '1');\n",
+        processMonitor: false,
+    });
+    const run = boot(dir);
+    assert.ok(
+        fs.existsSync(path.join(dir, 'vscode-reh', 'out', 'ran')),
+        `a missing process-monitor.js stopped the editor server starting:\n${run.output}`,
+    );
+    assert.strictEqual(run.status, 0, `the bootstrap should carry on when process-monitor.js is absent:\n${run.output}`);
+    fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// 5a2. An inherited VSCODROID_PROCESS_MONITOR=1 in server.js's environment must
+//      not trigger process-monitor.js's self-start branch during the bootstrap
+//      parse check: only server-main.js may self-start, keeping one writer.
+{
+    const dir = fixture(UPSTREAM, {
+        serverMain: [
+            "require('fs').writeFileSync(require('path').join(__dirname, 'child-pid'), String(process.pid));",
+            'process.exit(0);',
+            '',
+        ].join('\n'),
+        processMonitor: [
+            "const fs = require('fs');",
+            "const path = require('path');",
+            "if (process.env.VSCODROID_PROCESS_MONITOR === '1') {",
+            "    fs.appendFileSync(path.join(__dirname, 'self-started.log'), `${process.pid}\\n`);",
+            '}',
+            'module.exports = { start() {}, stop() {} };',
+            '',
+        ].join('\n'),
+    });
+    try {
+        const result = spawnSync(process.execPath, [path.join(dir, 'server.js'), '--host=127.0.0.1'], {
+            encoding: 'utf8',
+            timeout: 20_000,
+            env: { ...process.env, VSCODROID_PROCESS_MONITOR: '1' },
+        });
+        assert.strictEqual(result.status, 0, `bootstrap exited ${result.status}:\n${result.stdout}${result.stderr}`);
+        const childPid = fs.readFileSync(path.join(dir, 'vscode-reh', 'out', 'child-pid'), 'utf8').trim();
+        const startedPids = fs.readFileSync(path.join(dir, 'self-started.log'), 'utf8')
+            .trim()
+            .split('\n')
+            .filter(Boolean);
+        assert.deepStrictEqual(
+            startedPids,
+            [childPid],
+            `expected only server-main.js (${childPid}) to self-start when VSCODROID_PROCESS_MONITOR=1 ` +
+                `was inherited, but got: ${JSON.stringify(startedPids)}`,
+        );
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+}
+
 // 5b. The Python, Jupyter, and Jupyter Renderers extensions are let use the proposed APIs their
 //     manifests declare, and nothing else is. The workbench strips a declared proposal from every
 //     extension the server does not name, causing testObserver / notebookKernelSource failures or
@@ -397,18 +482,33 @@ async function preloadRidesAsOneToken() {
         'module.exports = { start: () => Promise.resolve({}) };',
         '',
     ].join('\n');
+    const processMonitor = [
+        "if (process.env.VSCODROID_PROCESS_MONITOR === '1') {",
+        "    require('fs').writeFileSync(",
+        "        require('path').join(__dirname, 'monitor-preload.json'),",
+        '        JSON.stringify(process.execArgv),',
+        '    );',
+        '}',
+        'module.exports = { start() {}, stop() {} };',
+        '',
+    ].join('\n');
 
-    const dir = fixture(UPSTREAM, { serverMain: 'setInterval(() => {}, 1000);\n', dnsProxy });
+    const dir = fixture(UPSTREAM, { serverMain: 'setInterval(() => {}, 1000);\n', dnsProxy, processMonitor });
     const preloadPath = path.join(dir, 'preload.json');
+    const monitorPreloadPath = path.join(dir, 'monitor-preload.json');
     const pidFile = path.join(dir, 'editor-server.pid');
     const bootstrap = spawn(process.execPath, [path.join(dir, 'server.js'), '--host=127.0.0.1'], {
         stdio: 'ignore',
     });
     let childPid = 0;
     try {
-        await until(() => fs.existsSync(preloadPath), 'the editor server to report its preload');
+        await until(
+            () => fs.existsSync(preloadPath) && fs.existsSync(monitorPreloadPath),
+            'the editor server to report its preloads',
+        );
         if (fs.existsSync(pidFile)) childPid = JSON.parse(fs.readFileSync(pidFile, 'utf8')).pid;
         const execArgv = JSON.parse(fs.readFileSync(preloadPath, 'utf8'));
+        const monitorExecArgv = JSON.parse(fs.readFileSync(monitorPreloadPath, 'utf8'));
 
         const proxyArgs = execArgv.filter((arg) => arg.includes('dns-proxy.js'));
         assert.strictEqual(
@@ -422,6 +522,16 @@ async function preloadRidesAsOneToken() {
                 'argument on the editor server\'s command line and the process monitor names ' +
                 `that row after the proxy rather than after server-main.js: ${proxyArgs[0]}`,
         );
+        const monitorArgs = monitorExecArgv.filter((arg) => arg.includes('process-monitor.js'));
+        assert.strictEqual(
+            monitorArgs.length, 1,
+            `the editor server was given ${monitorArgs.length} preload arguments naming the monitor: ` +
+                JSON.stringify(monitorExecArgv),
+        );
+        assert.ok(
+            monitorArgs[0].startsWith('--require='),
+            `the process monitor path was not passed as a single --require= token: ${monitorArgs[0]}`,
+        );
         assert.ok(
             !execArgv.includes('--require'),
             `a bare --require survives beside the joined form: ${JSON.stringify(execArgv)}`,
@@ -432,6 +542,153 @@ async function preloadRidesAsOneToken() {
         assert.strictEqual(
             fixArgs.length === 1 && fixArgs[0].startsWith('--require=') && fixArgs[0].endsWith('/platform-fix.js'), true,
             `the editor server was not given platform-fix.js as one preload token: ${JSON.stringify(execArgv)}`,
+        );
+    } finally {
+        if (childPid) { try { process.kill(childPid, 'SIGKILL'); } catch { /* already gone */ } }
+        bootstrap.kill('SIGKILL');
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+}
+
+/**
+ * The process monitor outlives the bootstrap, because it runs inside the editor
+ * server rather than in the bootstrap that Android SIGKILLs routinely.
+ *
+ * Also verifies that server-main.js sees neither VSCODROID_PROCESS_MONITOR in
+ * its environment nor the monitor preload in process.execArgv, so forked
+ * helpers and worker_threads never inherit it and duplicate snapshot writes.
+ */
+async function processMonitorSurvivesTheBootstrap() {
+    const serverMain = [
+        "const fs = require('fs');",
+        "const path = require('path');",
+        "fs.writeFileSync(path.join(__dirname, 'monitor-report.json'), JSON.stringify({",
+        '    envFlag: process.env.VSCODROID_PROCESS_MONITOR ?? null,',
+        '    execArgv: process.execArgv,',
+        '}));',
+        'setInterval(() => {}, 1000);',
+        '',
+    ].join('\n');
+
+    const dir = fixture(UPSTREAM, { serverMain, processMonitor: true });
+    const tmpOut = path.join(dir, 'tmp');
+    const fakeProc = path.join(dir, 'fake-proc');
+    fs.mkdirSync(tmpOut, { recursive: true });
+    fs.mkdirSync(fakeProc, { recursive: true });
+
+    const uid = process.getuid();
+    const writeFakeProc = (pid, argv) => {
+        const procDir = path.join(fakeProc, String(pid));
+        fs.mkdirSync(procDir, { recursive: true });
+        fs.writeFileSync(
+            path.join(procDir, 'status'),
+            `Name:\tnode\nPPid:\t1\nUid:\t${uid}\t${uid}\t${uid}\t${uid}\n`,
+        );
+        fs.writeFileSync(path.join(procDir, 'cmdline'), argv.join('\0') + '\0');
+        fs.writeFileSync(path.join(procDir, 'stat'), `${pid} (node) S 1 ${'0 '.repeat(9)}7 3\n`);
+    };
+
+    const NODE = '/data/data/com.vscodroid/lib/arm64/libnode.so';
+    writeFakeProc(4001, [
+        NODE, `--require=${dir}/process-monitor.js`,
+        `${dir}/vscode-reh/out/server-main.js`, '--host', '127.0.0.1',
+    ]);
+
+    const procHook = path.join(dir, 'proc-hook.js');
+    fs.writeFileSync(procHook, [
+        "const fs = require('fs');",
+        "const path = require('path');",
+        `const FAKE_PROC = ${JSON.stringify(fakeProc)};`,
+        'const realReaddirSync = fs.readdirSync;',
+        'const realReadFileSync = fs.readFileSync;',
+        'fs.readdirSync = function (target, ...rest) {',
+        "    if (target === '/proc') return realReaddirSync.call(this, FAKE_PROC, ...rest);",
+        '    return realReaddirSync.call(this, target, ...rest);',
+        '};',
+        'fs.readFileSync = function (target, ...rest) {',
+        "    const s = String(target);",
+        "    if (s.startsWith('/proc/')) return realReadFileSync.call(this, path.join(FAKE_PROC, s.slice(6)), ...rest);",
+        '    return realReadFileSync.call(this, target, ...rest);',
+        '};',
+        'const realSetInterval = global.setInterval;',
+        'global.setInterval = function (fn, delay, ...rest) {',
+        '    return realSetInterval.call(this, fn, delay === 10000 ? 100 : delay, ...rest);',
+        '};',
+        '',
+    ].join('\n'));
+
+    const reportPath = path.join(dir, 'vscode-reh', 'out', 'monitor-report.json');
+    const pidFile = path.join(dir, 'editor-server.pid');
+    const snapshotPath = path.join(tmpOut, 'vscodroid-processes.json');
+    const bootstrap = spawn(
+        process.execPath,
+        [`--require=${procHook}`, path.join(dir, 'server.js'), '--host=127.0.0.1'],
+        { stdio: 'ignore', env: { ...process.env, TMPDIR: tmpOut } },
+    );
+    let childPid = 0;
+    try {
+        let report = null;
+        await until(() => {
+            try {
+                report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+                return true;
+            } catch {
+                return false;
+            }
+        }, 'the editor server to write its monitor report');
+
+        assert.strictEqual(
+            report.envFlag, null,
+            `VSCODROID_PROCESS_MONITOR leaked into server-main.js env: ${JSON.stringify(report.envFlag)}`,
+        );
+        assert.deepStrictEqual(
+            report.execArgv.filter((arg) => arg.includes('process-monitor') || arg === '--require'),
+            [],
+            'server-main.js still carries the process-monitor preload option, so forked helpers ' +
+                `and worker_threads would duplicate writes: ${JSON.stringify(report.execArgv)}`,
+        );
+        assert.ok(
+            report.execArgv.some((arg) => arg.includes('platform-fix.js')),
+            `stripping process-monitor.js dropped platform-fix.js from execArgv: ${JSON.stringify(report.execArgv)}`,
+        );
+
+        let initial = null;
+        await until(() => {
+            try {
+                initial = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
+                return Array.isArray(initial.tree) && initial.tree.some((e) => e.pid === 4001);
+            } catch {
+                return false;
+            }
+        }, 'the initial process monitor snapshot');
+
+        childPid = JSON.parse(fs.readFileSync(pidFile, 'utf8')).pid;
+        bootstrap.kill('SIGKILL');
+        await until(() => !alive(bootstrap.pid), 'the bootstrap to exit after SIGKILL');
+        assert.ok(alive(childPid), 'the editor server did not survive bootstrap SIGKILL');
+
+        writeFakeProc(4002, ['/data/data/com.vscodroid/lib/arm64/libbash.so', '-l']);
+        let updated = null;
+        await until(() => {
+            try {
+                const candidate = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
+                if (candidate.timestamp > initial.timestamp && candidate.tree.some((e) => e.pid === 4002)) {
+                    updated = candidate;
+                    return true;
+                }
+                return false;
+            } catch {
+                return false;
+            }
+        }, 'vscodroid-processes.json to keep updating after bootstrap SIGKILL', 3_000);
+
+        assert.strictEqual(
+            updated.tree.find((e) => e.pid === 4001).type, 'server',
+            'preloaded server-main.js was not classified as server in the surviving monitor snapshot',
+        );
+        assert.strictEqual(
+            updated.tree.find((e) => e.pid === 4002).type, 'terminal',
+            'the newly spawned process was not classified in the surviving monitor snapshot',
         );
     } finally {
         if (childPid) { try { process.kill(childPid, 'SIGKILL'); } catch { /* already gone */ } }
@@ -615,30 +872,42 @@ async function stoppingTakesTheEditorServerWithIt() {
 }
 
 // A Stop can reach the bootstrap after it has forked the editor server and
-// written the note, while it is still loading the process monitor. The monitor
-// here holds the bootstrap in that span until the signal has been sent, so the
-// case does not depend on timing: a bootstrap that had not yet registered its
-// SIGTERM handler died of the default action and left its child running.
+// written the pid note, before the bootstrap finishes starting. The hook here
+// holds the bootstrap right after the pid note rename until the signal has been
+// sent, so the case does not depend on timing: a bootstrap that had not yet
+// registered its SIGTERM handler died of the default action and left its child
+// running.
 async function aStopWhileTheBootstrapStartsEndsTheEditorServer() {
     const dir = fixture(UPSTREAM, { serverMain: 'setInterval(() => {}, 1000);\n' });
     const pidFile = path.join(dir, 'editor-server.pid');
-    const loading = path.join(dir, 'monitor-loading');
-    const release = path.join(dir, 'monitor-release');
-    fs.writeFileSync(path.join(dir, 'process-monitor.js'), [
+    const stalled = path.join(dir, 'post-note-stall');
+    const release = path.join(dir, 'post-note-release');
+    const hook = path.join(dir, 'pid-note-hook.js');
+    fs.writeFileSync(hook, [
         "const fs = require('fs');",
-        "fs.writeFileSync(" + JSON.stringify(loading) + ", '1');",
-        'const pause = new Int32Array(new SharedArrayBuffer(4));',
-        'while (!fs.existsSync(' + JSON.stringify(release) + ')) Atomics.wait(pause, 0, 0, 10);',
-        'module.exports = { start() {} };',
+        'const realRenameSync = fs.renameSync;',
+        'fs.renameSync = function (oldPath, newPath) {',
+        '    const result = realRenameSync.call(this, oldPath, newPath);',
+        `    if (String(newPath).endsWith('/editor-server.pid')) {`,
+        `        fs.writeFileSync(${JSON.stringify(stalled)}, '1');`,
+        '        const pause = new Int32Array(new SharedArrayBuffer(4));',
+        `        while (!fs.existsSync(${JSON.stringify(release)})) Atomics.wait(pause, 0, 0, 10);`,
+        '    }',
+        '    return result;',
+        '};',
         '',
     ].join('\n'));
-    const bootstrap = spawn(process.execPath, [path.join(dir, 'server.js'), '--host=127.0.0.1'], {
-        stdio: 'ignore',
-        env: { ...process.env, VSCODROID_SERVER_RUN_ID: 'starting-run' },
-    });
+    const bootstrap = spawn(
+        process.execPath,
+        [`--require=${hook}`, path.join(dir, 'server.js'), '--host=127.0.0.1'],
+        {
+            stdio: 'ignore',
+            env: { ...process.env, VSCODROID_SERVER_RUN_ID: 'starting-run' },
+        },
+    );
     let childPid = 0;
     try {
-        await until(() => fs.existsSync(loading), 'the bootstrap to reach its process monitor');
+        await until(() => fs.existsSync(stalled), 'the bootstrap to write the editor pid note');
         childPid = JSON.parse(fs.readFileSync(pidFile, 'utf8')).pid;
         bootstrap.kill('SIGTERM');
         await sleep(200);
@@ -1978,6 +2247,7 @@ async function exitingBootstrapPreservesReplacementNote() {
 }
 
 preloadRidesAsOneToken()
+    .then(processMonitorSurvivesTheBootstrap)
     .then(privateSocketBackend)
     .then(redirectedPrivateSocketParentIsRefused)
     .then(() => require('./test-server-run-proof.js'))

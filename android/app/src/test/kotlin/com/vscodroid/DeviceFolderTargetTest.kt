@@ -80,14 +80,14 @@ class DeviceFolderTargetTest {
 
     // -- The wiring, read off the source because an Activity cannot be built here --
 
-    private val source by lazy { SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt") }
+    private val source by lazy { SourceScan.read("src/main/kotlin/com/vscodroid/MainActivitySafCoordinator.kt") }
 
     private fun body(declaration: String) =
         SourceScan.withoutComments(SourceScan.body(source, declaration))
 
     @Test
     fun `a synced folder is navigated to through this decision`() {
-        val open = body("private fun openSafFolder(")
+        val open = body("internal fun MainActivity.openSafFolder(")
         listOf(
             "deviceFolderTarget(",
             "namedPath = namedPath?.path",
@@ -120,7 +120,7 @@ class DeviceFolderTargetTest {
      */
     @Test
     fun `a name the provider did not answer makes no link`() {
-        val open = body("private fun openSafFolder(").replace(Regex("\\s+"), " ")
+        val open = body("internal fun MainActivity.openSafFolder(").replace(Regex("\\s+"), " ")
 
         assertTrue(open.contains("safManager.queryDisplayName(uri)")) {
             "the open no longer asks which name the provider answered, so the fallback " +
@@ -142,7 +142,7 @@ class DeviceFolderTargetTest {
 
     @Test
     fun `every page on a copy is noted`() {
-        assertTrue(body("private fun adoptWorkbenchFolder(").contains("safManager.noteOpened(folderPath, it)")) {
+        assertTrue(body("internal fun MainActivity.adoptWorkbenchFolder(").contains("safManager.noteOpened(folderPath, it)")) {
             "a page on a copy is not noted, so a page on the hash has no named path to be " +
                 "moved to and a page by name is never recorded as one"
         }

@@ -774,6 +774,66 @@ class MaintenanceScriptsTest(unittest.TestCase):
         self.assertEqual(1, dirty["status"], dirty)
         self.assertIn("docs/LEGAL_NOTICES.md", dirty["stdout"])
 
+    def test_document_dates_use_utc_day_boundary_for_pending_changes(self):
+        """Pending changes are judged against the UTC day so 17:00-23:59 UTC does not roll early."""
+        import datetime
+
+        repo = self.root / "dates-utc"
+        script = repo / "scripts/check-document-dates.py"
+        write(script, (SOURCE / "scripts/check-document-dates.py").read_text())
+        legal = "_This document was last updated on {}._\n"
+        policy = "**Last Updated: {}**\n"
+        env = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+               "GIT_AUTHOR_NAME": "Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+               "GIT_COMMITTER_NAME": "Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+               "GIT_AUTHOR_DATE": "2026-01-05T12:00:00+00:00", "GIT_COMMITTER_DATE": "2026-01-05T12:00:00+00:00"}
+
+        def git(*args):
+            result = run(["git", *args], repo, env)
+            self.assertEqual(0, result["status"], result)
+
+        write(repo / "docs/LEGAL_NOTICES.md", legal.format("January 5, 2026"))
+        write(repo / "docs/PRIVACY_POLICY.md", policy.format("January 5, 2026"))
+        git("init", "-q")
+        git("add", "--", ".")
+        git("commit", "-q", "-m", "Date both documents")
+        git("update-ref", "refs/remotes/origin/main", "HEAD")
+
+        git("checkout", "-q", "-b", "utc-boundary")
+        write(repo / "docs/PRIVACY_POLICY.md", policy.format("January 5, 2026") + "Updated paragraph.\n")
+        git("commit", "-q", "-am", "Edit policy on January 5 UTC")
+
+        spec = importlib.util.spec_from_file_location("fixture_document_dates", script)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.ROOT = repo
+        self.assertEqual(datetime.timezone.utc, module.MERGE_ZONE)
+
+        # At 19:30 UTC it is still January 5 in UTC (and already January 6 in UTC+7).
+        late_utc = datetime.datetime(2026, 1, 5, 19, 30, tzinfo=datetime.timezone.utc)
+        self.assertEqual(datetime.date(2026, 1, 5), module.current_date(late_utc))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = module.main(now=late_utc)
+        self.assertEqual(0, rc, out.getvalue())
+
+        # Once UTC rolls to January 6, the January 5 pending change must fail.
+        next_utc = datetime.datetime(2026, 1, 6, 0, 5, tzinfo=datetime.timezone.utc)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = module.main(now=next_utc)
+        self.assertEqual(1, rc, out.getvalue())
+        self.assertIn("2026-01-06", out.getvalue())
+
+    def test_r8_keep_verifier_self_test_and_cli(self):
+        """R8 keep verifier self-test passes and rejects unknown flags."""
+        verifier = SOURCE / "scripts/verify-r8-keeps.py"
+        self.assertTrue(verifier.is_file(), "scripts/verify-r8-keeps.py does not exist")
+        self_test = run([sys.executable, "-I", str(verifier), "--self-test"], self.root)
+        self.assertEqual(0, self_test["status"], self_test)
+        bad_flag = run([sys.executable, "-I", str(verifier), "--selftest"], self.root)
+        self.assertEqual(2, bad_flag["status"], bad_flag)
+
     def test_bundle_size_reads_plays_megabytes_the_strict_way(self):
         """Play states its caps in MB; read as MiB they let through a base up to 23 MiB over 500 million bytes."""
         spec = importlib.util.spec_from_file_location("fixture_bundle_size", SOURCE / "scripts/check-bundle-size.py")

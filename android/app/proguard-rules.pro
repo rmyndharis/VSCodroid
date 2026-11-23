@@ -43,3 +43,11 @@
 # Suppress warnings for optional WebKit APIs that may not be present on all
 # API levels. The app performs runtime checks before using these APIs.
 -dontwarn androidx.webkit.**
+
+# ----------------------------------------------------------------------------
+# Keep-rule verification output
+# ----------------------------------------------------------------------------
+# Emit seeds.txt alongside mapping.txt so scripts/verify-r8-keeps.py can verify
+# that manifest components, @JavascriptInterface methods, VSCodroidApp and app
+# Throwable subclasses survived R8 unrenamed and unstripped.
+-printseeds build/outputs/mapping/release/seeds.txt

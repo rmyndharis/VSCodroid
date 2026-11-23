@@ -26,7 +26,14 @@ class LeaveCurtainWiringTest {
 
     /** Comments blanked, because the KDoc names everything the cases look for. */
     private fun mainActivity(): String =
-        SourceScan.withoutComments(SourceScan.read(MAIN_ACTIVITY))
+        SourceScan.withoutComments(
+            SourceScan.readAll(
+                listOf(
+                    MAIN_ACTIVITY,
+                    "src/main/kotlin/com/vscodroid/MainActivityPageScripts.kt",
+                )
+            )
+        )
 
     /** The packaged workbench, or the case is skipped where there is none. */
     private fun shippedWorkbench(): String {
@@ -43,11 +50,11 @@ class LeaveCurtainWiringTest {
     fun `the script is installed from the path every page load takes`() {
         val source = mainActivity()
         assertTrue(
-            source.contains("private fun injectLeaveCurtain()"),
+            source.contains("internal fun MainActivity.injectLeaveCurtain()"),
             "injectLeaveCurtain is gone, so a reload shows the half-dismantled workbench " +
                 "again until the next page paints.",
         )
-        val bridgeToken = SourceScan.body(source, "private fun injectBridgeToken(")
+        val bridgeToken = SourceScan.body(source, "internal fun MainActivity.injectBridgeToken(")
         assertTrue(
             bridgeToken.contains("injectLeaveCurtain()"),
             "injectLeaveCurtain() is not called from injectBridgeToken, the one path that " +
@@ -57,7 +64,7 @@ class LeaveCurtainWiringTest {
 
     @Test
     fun `the script covers the page for a leave and gives it back`() {
-        val script = SourceScan.body(mainActivity(), "private fun injectLeaveCurtain(")
+        val script = SourceScan.scriptBody(mainActivity(), "internal fun MainActivity.injectLeaveCurtain(")
         listOf(
             "'beforeunload'" to "the event the workbench dismantles itself in; any other " +
                 "event is too late, because the dismantled page is painted by the next frame",
@@ -92,13 +99,13 @@ class LeaveCurtainWiringTest {
     fun `a navigation the client declines is told to the page under the name the script listens for`() {
         val source = mainActivity()
         val event = "vscodroid-navigation-declined"
-        val script = SourceScan.body(source, "private fun injectLeaveCurtain(")
+        val script = SourceScan.scriptBody(source, "internal fun MainActivity.injectLeaveCurtain(")
         assertTrue(
             script.contains("addEventListener('$event', lower)"),
             "the curtain script no longer lowers on `$event`, so a link handed to another app " +
                 "or a refused load leaves the page blank for the whole five seconds.",
         )
-        val lift = SourceScan.body(source, "private fun liftLeaveCurtain(")
+        val lift = SourceScan.body(source, "internal fun MainActivity.liftLeaveCurtain(")
         assertTrue(
             lift.contains("new Event('$event')") && lift.contains("evaluateJavascript"),
             "liftLeaveCurtain does not dispatch `$event` into the page.",

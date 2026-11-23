@@ -45,7 +45,7 @@ const path = require('path');
 const vm = require('vm');
 
 const MAIN_ACTIVITY = path.join(
-    __dirname, '..', 'android/app/src/main/kotlin/com/vscodroid/MainActivity.kt',
+    __dirname, '..', 'android/app/src/main/kotlin/com/vscodroid/MainActivityPageScripts.kt',
 );
 
 const STRIP_SELECTOR = '.part.statusbar > .right-items';
@@ -56,7 +56,7 @@ const STRIP_SELECTOR = '.part.statusbar > .right-items';
  */
 function extractScript() {
     const lines = fs.readFileSync(MAIN_ACTIVITY, 'utf8').split('\n');
-    const fn = lines.findIndex((l) => l.includes('private fun injectTouchTargetCSS()'));
+    const fn = lines.findIndex((l) => l.includes('internal fun MainActivity.injectTouchTargetCSS()'));
     assert.notStrictEqual(
         fn, -1,
         'injectTouchTargetCSS() is gone from MainActivity.kt, so this check has nothing to ' +

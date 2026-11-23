@@ -143,16 +143,26 @@ without the credential minted for that boot, which rides in the proxy URL.
 ### 3.5 Toolchain Delivery Security
 
 There are two delivery paths, chosen at runtime, and they have different integrity stories.
-`ToolchainManager` reads `getInstallSourceInfo().installingPackageName`: an install that came
-from `com.android.vending` or the legacy `com.google.android.feedback` installer uses Play Asset Delivery, and every other install (sideload, debug
-build, `adb install`) downloads the same toolchains over HTTPS from this project's GitHub
-Releases. Only the first is covered by Play's signing.
+`ToolchainManager` reads `getInstallSourceInfo().installingPackageName` (or
+`getInstallerPackageName` on Android 10): an install that came from `com.android.vending` or the
+legacy `com.google.android.feedback` installer uses Play Asset Delivery, and every other install
+(sideload, debug build, `adb install`) downloads the same toolchains over HTTPS from this
+project's GitHub Releases. Play Asset Delivery packs are signed with the same key as the base APK.
+On the sideload path, `ToolchainHttpDownloader` pins the release tag, verifies the downloaded ZIP
+against `toolchains.sha256`, and verifies a detached ECDSA P-256 (`SHA256withECDSA`) signature in
+`toolchains.sha256.sig` over the exact wire bytes of `toolchains.sha256` via
+`ToolchainManifestVerifier` whenever a release signing public key is embedded. Fail-closed
+signature enforcement activates unconditionally once `TOOLCHAIN_MANIFEST_PUBLIC_KEY_SPKI_BASE64`
+is populated and the matching `TOOLCHAIN_SIGNING_KEY_PEM` secret is configured for `release.yml`
+(generated offline via `scripts/sign-toolchain-manifest.sh --generate-key`); builds compiled
+without an embedded signing public key fall back to HTTPS-pinned SHA-256 verification.
 
 | Control             | Implementation                                                                 |
 | ------------------- | ------------------------------------------------------------------------------ |
 | Play delivery       | Toolchains delivered as on-demand asset packs: Ruby, Java 25, C/C++ and Codex, those four |
 | Code signing        | Asset packs signed with same key as base APK (Play Store enforced)             |
-| HTTPS delivery      | For non-Play installs, each ZIP is checked against the sha256 the release publishes in `toolchains.sha256` beside it, before anything is extracted. A ZIP the manifest does not name is refused rather than installed unverified |
+| HTTPS delivery      | For non-Play installs, each ZIP is checked against the sha256 the release publishes in `toolchains.sha256` beside it, before anything is extracted. Redirects stay on HTTPS and allowed GitHub release hosts, and a ZIP the manifest does not name is refused rather than installed unverified |
+| Manifest signing    | `ToolchainManifestVerifier` verifies a detached ECDSA P-256 (`SHA256withECDSA`) signature in `toolchains.sha256.sig` over the exact raw bytes of `toolchains.sha256`, failing closed with `ToolchainFailure.DIGEST` on missing, truncated, oversized, or invalid signatures once `TOOLCHAIN_MANIFEST_PUBLIC_KEY_SPKI_BASE64` is provisioned. `release.yml` signs, self-verifies, and checks key parity with the embedded SPKI when `TOOLCHAIN_SIGNING_KEY_PEM` is set; unprovisioned builds without an embedded key fall back to HTTPS-pinned SHA-256 verification |
 | User-initiated only | Toolchains only downloaded when user selects them in Language Picker or on the Toolchains screen |
 | App-private storage | Toolchains extracted to /data/data/com.vscodroid/, inaccessible to other apps  |
 | Sideload integrity  | GitHub Releases APKs include SHA256 checksums for verification                 |

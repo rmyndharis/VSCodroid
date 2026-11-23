@@ -92,6 +92,23 @@ const REH_ROOT = path.join(__dirname, 'vscode-reh');
 // own tests run.
 const REH_PREFIX = REH_ROOT.toLowerCase() + '/';
 
+// The bootstrap entry point sitting beside this module. Resolved via
+// realpathSync when available so symlinked data-directory paths (such as
+// /data/user/0 vs /data/data) still match the bootstrap's cmdline, while a
+// user's own server.js in a project stays 'unknown'.
+const BOOTSTRAP_SCRIPT = (() => {
+    const candidate = path.join(__dirname, 'server.js');
+    try {
+        return fs.realpathSync(candidate).toLowerCase();
+    } catch {
+        try {
+            return path.join(fs.realpathSync(__dirname), 'server.js').toLowerCase();
+        } catch {
+            return candidate.toLowerCase();
+        }
+    }
+})();
+
 // How an entry matches depends on its shape, which namesProgram() below reads:
 // a bare word has to name the program exactly (optionally with a .js, .mjs or
 // .cjs extension), while an entry carrying a separator is distinctive enough to
@@ -384,13 +401,25 @@ function shortCommand(argv) {
     return [program, name, type].filter(Boolean).join(' ');
 }
 
+function isBootstrapScript(rawScript, lowerScript) {
+    if (!lowerScript) return false;
+    if (lowerScript === BOOTSTRAP_SCRIPT) return true;
+    if (path.basename(lowerScript) !== 'server.js') return false;
+    try {
+        return fs.realpathSync(rawScript).toLowerCase() === BOOTSTRAP_SCRIPT;
+    } catch {
+        return false;
+    }
+}
+
 /**
  * Classify a process by its cmdline.
  */
 function classify(argv) {
     const parts = programArguments(argv).map((arg) => arg.toLowerCase());
     const cmd = parts.length === 1 ? parts[0] : '';
-    const script = scriptArgument(argv).toLowerCase();
+    const rawScript = scriptArgument(argv);
+    const script = rawScript.toLowerCase();
 
     // Main Android app process: not a phantom, managed by Activity Manager.
     // Its cmdline is just the package name. Other processes also have the package
@@ -416,6 +445,7 @@ function classify(argv) {
     // and its basename is the whole argument, so `names` cannot see it.
     const forkType = parts.find((arg) => arg.startsWith('--type='));
     if (names.includes('server-main.js')) return 'server';
+    if (isBootstrapScript(rawScript, script)) return 'bootstrap';
     if (names.includes('bootstrap-fork') && forkType === '--type=filewatcher') return 'fileWatcher';
     // ptyHost is now a worker_thread: no longer visible in /proc
     if (names.includes('libtmux.so') || names.includes('tmux')) return 'tmux';
@@ -503,13 +533,12 @@ function scan() {
             const cmdline = readCmdline(pid);
             if (!cmdline.length) continue;
 
-            // This code runs inside server.js, which ProcessBuilder launched and
-            // which Android's per-UID phantom accounting counts like any other
-            // process. Skipping it as "ourselves" reported one fewer than the
-            // budget below is measured against, so every threshold fired one
-            // process late. Named rather than classified: the bootstrap's own
-            // command line matches no pattern and would come out 'unknown'.
-            const type = pid === process.pid ? 'bootstrap' : classify(cmdline);
+            // This code runs inside the editor server (server-main.js), and
+            // Android's per-UID phantom accounting counts every owned process,
+            // this one included. Skipping process.pid would report one fewer
+            // than the budget is measured against; classify() handles both the
+            // editor server and the bootstrap (server.js) by their entrypoints.
+            const type = classify(cmdline);
             if (type === 'app') continue; // main Android process, not a phantom
             const entry = { pid, ppid: info.ppid, type, cmd: shortCommand(cmdline) };
             tree.push(entry);
@@ -625,3 +654,36 @@ function trackLangServer(pid, now) {
 // before it stops trusting it, and that bound only holds while this cadence
 // stays under it. Nothing on device reads it.
 module.exports = { start, stop, REH_ROOT, SCAN_INTERVAL_MS };
+
+// Self-start when server.js preloads this file into the editor server it forks.
+// Running inside server-main.js keeps process snapshots alive when the
+// bootstrap is SIGKILLed and the surviving editor server is adopted.
+//
+// Both the env flag and the --require option are removed from process state
+// before server-main.js loads, because fork() inherits process.execArgv by
+// default and the server forwards it to worker_threads too; leaving either in
+// place would start duplicate writers in forked helpers or worker threads.
+if (process.env.VSCODROID_PROCESS_MONITOR === '1') {
+    delete process.env.VSCODROID_PROCESS_MONITOR;
+    const isMonitorPath = (arg) => {
+        const value = String(arg || '');
+        return (
+            value === 'process-monitor.js' ||
+            value.endsWith('/process-monitor.js') ||
+            value.endsWith('\\process-monitor.js')
+        );
+    };
+    process.execArgv = process.execArgv.filter((arg, i, all) => {
+        if ((arg === '--require' || arg === '-r') && isMonitorPath(all[i + 1])) return false;
+        if ((all[i - 1] === '--require' || all[i - 1] === '-r') && isMonitorPath(arg)) return false;
+        const text = String(arg || '');
+        if (text.startsWith('--require=')) return !isMonitorPath(text.slice('--require='.length));
+        if (text.startsWith('-r=')) return !isMonitorPath(text.slice('-r='.length));
+        return true;
+    });
+    try {
+        start();
+    } catch (e) {
+        log('warn', `process-monitor did not start: ${e.message}`);
+    }
+}

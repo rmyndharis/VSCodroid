@@ -39,7 +39,12 @@ import java.io.File
  */
 class DownloadHoldBudgetTest {
 
-    private val source = File("src/main/kotlin/com/vscodroid/MainActivity.kt").readText()
+    private val source = com.vscodroid.SourceScan.readAll(
+        listOf(
+            "src/main/kotlin/com/vscodroid/MainActivity.kt",
+            "src/main/kotlin/com/vscodroid/MainActivityPageScripts.kt",
+        )
+    )
 
     /** Line comments removed, so prose beside the rule cannot satisfy a search for it. */
     private fun withoutComments(text: String): String =

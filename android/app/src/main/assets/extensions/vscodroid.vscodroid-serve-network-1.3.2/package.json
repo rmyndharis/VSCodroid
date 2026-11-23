@@ -1,0 +1,24 @@
+{
+  "name": "vscodroid-serve-network",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "version": "1.3.2",
+  "publisher": "vscodroid",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./extension.js",
+  "l10n": "./l10n",
+  "contributes": {
+    "commands": [
+      {
+        "command": "vscodroid.serveOnNetwork",
+        "title": "%command.serveOnNetwork%"
+      }
+    ]
+  }
+}

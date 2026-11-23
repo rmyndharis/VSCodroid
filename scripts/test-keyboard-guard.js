@@ -96,14 +96,19 @@ const vm = require('vm');
 const MAIN_ACTIVITY = path.join(
     __dirname, '..', 'android/app/src/main/kotlin/com/vscodroid/MainActivity.kt',
 );
+const MAIN_ACTIVITY_PAGE_SCRIPTS = path.join(
+    __dirname, '..', 'android/app/src/main/kotlin/com/vscodroid/MainActivityPageScripts.kt',
+);
 
 /**
  * The body of the raw string in `injectKeyboardGuard()`, with the indentation
  * `trimIndent()` removes taken off, which is the text the WebView is given.
  */
 function extractGuard(name = 'injectKeyboardGuard', start = true) {
-    const lines = fs.readFileSync(MAIN_ACTIVITY, 'utf8').split('\n');
-    const fn = lines.findIndex((l) => l.includes(`private fun ${name}()`));
+    const isPageScript = name === 'injectKeyboardGuard';
+    const lines = fs.readFileSync(isPageScript ? MAIN_ACTIVITY_PAGE_SCRIPTS : MAIN_ACTIVITY, 'utf8').split('\n');
+    const declaration = isPageScript ? `internal fun MainActivity.${name}()` : `private fun ${name}()`;
+    const fn = lines.findIndex((l) => l.includes(declaration));
     assert.notStrictEqual(
         fn, -1,
         `${name}() is gone from MainActivity.kt, so this check has nothing to ` +

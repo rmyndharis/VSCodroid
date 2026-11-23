@@ -279,9 +279,9 @@ function newPage({ emitter = true } = {}) {
     // what a composed chord there meets: each case below runs with both installed, as in the page.
     {
         const activity = fs.readFileSync(path.join(
-            __dirname, '..', 'android/app/src/main/kotlin/com/vscodroid/MainActivity.kt',
+            __dirname, '..', 'android/app/src/main/kotlin/com/vscodroid/MainActivityPageScripts.kt',
         ), 'utf8');
-        const terminalScript = activity.split('private fun injectTerminalTypedCharacters()')[1].split('"""')[1];
+        const terminalScript = activity.split('internal fun MainActivity.injectTerminalTypedCharacters()')[1].split('"""')[1];
         assert.ok(terminalScript.includes('__vscodroidTerminalTypedCharacters'), 'the terminal script was not found in MainActivity.kt');
         let nextTimerId = 0;
         const cancelled = new Set();

@@ -18,7 +18,7 @@ import java.io.File
 class ListEditKeeperWiringTest {
 
     private companion object {
-        const val MAIN_ACTIVITY = "src/main/kotlin/com/vscodroid/MainActivity.kt"
+        const val MAIN_ACTIVITY = "src/main/kotlin/com/vscodroid/MainActivityPageScripts.kt"
         const val WORKBENCH = "src/main/assets/vscode-reh/out/vs/code/browser/workbench/workbench.js"
     }
 
@@ -30,11 +30,11 @@ class ListEditKeeperWiringTest {
     fun `the script is installed from the path every page load takes`() {
         val source = mainActivity()
         assertTrue(
-            source.contains("private fun injectListEditKeeper()"),
+            source.contains("internal fun MainActivity.injectListEditKeeper()"),
             "injectListEditKeeper is gone, so New File or Rename on a row low in a long " +
                 "Explorer tree makes the keyboard rise and fall without end.",
         )
-        val bridgeToken = SourceScan.body(source, "private fun injectBridgeToken(")
+        val bridgeToken = SourceScan.body(source, "internal fun MainActivity.injectBridgeToken(")
         assertTrue(
             bridgeToken.contains("injectListEditKeeper()"),
             "injectListEditKeeper() is not called from injectBridgeToken, the one path that " +
@@ -44,7 +44,7 @@ class ListEditKeeperWiringTest {
 
     @Test
     fun `the row is read before layout and scrolled after it`() {
-        val script = SourceScan.body(mainActivity(), "private fun injectListEditKeeper(")
+        val script = SourceScan.scriptBody(mainActivity(), "internal fun MainActivity.injectListEditKeeper(")
         listOf(
             "addEventListener('resize'" to "the keyboard reaches the workbench as a resize; " +
                 "without this listener nothing runs",

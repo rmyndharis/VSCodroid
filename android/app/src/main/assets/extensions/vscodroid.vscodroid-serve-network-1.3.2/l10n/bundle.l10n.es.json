@@ -1,0 +1,22 @@
+{
+  "Answers from other devices on this network, select to copy": "Responde a otros dispositivos de esta red, selecciona para copiar",
+  "Answers on localhost alone, so other devices cannot reach it. If this is your server, restart it bound to 0.0.0.0 (exposes the server on every active network interface): Vite `--host 0.0.0.0`, Next.js `-H 0.0.0.0`, Node `server.listen(port, \"0.0.0.0\")`, Python `--bind 0.0.0.0`.": "Solo responde en localhost, así que otros dispositivos no pueden acceder a él. Si es tu servidor, reinícialo enlazado a 0.0.0.0 (expone el servidor en todas las interfaces de red activas): Vite `--host 0.0.0.0`, Next.js `-H 0.0.0.0`, Node `server.listen(port, \"0.0.0.0\")`, Python `--bind 0.0.0.0`.",
+  "Answers on localhost alone, so other devices cannot reach it. If this is your server, restart it bound to {0} (this network only): Vite `--host {0}`, Next.js `-H {0}`, Node `server.listen(port, \"{0}\")`, Python `--bind {0}`.": "Solo responde en localhost, así que otros dispositivos no pueden acceder a él. Si es tu servidor, reinícialo enlazado a {0} (solo esta red): Vite `--host {0}`, Next.js `-H {0}`, Node `server.listen(port, \"{0}\")`, Python `--bind {0}`.",
+  "Checked {0} common dev-server ports and found nothing listening": "Se comprobaron {0} puertos habituales de servidores de desarrollo y ninguno está escuchando",
+  "Copied {0}, open it on the other device.": "Copiado {0}, ábrelo en el otro dispositivo.",
+  "Enter a port number between 1 and 65535.": "Introduce un número de puerto entre 1 y 65535.",
+  "Enter a port number…": "Introducir un número de puerto…",
+  "Looking for dev servers…": "Buscando servidores de desarrollo…",
+  "Nothing is listening on port {0}. Start the server, then run this again.": "No hay nada escuchando en el puerto {0}. Inicia el servidor y vuelve a ejecutar esto.",
+  "Nothing reachable from other devices was found": "No se encontró nada accesible desde otros dispositivos",
+  "Pick an address to copy, then open it on the other device": "Elige una dirección para copiarla y ábrela en el otro dispositivo",
+  "Port {0} answers this device only. Restart the server bound to 0.0.0.0 (this exposes it on every active network interface) and run this again.": "El puerto {0} solo responde a este dispositivo. Reinicia el servidor enlazado a 0.0.0.0 (esto lo expone en todas las interfaces de red activas) y vuelve a ejecutar esto.",
+  "Port {0} answers this device only. Restart the server bound to {1} and run this again.": "El puerto {0} solo responde a este dispositivo. Reinicia el servidor enlazado a {1} y vuelve a ejecutar esto.",
+  "Serve on Network": "Servir en la red",
+  "That server only answers this device. Restart the server bound to 0.0.0.0 (this exposes it on every active network interface) and run this again.": "Ese servidor solo responde a este dispositivo. Reinicia el servidor enlazado a 0.0.0.0 (esto lo expone en todas las interfaces de red activas) y vuelve a ejecutar esto.",
+  "That server only answers this device. Restart the server bound to {0} and run this again.": "Ese servidor solo responde a este dispositivo. Reinicia el servidor enlazado a {0} y vuelve a ejecutar esto.",
+  "This device is not on a network right now. Connect to Wi-Fi, then run this again.": "Este dispositivo no está conectado a ninguna red ahora mismo. Conéctate a Wi-Fi y vuelve a ejecutar esto.",
+  "Which port is your server on?": "¿En qué puerto está tu servidor?",
+  "Your server is on a port this command does not check by default": "Tu servidor está en un puerto que este comando no comprueba de forma predeterminada",
+  "port {0}, this device only": "puerto {0}, solo este dispositivo"
+}

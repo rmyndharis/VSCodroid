@@ -37,7 +37,7 @@ import org.junit.jupiter.api.Test
  */
 class BugReportClipTest {
 
-    private fun source() = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt")
+    private fun source() = SourceScan.readAll(SourceScan.MAIN_ACTIVITY_FILES)
 
     /**
      * Comments removed, so prose about the rule cannot satisfy a search for the
@@ -45,7 +45,7 @@ class BugReportClipTest {
      * both `EXTRA_IS_SENSITIVE` and `setPrimaryClip`.
      */
     private fun copyBody() =
-        SourceScan.withoutComments(SourceScan.body(source(), "private suspend fun copyBugReport("))
+        SourceScan.withoutComments(SourceScan.body(source(), "internal suspend fun MainActivity.copyBugReport("))
 
     @Test
     fun `the copied bug report is marked sensitive before it reaches the clipboard`() {
@@ -130,10 +130,10 @@ class BugReportClipTest {
     fun `both screens copy through the shared function`() {
         val src = SourceScan.withoutComments(source())
 
-        assertTrue(SourceScan.body(src, "private fun checkPreviousCrash(").contains("copyBugReport()")) {
+        assertTrue(SourceScan.body(src, "internal fun MainActivity.checkPreviousCrash(").contains("copyBugReport()")) {
             "the crash dialog no longer copies the bug report"
         }
-        assertTrue(SourceScan.body(src, "private fun copyDiagnostics(").contains("copyBugReport()")) {
+        assertTrue(SourceScan.body(src, "internal fun MainActivity.copyDiagnostics(").contains("copyBugReport()")) {
             "the server-gave-up page's copy control no longer copies the bug report"
         }
     }

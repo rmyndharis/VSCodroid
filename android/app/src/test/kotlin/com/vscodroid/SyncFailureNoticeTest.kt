@@ -27,7 +27,7 @@ import java.io.File
  */
 class SyncFailureNoticeTest {
 
-    private val mainActivity = File("src/main/kotlin/com/vscodroid/MainActivity.kt")
+    private val safCoordinator = File("src/main/kotlin/com/vscodroid/MainActivitySafCoordinator.kt")
 
     /** Any string literal carrying a letter, which is the shape a translator needs. */
     private val proseLiteral = Regex("\"([^\"\\\\\\n]|\\\\.)*\"")
@@ -43,50 +43,28 @@ class SyncFailureNoticeTest {
      * Reading a fixed number of lines is the shape that rots: a body that grows past
      * the window stops being checked and nothing says so.
      */
-    private fun methodBody(name: String): String {
-        val source = mainActivity.readText()
-        val start = source.indexOf("private fun $name(")
-        assertTrue(start >= 0) {
-            "Could not find `private fun $name(` in ${mainActivity.path}. If it moved or " +
-                "was renamed, this test is measuring nothing; point it at the new name " +
-                "rather than deleting it."
-        }
-        val open = source.indexOf('{', start)
-        var depth = 0
-        for (i in open until source.length) {
-            when (source[i]) {
-                '{' -> depth++
-                '}' -> if (--depth == 0) return source.substring(open + 1, i)
-            }
-        }
-        error("Unbalanced braces after `private fun $name(`.")
-    }
+    private fun methodBody(name: String): String =
+        SourceScan.body(SourceScan.read(safCoordinator.path), "internal fun MainActivity.$name(")
 
-    /**
-     * Is the occurrence at [at] one the compiler sees?
-     *
-     * A `//` earlier on the same line makes it text rather than a call, and a
-     * doc-comment continuation makes it prose. Both read identically to a search over
-     * raw source, so without this the count below is satisfied by call sites that no
-     * longer run, and the sentence they pass is checked in dead text while the live
-     * path goes unread.
-     */
-    private fun liveAt(source: String, at: Int): Boolean {
-        val before = source.substring(source.lastIndexOf('\n', at) + 1, at)
-        return "//" !in before && !before.trimStart().startsWith("*")
-    }
-
-    /** Each call's argument list, from its parenthesis to the one that closes it. */
+    /** Each call's argument list across all MainActivity source files, from `(` to `)`. */
     private fun callArguments(name: String): List<String> {
-        val source = mainActivity.readText()
+        val source = SourceScan.withoutComments(SourceScan.readAll(SourceScan.MAIN_ACTIVITY_FILES))
         val calls = mutableListOf<String>()
-        val declaration = "private fun "
+        val declarationPrefixes = listOf(
+            "internal fun MainActivity.",
+            "private fun ",
+            "internal fun ",
+            "fun MainActivity.",
+            "fun ",
+        )
         var from = source.indexOf("$name(")
         while (from >= 0) {
-            // The declaration wears the same spelling as a call and is not one.
-            val declaredHere = from >= declaration.length &&
-                source.startsWith(declaration + name + "(", from - declaration.length)
-            if (!declaredHere && liveAt(source, from)) {
+            val prevChar = if (from > 0) source[from - 1] else ' '
+            val wordBoundary = !(prevChar.isLetterOrDigit() || prevChar == '_')
+            val declaredHere = declarationPrefixes.any { prefix ->
+                from >= prefix.length && source.startsWith(prefix + name + "(", from - prefix.length)
+            }
+            if (wordBoundary && !declaredHere) {
                 val open = source.indexOf('(', from)
                 var depth = 0
                 for (i in open until source.length) {
@@ -115,7 +93,7 @@ class SyncFailureNoticeTest {
         assertTrue(body.isNotEmpty() && body.length < 2_000) {
             "the extracted body is ${body.length} characters, which is not one method"
         }
-        assertTrue("private fun " !in body) {
+        assertTrue("internal fun " !in body) {
             "the brace match ran past the end of the method and into the next one"
         }
         assertTrue(body.contains("R.string.")) {
@@ -130,7 +108,7 @@ class SyncFailureNoticeTest {
 
     @Test
     fun `a folder refused as busy is reported from a resource and not from the exception message`() {
-        val source = mainActivity.readText()
+        val source = safCoordinator.readText()
         val start = source.indexOf("catch (e: FolderBusyException)")
         assertTrue(start >= 0) { "the busy branch is gone or renamed, so this measures nothing" }
         val end = source.indexOf("} catch (e: Exception)", start)

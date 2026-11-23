@@ -84,7 +84,7 @@ class MemoryPressureTest {
  */
 class MemoryPressureHandlerScriptTest {
 
-    private val source = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt")
+    private val source = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivityPageScripts.kt")
 
     /**
      * The injected handler with its comments blanked, because the paragraph above
@@ -92,9 +92,7 @@ class MemoryPressureHandlerScriptTest {
      * them there. [SourceScan] owns the extraction and the ceiling it carries.
      */
     private val script: String by lazy {
-        SourceScan.withoutComments(
-            SourceScan.body(source, "private fun injectMemoryPressureHandler(")
-        )
+        SourceScan.scriptBody(source, "internal fun MainActivity.injectMemoryPressureHandler(")
     }
 
     @Test

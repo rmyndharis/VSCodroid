@@ -1485,7 +1485,10 @@ class AndroidBridge(
 
     /**
      * Generates an ed25519 SSH key pair in ~/.ssh/.
-     * Returns JSON: {success: boolean, publicKey?: string, error?: string}
+     * Returns JSON: {success: boolean, publicKey?: string, existed?: boolean, error?: string}
+     *
+     * Returned `publicKey` omits any trailing comment (consistent with [getSshPublicKey] and
+     * [listSshKeys]) while leaving `~/.ssh/id_ed25519.pub` on disk unchanged.
      *
      * Uses the bundled ssh-keygen binary (libssh-keygen.so) via ProcessBuilder.
      * Empty passphrase for mobile UX: keys are protected by app sandbox.
@@ -1509,7 +1512,7 @@ class AndroidBridge(
             // Existing private keys must never be replaced, even if their public file is missing.
             val existingPublic = if (keyFile.exists()) readPublicKeyFile(pubFile) else null
             if (existingPublic != null) {
-                val pubKey = existingPublic.trim()
+                val pubKey = stripSshPublicKeyComment(existingPublic)
                 result.put("success", true)
                 result.put("publicKey", pubKey)
                 result.put("existed", true)
@@ -1573,7 +1576,7 @@ class AndroidBridge(
                 Files.isRegularFile(stagedKey.toPath(), LinkOption.NOFOLLOW_LINKS) &&
                 Files.isRegularFile(stagedPublic.toPath(), LinkOption.NOFOLLOW_LINKS)
             ) {
-                val pubKey = stagedPublic.readText().trim()
+                val pubKey = stripSshPublicKeyComment(stagedPublic.readText())
                 // A concurrent import must not be replaced by the generated pair.
                 if (Files.exists(keyFile.toPath(), LinkOption.NOFOLLOW_LINKS) ||
                     Files.exists(pubFile.toPath(), LinkOption.NOFOLLOW_LINKS)

@@ -272,8 +272,9 @@ class AwayFromHomeWiringTest {
 
     @Test
     fun `the notice never covers a crash screen`() {
+        val dialogs = read("src/main/kotlin/com/vscodroid/MainActivityDialogs.kt")
         assertTrue(
-            SourceScan.body(main, "private fun checkPreviousCrash(").contains("crashDialog = "),
+            SourceScan.body(dialogs, "internal fun MainActivity.checkPreviousCrash(").contains("crashDialog = "),
             "the previous-crash dialog is no longer held, so the notice cannot wait for it",
         )
         val notice = SourceScan.body(main, "private fun showAwayFromHomeNotice(")

@@ -144,55 +144,28 @@ class WorkspaceMemoryTest {
         )
     }
 
-    private val source = File("src/main/kotlin/com/vscodroid/MainActivity.kt")
+    private fun allSource(): String =
+        com.vscodroid.SourceScan.readAll(com.vscodroid.SourceScan.MAIN_ACTIVITY_FILES)
 
-    /** The body of a `private fun name(` declaration, to its closing brace. */
+    /** The body of a declaration on MainActivity or its extracted modules, to its closing brace. */
     private fun body(name: String): String {
-        val text = source.readText()
-        val start = text.indexOf("private fun $name(")
-        assertTrue(start >= 0) {
-            "$name is gone from MainActivity.kt, so this test is measuring nothing. " +
+        val text = allSource()
+        val declaration = listOf(
+            "private fun $name(",
+            "internal fun $name(",
+            "internal fun MainActivity.$name(",
+        ).firstOrNull { text.contains(it) }
+        assertTrue(declaration != null) {
+            "$name is gone from MainActivity sources, so this test is measuring nothing. " +
                 "If it moved or was renamed, point this at the new site rather than " +
                 "deleting it."
         }
-        val open = text.indexOf('{', start)
-        var depth = 0
-        var i = open
-        while (i < text.length) {
-            if (text[i] == '{') depth += 1
-            if (text[i] == '}') {
-                depth -= 1
-                if (depth == 0) return text.substring(open, i + 1)
-            }
-            i += 1
-        }
-        throw AssertionError("Could not find the end of $name in MainActivity.kt")
+        return com.vscodroid.SourceScan.body(text, declaration!!)
     }
 
     /** Comments removed, so prose about the rule cannot satisfy a search for it. */
-    private fun withoutComments(text: String): String {
-        var inBlock = false
-        return text.lines().joinToString("\n") { raw ->
-            var line = raw
-            if (inBlock) {
-                val close = line.indexOf("*/")
-                if (close < 0) return@joinToString ""
-                inBlock = false
-                line = line.substring(close + 2)
-            }
-            while (line.trimStart().startsWith("/*")) {
-                val open = line.indexOf("/*")
-                val close = line.indexOf("*/", open + 2)
-                if (close < 0) {
-                    inBlock = true
-                    return@joinToString line.substring(0, open)
-                }
-                line = line.substring(0, open) + line.substring(close + 2)
-            }
-            val marker = line.indexOf("//")
-            if (marker >= 0) line.substring(0, marker) else line
-        }
-    }
+    private fun withoutComments(text: String): String =
+        com.vscodroid.SourceScan.withoutComments(text)
 
     @Test
     fun `the URL still outranks the remembered folder`() {
@@ -238,7 +211,7 @@ class WorkspaceMemoryTest {
 
     @Test
     fun `every accepted folder is recorded for the next launch`() {
-        val assignments = withoutComments(source.readText())
+        val assignments = withoutComments(allSource())
             .lines()
             .filter { Regex("""^\s*openWorkspaceFolder = """).containsMatchIn(it) }
             .filterNot { it.trim() == "openWorkspaceFolder = null" }
@@ -266,9 +239,9 @@ class WorkspaceMemoryTest {
             "navigateToFolder must call rememberWorkspaceFolder(folderPath, persist = false) before wv.loadUrl(url)"
         }
 
-        val source = File("src/main/kotlin/com/vscodroid/MainActivity.kt").readText()
+        val source = allSource()
         assertTrue(
-            source.contains("private fun rememberWorkspaceFolder(folderPath: String?, persist: Boolean = true): Boolean"),
+            source.contains("internal fun rememberWorkspaceFolder(folderPath: String?, persist: Boolean = true): Boolean"),
             "rememberWorkspaceFolder must default persist to true",
         )
 
@@ -308,15 +281,15 @@ class WorkspaceMemoryTest {
         val callSites = withoutComments(source)
             .lines()
             .map { it.trim() }
-            .filter { it.contains("rememberWorkspaceFolder(") && !it.startsWith("private fun rememberWorkspaceFolder(") }
+            .filter { it.contains("rememberWorkspaceFolder(") && !it.startsWith("internal fun rememberWorkspaceFolder(") }
         assertEquals(
             listOf(
                 "if (!rememberWorkspaceFolder(target)) return@launch",
                 "if (rememberWorkspaceFolder(opened)) adoptWorkbenchFolder(opened)",
                 "rememberWorkspaceFolder(null)",
                 "if (!rememberWorkspaceFolder(folderPath, persist = false)) return",
-            ),
-            callSites,
+            ).sorted(),
+            callSites.sorted(),
         )
     }
 
@@ -338,6 +311,7 @@ class WorkspaceMemoryTest {
 
             val activity = io.mockk.mockk<com.vscodroid.MainActivity>(relaxed = true)
             io.mockk.every { activity getProperty "workspacePrefs" } returns prefs
+            io.mockk.every { activity.safManager } returns saf
             io.mockk.every {
                 activity["rememberWorkspaceFolder"](matchNullable<String> { true }, any<Boolean>())
             } answers { callOriginal() }

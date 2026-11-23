@@ -18,7 +18,7 @@ import java.io.File
 class CaretDragWiringTest {
 
     private companion object {
-        const val MAIN_ACTIVITY = "src/main/kotlin/com/vscodroid/MainActivity.kt"
+        const val MAIN_ACTIVITY = "src/main/kotlin/com/vscodroid/MainActivityPageScripts.kt"
         const val WORKBENCH = "src/main/assets/vscode-reh/out/vs/code/browser/workbench/workbench.js"
     }
 
@@ -30,10 +30,10 @@ class CaretDragWiringTest {
     fun `the script is installed from the path every page load takes`() {
         val source = mainActivity()
         assertTrue(
-            source.contains("private fun injectCaretDrag()"),
+            source.contains("internal fun MainActivity.injectCaretDrag()"),
             "injectCaretDrag is gone, so a finger can no longer drag the caret.",
         )
-        val bridgeToken = SourceScan.body(source, "private fun injectBridgeToken(")
+        val bridgeToken = SourceScan.body(source, "internal fun MainActivity.injectBridgeToken(")
         assertTrue(
             bridgeToken.contains("injectCaretDrag()"),
             "injectCaretDrag() is not called from injectBridgeToken, the one path that runs " +
@@ -43,7 +43,7 @@ class CaretDragWiringTest {
 
     @Test
     fun `the touch is taken before the editor hears it and the move can be cancelled`() {
-        val script = SourceScan.body(mainActivity(), "private fun injectCaretDrag(")
+        val script = SourceScan.scriptBody(mainActivity(), "internal fun MainActivity.injectCaretDrag(")
         assertTrue(
             script.contains("window.addEventListener('touchmove'") &&
                 script.contains("}, { capture: true, passive: false });"),
@@ -59,7 +59,7 @@ class CaretDragWiringTest {
 
     @Test
     fun `the caret is moved with the editor's own tap`() {
-        val script = SourceScan.body(mainActivity(), "private fun injectCaretDrag(")
+        val script = SourceScan.scriptBody(mainActivity(), "internal fun MainActivity.injectCaretDrag(")
         assertTrue(
             script.contains("'-monaco-gesturetap'"),
             "the caret is moved by the editor's tap, which the keyboard guard also listens for " +
@@ -70,8 +70,8 @@ class CaretDragWiringTest {
     @Test
     fun `the keyboard guard reads the mark the script leaves on a taken drag`() {
         val source = mainActivity()
-        val guard = SourceScan.body(source, "private fun injectKeyboardGuard(")
-        val script = SourceScan.body(source, "private fun injectCaretDrag(")
+        val guard = SourceScan.scriptBody(source, "internal fun MainActivity.injectKeyboardGuard(")
+        val script = SourceScan.scriptBody(source, "internal fun MainActivity.injectCaretDrag(")
         assertTrue(
             script.contains("window.__vscodroidCaretDragged = true;"),
             "the script no longer marks the touch it takes, so the guard cannot tell a drag of " +
@@ -107,7 +107,7 @@ class CaretDragWiringTest {
                 "scripts/package-assets.sh to check the names against the shipped bundle",
         )
         val bundle = workbench.readText()
-        val script = SourceScan.body(mainActivity(), "private fun injectCaretDrag(")
+        val script = SourceScan.scriptBody(mainActivity(), "internal fun MainActivity.injectCaretDrag(")
         val selectors = Regex("""(?:querySelector(?:All)?|closest)\('([^']+)'\)""")
             .findAll(script).joinToString(" ") { it.groupValues[1] }
         val classes = Regex("""\.([a-zA-Z][\w-]*)""")

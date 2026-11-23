@@ -67,7 +67,7 @@ class BackAndServiceStartTest {
         val starts = listOf(
             "private fun startAndBindService(" to
                 "this runs from onCreate, so an uncaught refusal is a crash loop",
-            "private fun retryServerStart(" to
+            "internal fun retryServerStart(" to
                 "this runs from the control on either error page",
         )
 

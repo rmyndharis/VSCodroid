@@ -1,5 +1,6 @@
 package com.vscodroid.setup
 
+import com.vscodroid.SourceScan
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -33,16 +34,7 @@ class ToolchainCancelWiringTest {
      * `NOT_INSTALLED` is wrong there and names it repeatedly, so a search over raw
      * text would fail on the explanation and pass on nothing.
      */
-    private fun code(): String {
-        assertTrue(
-            source.isFile,
-            "${source.path} is not at ${source.absolutePath}; this test would " +
-                "otherwise pass by reading nothing",
-        )
-        return source.readText()
-            .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), " ")
-            .replace(Regex("""//[^\n]*"""), " ")
-    }
+    private fun code(): String = SourceScan.withoutComments(SourceScan.read(source.path))
 
     @Test
     fun `cancelling does not claim the toolchain was uninstalled`() {

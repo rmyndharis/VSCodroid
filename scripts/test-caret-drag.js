@@ -31,13 +31,13 @@ const path = require('path');
 const vm = require('vm');
 
 const MAIN_ACTIVITY = path.join(
-    __dirname, '..', 'android/app/src/main/kotlin/com/vscodroid/MainActivity.kt',
+    __dirname, '..', 'android/app/src/main/kotlin/com/vscodroid/MainActivityPageScripts.kt',
 );
 
 /** The text the WebView is given: the raw string with `trimIndent()` applied. */
 function extractScript() {
     const lines = fs.readFileSync(MAIN_ACTIVITY, 'utf8').split('\n');
-    const fn = lines.findIndex((l) => l.includes('private fun injectCaretDrag()'));
+    const fn = lines.findIndex((l) => l.includes('internal fun MainActivity.injectCaretDrag()'));
     assert.notStrictEqual(
         fn, -1,
         'injectCaretDrag() is gone from MainActivity.kt, so this check has nothing to run. ' +

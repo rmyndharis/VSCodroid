@@ -1907,10 +1907,21 @@ class SafUnfetchedDocumentTest {
      */
     @Test
     fun `the refusal message has one home, so every site announces`() {
-        val engineSource =
-            File("../../android/app/src/main/kotlin/com/vscodroid/storage/SafSyncEngine.kt")
-        assertTrue(engineSource.isFile, "SafSyncEngine.kt is not where this test expects it")
-        val text = engineSource.readText()
+        val storageDir = File("../../android/app/src/main/kotlin/com/vscodroid/storage")
+        val engineSources = listOf(
+            "SafSyncEngine.kt",
+            "SafSyncModels.kt",
+            "SafSyncRecordStore.kt",
+            "SafUploadJournal.kt",
+            "SafDocumentClient.kt",
+            "SafInboundCopier.kt",
+            "SafOutboundWriter.kt",
+            "SafMirrorWatcher.kt",
+        ).map { File(storageDir, it) }
+        for (source in engineSources) {
+            assertTrue(source.isFile, "${source.name} is not where this test expects it")
+        }
+        val text = engineSources.joinToString("\n") { it.readText() }
 
         assertEquals(
             1,
@@ -1921,7 +1932,7 @@ class SafUnfetchedDocumentTest {
             val at = line.indexOf("refuseUnreadDocument(")
             val before = if (at < 0) "" else line.substring(0, at)
             at >= 0 && "//" !in before && !before.trimStart().startsWith("*") &&
-                "private fun " !in before
+                "private fun " !in before && "internal fun " !in before
         }
         assertEquals(
             3,

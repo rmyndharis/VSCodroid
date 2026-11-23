@@ -221,18 +221,18 @@ assert.strictEqual(
     `expected 18 raw strings directly in evaluateJavascript(...) call sites, found ${evalScripts.length}`,
 );
 
-// Rule 2 (independent of call-site formatting): every `private fun inject*` in MainActivity.kt
+// Rule 2 (independent of call-site formatting): every `inject*` in MainActivityPageScripts.kt
 // must contribute a raw string that is parsed here. Splitting `evaluateJavascript("""...""")`
 // into a local variable inside an injector must not drop the script from coverage.
-const mainActivityPath = path.join(KOTLIN_MAIN, 'com/vscodroid/MainActivity.kt');
-const mainActivitySrc = fs.readFileSync(mainActivityPath, 'utf8');
-const injectDecls = [...mainActivitySrc.matchAll(/^\s*private\s+fun\s+(inject\w+)\s*\(/gm)].map(
+const pageScriptsPath = path.join(KOTLIN_MAIN, 'com/vscodroid/MainActivityPageScripts.kt');
+const pageScriptsSrc = fs.readFileSync(pageScriptsPath, 'utf8');
+const injectDecls = [...pageScriptsSrc.matchAll(/^\s*(?:private|internal)\s+fun\s+(?:MainActivity\.)?(inject\w+)\s*\(/gm)].map(
     (m) => m[1],
 );
 assert.strictEqual(
     injectDecls.length,
     16,
-    `expected 16 private fun inject* declarations in MainActivity.kt, found ${injectDecls.length}`,
+    `expected 16 inject* declarations in MainActivityPageScripts.kt, found ${injectDecls.length}`,
 );
 for (const fn of injectDecls) {
     const match = evalScripts.find((r) => r.enclosingFun === fn);
@@ -271,15 +271,22 @@ assert.strictEqual(
     `expected 24 total page scripts to parse, found ${scriptsToParse.length}`,
 );
 
-// Rule 4: every non-HTML raw string in MainActivity.kt must be covered by scriptsToParse,
+// Rule 4: every non-HTML raw string across the MainActivity modules must be covered by scriptsToParse,
 // so renaming an `inject*` helper and binding its raw string to a local variable cannot
 // silently drop a script from syntax checking.
+const MAIN_ACTIVITY_FILES = new Set([
+    'MainActivity.kt',
+    'MainActivityHelpers.kt',
+    'MainActivityPageScripts.kt',
+    'MainActivityDialogs.kt',
+    'MainActivitySafCoordinator.kt',
+]);
 const parsedLocations = new Set(scriptsToParse.map((r) => `${r.rel}:${r.line}`));
-const mainActivityRawStrings = allRawStrings.filter((r) => r.rel.endsWith('/MainActivity.kt'));
+const mainActivityRawStrings = allRawStrings.filter((r) => MAIN_ACTIVITY_FILES.has(path.basename(r.rel)));
 assert.strictEqual(
     mainActivityRawStrings.length,
     23,
-    `expected 23 total raw strings in MainActivity.kt, found ${mainActivityRawStrings.length}`,
+    `expected 23 total raw strings across MainActivity modules, found ${mainActivityRawStrings.length}`,
 );
 const mainActivityHtmlDocs = mainActivityRawStrings.filter((r) =>
     /^\s*<(?:html|div)\b/i.test(r.body),
@@ -287,13 +294,13 @@ const mainActivityHtmlDocs = mainActivityRawStrings.filter((r) =>
 assert.strictEqual(
     mainActivityHtmlDocs.length,
     3,
-    `expected 3 HTML fragment/document raw strings in MainActivity.kt, found ${mainActivityHtmlDocs.length}`,
+    `expected 3 HTML fragment/document raw strings across MainActivity modules, found ${mainActivityHtmlDocs.length}`,
 );
 for (const r of mainActivityRawStrings) {
     if (/^\s*<(?:html|div)\b/i.test(r.body)) continue;
     assert(
         parsedLocations.has(`${r.rel}:${r.line}`),
-        `${r.rel}:${r.line}(${r.enclosingFun || r.decl || 'raw-string'}) is a non-HTML raw string in MainActivity.kt that is not covered by scriptsToParse`,
+        `${r.rel}:${r.line}(${r.enclosingFun || r.decl || 'raw-string'}) is a non-HTML raw string in MainActivity modules that is not covered by scriptsToParse`,
     );
 }
 

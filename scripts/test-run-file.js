@@ -13,9 +13,16 @@ const source = fs.readFileSync(extension, 'utf8');
 const home = '/data/user/0/com.vscodroid/files/home';
 
 async function run(code, { language = 'javascript', file = '/work/a.js', scheme = 'file', dirty = false,
-    saved = true, schedule, read, choose, save, installed = '[{"name":"java"},{"name":"ruby"},{"name":"cpp"}]', readError } = {}) {
+    saved = true, schedule, read, choose, save, installed = '[{"name":"java"},{"name":"ruby"},{"name":"cpp"}]', readError, locale = 'en' } = {}) {
     const commands = new Map();
     const events = [];
+    const l10nBundle = locale !== 'en'
+        ? JSON.parse(fs.readFileSync(path.join(path.dirname(extension), 'l10n', `bundle.l10n.${locale}.json`), 'utf8'))
+        : null;
+    const translate = (message, ...args) => {
+        const text = (l10nBundle && Object.prototype.hasOwnProperty.call(l10nBundle, message)) ? l10nBundle[message] : message;
+        return text.replace(/\{(\d+)\}/g, (all, n) => (args[n] === undefined ? all : String(args[n])));
+    };
     class Uri {
         constructor(value, uriScheme = 'file') { this.path = value; this.scheme = uriScheme; }
         static joinPath(base, ...parts) { return new Uri(path.posix.join(base.path, ...parts), base.scheme); }
@@ -28,6 +35,7 @@ async function run(code, { language = 'javascript', file = '/work/a.js', scheme 
     const disposable = () => ({ dispose() {} });
     const vscode = {
         Uri,
+        l10n: { t: translate },
         commands: { registerCommand(id, callback) { commands.set(id, callback); return disposable(); },
             async executeCommand(id) { events.push(['command', id]); } },
         workspace: {
@@ -42,7 +50,7 @@ async function run(code, { language = 'javascript', file = '/work/a.js', scheme 
         },
         window: {
             activeTextEditor: { document }, terminals: [], createStatusBarItem: disposable,
-            showInformationMessage: (message) => { events.push(['info', message]); return choose?.(message); },
+            showInformationMessage: (message, ...items) => { events.push(['info', message, items]); return choose?.(message, items); },
             showErrorMessage: (message) => { events.push(['error', message]); },
             createTerminal(options) {
                 events.push(['terminal', options.cwd]);
@@ -218,6 +226,26 @@ async function orderingChecks(code) {
     }
     await checks(source);
     await orderingChecks(source);
+    // Localized rendering: missing toolchain notice and action button in German.
+    {
+        const deBundle = JSON.parse(
+            fs.readFileSync(path.join(path.dirname(extension), 'l10n', 'bundle.l10n.de.json'), 'utf8'),
+        );
+        const events = await run(source, {
+            language: 'ruby',
+            installed: '[]',
+            locale: 'de',
+            choose: (_message, items) => items[0],
+        });
+        const info = events.find((event) => event[0] === 'info');
+        assert.ok(info, 'missing toolchain did not show a German notice');
+        assert.equal(info[1], deBundle['{0} is not installed. Add it from the toolchains screen.'].replace('{0}', 'Ruby'));
+        assert.deepEqual(info[2], [deBundle['Manage Toolchains']]);
+        assert.ok(
+            events.some((event) => event[0] === 'command' && event[1] === 'vscodroid.manageToolchains'),
+            'choosing the localized Manage Toolchains button did not open toolchains',
+        );
+    }
     for (const [before, after] of [
         ['runner.command(shellQuote(document.uri.path))', 'runner.command(document.uri.path)'],
         ['await document.save();', ''],

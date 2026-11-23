@@ -986,16 +986,94 @@ async function antigravityOffer({ installed, runEngine, answer, installLater = f
     assert.deepStrictEqual(de.offers[0].items, [german[TURN_ON], german[NEVER]], 'the buttons were not shown in German');
     assert.deepStrictEqual(de.executed, ['workbench.action.reloadWindow'], 'the German button did not turn the engine on');
 
-    // Every language the app ships has every string, with its placeholder, and no string the code does not use.
-    const used = [dismissed.offers[0].message, TURN_ON, NEVER, 'The Antigravity engine could not be turned on: {0}', MISMATCH];
-    assert.ok(refused.errors[0].message.startsWith(used[3].replace('{0}', '')), 'the error text is not the one the bundles translate');
+    // Non-English locale rendering for the monitor's own UI: status bar tooltip, type labels,
+    // tiered notification + localized Show Details button, and process tree output.
+    {
+        const jaBundle = JSON.parse(fs.readFileSync(path.join(path.dirname(EXTENSION), 'l10n/bundle.l10n.ja.json'), 'utf8'));
+        const tmp = fs.mkdtempSync(path.join(BASE_TMP, 'vscodroid-ja-'));
+        const originalItem = vscodeStub.window.createStatusBarItem;
+        const originalTmp = process.env.TMPDIR;
+        const originalHome = process.env.HOME;
+        const originalStatfs = fs.statfsSync;
+        let item;
+        world.locale = 'ja';
+        world.installed = new Set();
+        world.answer = jaBundle['Show Details'];
+        try {
+            fs.statfsSync = () => ({ blocks: 100000, bavail: 25000, bsize: 4096 });
+            vscodeStub.window.createStatusBarItem = (...args) => (item = originalItem(...args));
+            process.env.TMPDIR = tmp;
+            process.env.HOME = tmp;
+            const snap = snapshot(10, 3, 2);
+            snap.tree[3].idle = true;
+            fs.writeFileSync(path.join(tmp, 'vscodroid-processes.json'), JSON.stringify(snap));
+            shown.length = 0;
+            printed.length = 0;
+            delete require.cache[require.resolve(EXTENSION)];
+            const extension = require(EXTENSION);
+            extension.activate({ subscriptions: [] });
+            await new Promise((resolve) => setImmediate(resolve));
+            extension.deactivate();
+
+            assert.strictEqual(item.name, jaBundle['Process Monitor'], 'status bar name was not localized in Japanese');
+            assert.ok(
+                item.tooltip.includes(jaBundle['Phantom processes: {0}'].replace('{0}', '10')),
+                'status bar tooltip header was not localized in Japanese: ' + item.tooltip,
+            );
+            assert.ok(
+                item.tooltip.includes(jaBundle['terminal']) && item.tooltip.includes(jaBundle['language server']),
+                'status bar tooltip type labels were not localized in Japanese: ' + item.tooltip,
+            );
+            assert.strictEqual(shown.length, 1, 'warning tier was not raised in Japanese');
+            assert.strictEqual(
+                shown[0].message,
+                jaBundle['Phantom processes are adding up; Android may start ending them. The live count is in the status bar.'],
+            );
+            assert.deepStrictEqual(shown[0].items, [jaBundle['Show Details']]);
+            const treeText = printed.join('\n');
+            assert.ok(
+                treeText.includes(jaBundle['Total phantom processes: {0}'].replace('{0}', '10')) &&
+                    treeText.includes(jaBundle['(idle)']) &&
+                    treeText.includes(jaBundle['Recommendations:']),
+                'clicking localized Show Details did not render localized process tree:\n' + treeText,
+            );
+        } finally {
+            world.locale = 'en';
+            world.answer = undefined;
+            fs.statfsSync = originalStatfs;
+            vscodeStub.window.createStatusBarItem = originalItem;
+            if (originalTmp === undefined) delete process.env.TMPDIR;
+            else process.env.TMPDIR = originalTmp;
+            if (originalHome === undefined) delete process.env.HOME;
+            else process.env.HOME = originalHome;
+            fs.rmSync(tmp, { recursive: true, force: true });
+        }
+    }
+
+    // Every language the app ships has the exact same complete key set, non-empty values,
+    // all Antigravity keys, and exact {0}/{1}/{2} placeholder parity across all 13 locales.
+    const antigravityKeys = [dismissed.offers[0].message, TURN_ON, NEVER, 'The Antigravity engine could not be turned on: {0}', MISMATCH];
+    assert.ok(refused.errors[0].message.startsWith(antigravityKeys[3].replace('{0}', '')), 'the error text is not the one the bundles translate');
     const bundles = fs.readdirSync(path.join(path.dirname(EXTENSION), 'l10n')).sort();
     const nls = fs.readdirSync(path.dirname(EXTENSION)).filter((f) => /^package\.nls\.[a-z-]+\.json$/.test(f)).map((f) => f.slice(12, -5)).sort();
     assert.deepStrictEqual(bundles, nls.map((l) => `bundle.l10n.${l}.json`), 'the l10n bundles are not the languages package.nls is translated into');
+    const referenceKeys = Object.keys(german).sort();
+    assert.ok(referenceKeys.length >= 30, `expected all process-monitor UI strings in l10n bundles, found only ${referenceKeys.length}`);
+    for (const key of antigravityKeys) {
+        assert.ok(referenceKeys.includes(key), `missing Antigravity key in reference bundle: ${key}`);
+    }
+    const placeholdersOf = (text) => (text.match(/\{\d+\}/g) || []).sort();
     for (const file of bundles) {
         const bundle = JSON.parse(fs.readFileSync(path.join(path.dirname(EXTENSION), 'l10n', file), 'utf8'));
-        assert.deepStrictEqual(Object.keys(bundle).sort(), used.slice().sort(), `${file} does not hold exactly the strings the offer uses`);
-        for (const key of used) assert.strictEqual(bundle[key].includes('{0}'), key.includes('{0}'), `${file}: the placeholder of "${key}" was lost or added`);
+        assert.deepStrictEqual(Object.keys(bundle).sort(), referenceKeys, `${file} key set drifted from reference bundle`);
+        for (const key of referenceKeys) {
+            assert.ok(typeof bundle[key] === 'string' && bundle[key].trim().length > 0, `${file}: empty value for "${key}"`);
+            assert.deepStrictEqual(
+                placeholdersOf(bundle[key]),
+                placeholdersOf(key),
+                `${file}: placeholder mismatch for "${key}"`,
+            );
+        }
     }
     const manifestL10n = JSON.parse(fs.readFileSync(path.join(path.dirname(EXTENSION), 'package.json'), 'utf8')).l10n;
     assert.strictEqual(manifestL10n, './l10n', 'package.json does not point the extension host at the bundles');

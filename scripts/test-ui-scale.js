@@ -43,9 +43,10 @@ const Module = require('module');
 const vm = require('vm');
 const { newestExtensionDir } = require('./lib/bundled-extension');
 
-const MAIN_ACTIVITY = path.join(
-    __dirname, '..', 'android/app/src/main/kotlin/com/vscodroid/MainActivity.kt',
-);
+const MAIN_ACTIVITY_SOURCES = [
+    path.join(__dirname, '..', 'android/app/src/main/kotlin/com/vscodroid/MainActivityHelpers.kt'),
+    path.join(__dirname, '..', 'android/app/src/main/kotlin/com/vscodroid/MainActivityPageScripts.kt'),
+];
 
 /** How a literal dollar is written inside a Kotlin raw string. */
 const DOLLAR_ESCAPE = "${'$'}";
@@ -55,7 +56,7 @@ const DOLLAR_ESCAPE = "${'$'}";
  * removes taken off, which is the text the WebView is given.
  */
 function extract(declaration, mustMention) {
-    const lines = fs.readFileSync(MAIN_ACTIVITY, 'utf8').split('\n');
+    const lines = MAIN_ACTIVITY_SOURCES.flatMap((file) => fs.readFileSync(file, 'utf8').split('\n'));
     const fn = lines.findIndex((l) => l.includes(declaration));
     assert.notStrictEqual(
         fn, -1,
@@ -80,7 +81,7 @@ function extract(declaration, mustMention) {
 }
 
 const SCRIPT = extract('internal fun uiScaleScript()', "'vscodroid.uiScale'");
-const RELAY = extract('private fun injectBridgeRelay()', 'setUiScale');
+const RELAY = extract('internal fun MainActivity.injectBridgeRelay()', 'setUiScale');
 
 /** The workbench page's own viewport element in Code - OSS 1.139.1 (workbench.html). */
 const WORKBENCH_VIEWPORT =
@@ -365,8 +366,22 @@ for (const stored of ['abc', '0', '-1', '']) {
 
 const vscodeCalls = { info: [], warning: [], error: [], picks: [] };
 let pick = () => undefined;
+let uiLocale = 'en';
+const safBridgeDir = newestExtensionDir('vscodroid.vscodroid-saf-bridge-');
+function uiTranslate(message, ...args) {
+    let text = message;
+    if (uiLocale !== 'en') {
+        const bundle = path.join(safBridgeDir, 'l10n', `bundle.l10n.${uiLocale}.json`);
+        if (fs.existsSync(bundle)) {
+            const entries = JSON.parse(fs.readFileSync(bundle, 'utf8'));
+            if (Object.prototype.hasOwnProperty.call(entries, message)) text = entries[message];
+        }
+    }
+    return text.replace(/\{(\d+)\}/g, (all, n) => (args[n] === undefined ? all : String(args[n])));
+}
 const commands = new Map();
 const vscodeStub = {
+    l10n: { t: uiTranslate },
     commands: {
         registerCommand: (id, fn) => { commands.set(id, fn); return { dispose() {} }; },
         executeCommand: async () => {},
@@ -524,6 +539,29 @@ async function main() {
     assert.ok(r.error.length === 1 && /Android System WebView/.test(r.error[0]) && r.picks.length === 0,
         'with no hook in the page the command did not say why: ' + JSON.stringify(r));
     page.win.__vscodroidUiScale = hook;
+
+    // Non-English locale rendering: picker labels, confirmation, and narrow-screen notice.
+    {
+        const deBundle = JSON.parse(fs.readFileSync(path.join(safBridgeDir, 'l10n', 'bundle.l10n.de.json'), 'utf8'));
+        uiLocale = 'de';
+        try {
+            r = await run((items) => items.find((i) => i.label === '125%'));
+            assert.strictEqual(
+                r.picks[0].options.placeHolder,
+                deBundle['Size of the whole interface: side bar, tabs, menus and editor'],
+            );
+            assert.deepStrictEqual(labels(r), [['100%', deBundle['current']], ['110%', ''], ['125%', '']]);
+            assert.strictEqual(r.info[0], deBundle['UI scale set to {0}.'].replace('{0}', '125%'));
+
+            page.win.screen = { width: 340, height: 720 };
+            r = await run(() => assert.fail('narrow screen opened quick pick in German locale'));
+            assert.strictEqual(r.info[0], deBundle['This screen is too narrow to show the interface any larger.']);
+        } finally {
+            uiLocale = 'en';
+            page.win.screen = { width: 411, height: 891 };
+            await run((items) => items.find((i) => i.label === '100%'));
+        }
+    }
 
     fs.writeSync(1,
         'ok -- the UI scale is applied to the workbench page as its viewport element is parsed, ' +

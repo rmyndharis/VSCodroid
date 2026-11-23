@@ -29,37 +29,17 @@ import java.io.File
  */
 class ActivityTeardownTest {
 
-    private val file = File("src/main/kotlin/com/vscodroid/MainActivity.kt")
-
     private val source by lazy {
-        check(file.isFile) {
-            "MainActivity.kt not found at ${file.absolutePath}; this test would " +
-                "otherwise pass by looking at nothing"
-        }
-        file.readText()
+        SourceScan.readAll(
+            listOf(
+                "src/main/kotlin/com/vscodroid/MainActivity.kt",
+                "src/main/kotlin/com/vscodroid/MainActivitySafCoordinator.kt",
+            )
+        )
     }
 
     /** The body of a declaration, by brace matching from it. */
-    private fun body(declaration: String): String {
-        val start = source.indexOf(declaration)
-        assertTrue(start >= 0) {
-            "`$declaration` is gone from MainActivity.kt, so this test is measuring " +
-                "nothing. If it moved or was renamed, point this at the new site rather " +
-                "than deleting it."
-        }
-        val open = source.indexOf('{', start)
-        var depth = 0
-        var i = open
-        while (i < source.length) {
-            if (source[i] == '{') depth += 1
-            if (source[i] == '}') {
-                depth -= 1
-                if (depth == 0) return source.substring(open, i + 1)
-            }
-            i += 1
-        }
-        throw AssertionError("Could not find the end of `$declaration` in MainActivity.kt")
-    }
+    private fun body(declaration: String): String = SourceScan.body(source, declaration)
 
     /** Comments dropped: every rule here is discussed in prose beside the line it governs. */
     private fun code(text: String): List<String> =
@@ -218,8 +198,8 @@ class ActivityTeardownTest {
         // The folder switch must keep the restartable stop: the next folder's
         // watcher starts on this same engine, and a shutdown there would leave the
         // user editing a folder nothing writes back.
-        val switching = code(body("private fun openSafFolder(")) +
-            code(body("private suspend fun restoreWatcherAfterFailure("))
+        val switching = code(body("internal fun MainActivity.openSafFolder(")) +
+            code(body("internal suspend fun MainActivity.restoreWatcherAfterFailure("))
 
         assertEquals(
             emptyList<String>(),
@@ -290,7 +270,6 @@ class PickerAfterTeardownTest {
         every { Logger.w(any(), any(), any()) } just Runs
         activity = mockk(relaxed = true)
         every { activity.runOnUiThread(any()) } answers { firstArg<Runnable>().run() }
-        every { activity.openFolderPicker() } answers { callOriginal() }
         every { launcher.launch(any()) } answers {
             launched++
             throw IllegalStateException("Attempting to launch an unregistered ActivityResultLauncher")

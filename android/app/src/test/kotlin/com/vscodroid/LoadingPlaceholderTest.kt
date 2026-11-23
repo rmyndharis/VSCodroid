@@ -32,7 +32,7 @@ import java.io.File
  */
 class LoadingPlaceholderTest {
 
-    private val source = File("src/main/kotlin/com/vscodroid/MainActivity.kt").readText()
+    private val source = SourceScan.readAll(SourceScan.MAIN_ACTIVITY_FILES)
 
     @Test
     fun `the character that ends a data URL is encoded`() {
@@ -63,9 +63,8 @@ class LoadingPlaceholderTest {
         // The setup one is what a launch shows; the retry one is what both error
         // pages' controls reach, and it is the copy a user sees only after
         // something has already gone wrong.
-        val calls = source.lines().filter { line ->
-            val code = line.substringBefore("//")
-            code.contains(".loadData(")
+        val calls = SourceScan.withoutComments(source).lines().filter { line ->
+            line.contains(".loadData(")
         }
 
         assertEquals(

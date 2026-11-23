@@ -214,10 +214,11 @@ class ServerReadinessCallSiteTest {
         every { webView.webViewClient = any() } answers { client = firstArg() }
         every { webView.webViewClient } answers { client }
         every { webView.loadUrl(any()) } answers { events += "load-url" }
+        mockkStatic("com.vscodroid.MainActivityPageScriptsKt")
         every { activity["markAppNavigation"]() } answers { callOriginal() }
         every { activity["rememberWorkspaceFolder"](any<String>(), any<Boolean>()) } returns true
         every { activity["folderFromUrl"](any<String>()) } returns null
-        every { activity["injectBridgeToken"]() } returns Unit
+        every { activity.injectBridgeToken() } returns Unit
         every { activity["initBridge"](any<Int>()) } answers { callOriginal() }
         every { activity["navigateToFolder"](any<Int>(), any<String>(), any<String>()) } answers { callOriginal() }
         setField("safManager", mockk<SafStorageManager>(relaxed = true))
@@ -295,7 +296,7 @@ class ServerReadinessCallSiteTest {
         )
         val client = installWebViewClient(13337)
         var tokenInjections = 0
-        every { activity["injectBridgeToken"]() } answers { tokenInjections++ }
+        every { activity.injectBridgeToken() } answers { tokenInjections++ }
 
         setField("serverPort", 14444)
         setField("backgroundedAt", 1_000L)
