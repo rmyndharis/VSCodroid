@@ -256,6 +256,12 @@ class NodeService : Service() {
                 START_NOT_STICKY
             }
 
+            StartCommand.HOLD_REFUSED -> {
+                Logger.w(tag, "Foreground promotion for first-run setup hold was refused; stopping hold")
+                stopSelf()
+                START_NOT_STICKY
+            }
+
             StartCommand.RELEASE_HOLD -> {
                 if (isServiceRunning) {
                     // A server took over while setup ran, which is the ordinary
@@ -1270,6 +1276,9 @@ class NodeService : Service() {
         // crashes got one retry rather than five, and nothing on screen said why.
         // This is the end of a run, and the next one is not a continuation of it.
         endFailureEpisode()
+        // Withdraw gateway routing immediately so clients get HTTP 503 while keeping
+        // the public origin bound for Retry, then reap any lingering child off the main thread.
+        processManager.withdrawForTerminalState()?.let(::reapOffMainThread)
         ServiceCompat.startForeground(
             this,
             VSCodroidApp.NOTIFICATION_ID,
@@ -1679,12 +1688,15 @@ internal enum class StartCommand {
     /** Promote and hold the process for first-run setup, starting no server. */
     HOLD,
 
+    /** The foreground promotion for first-run setup's hold was refused, so no hold is kept. */
+    HOLD_REFUSED,
+
     /** Give that hold back. */
     RELEASE_HOLD,
 }
 
 /**
- * Which of the four a start command reaches.
+ * Which of the outcomes a start command reaches.
  *
  * Extracted for the reason [launchOutcome] gives: the branch it replaces lived in
  * a `Service` method, and nothing in a plain JVM can build one, so the decision
@@ -1697,10 +1709,12 @@ internal enum class StartCommand {
  * already serving would re-enter the foreground for nothing. Short-circuiting is
  * what is being pinned, so it is expressed where a test can hold it.
  *
- * A refused promotion is [StartCommand.STAND_DOWN] and not a quieter form of
+ * A refused promotion is [StartCommand.STAND_DOWN] for a server start and
+ * [StartCommand.HOLD_REFUSED] for a setup hold, never a quieter form of
  * [StartCommand.SERVE]. The caller has no card, so it has no Stop lever and
  * nowhere to say what happened, and a server started into that has nothing
- * tracking it.
+ * tracking it. A refused setup hold stops quietly without recording a terminal
+ * server-start failure for a server that was never requested.
  */
 internal fun startCommand(
     action: String?,
@@ -1716,7 +1730,7 @@ internal fun startCommand(
     action == NodeService.ACTION_HOLD -> when {
         serviceRunning -> StartCommand.ALREADY_SERVING
         promote() -> StartCommand.HOLD
-        else -> StartCommand.STAND_DOWN
+        else -> StartCommand.HOLD_REFUSED
     }
     serviceRunning -> StartCommand.ALREADY_SERVING
     promote() -> StartCommand.SERVE
@@ -1740,6 +1754,19 @@ internal fun stopOffMainThread(stop: () -> Unit, onMain: Executor, ended: () -> 
             onMain.execute(ended)
         }
     }, "server-stop").start()
+}
+
+private fun reapOffMainThread(reap: () -> Unit) {
+    Thread({
+        try {
+            reap()
+        } catch (e: Throwable) {
+            Logger.e("NodeService", "Reaping the terminal server failed", e)
+        }
+    }, "server-terminal-reap").apply {
+        isDaemon = true
+        start()
+    }
 }
 
 /** What a crash report gets. */

@@ -341,9 +341,9 @@ class StartCommandTest {
     }
 
     @Test
-    fun `a refused promotion stands the hold down rather than holding nothing`() {
+    fun `a refused promotion refuses the hold rather than standing down a server start`() {
         assertEquals(
-            StartCommand.STAND_DOWN,
+            StartCommand.HOLD_REFUSED,
             startCommand(NodeService.ACTION_HOLD, serviceRunning = false, promote = promoting(false)),
         )
         assertEquals(1, promotions, "the refusal has to be the promotion's own answer")
