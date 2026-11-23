@@ -706,7 +706,10 @@ __vscodroid_pip_note() {
 
     @Test
     fun `every writer of the bashrc writes through a link`() {
-        val source = com.vscodroid.SourceScan.read("src/main/kotlin/com/vscodroid/setup/FirstRunSetup.kt")
+        val source = listOf(
+            "src/main/kotlin/com/vscodroid/setup/FirstRunSetup.kt",
+            "src/main/kotlin/com/vscodroid/setup/FirstRunShellConfig.kt",
+        ).joinToString("\n") { com.vscodroid.SourceScan.read(it) }
         val writers = Regex("""writeAtomically\(bashrc\b""").findAll(source).count()
         val through = Regex("""writeAtomically\(bashrc, throughLink = true\)""").findAll(source).count()
 
@@ -823,7 +826,10 @@ __vscodroid_pip_note() {
     @Test
     fun `the global file is under the prefix npm is given`() {
         val environment = com.vscodroid.SourceScan.read("src/main/kotlin/com/vscodroid/util/Environment.kt")
-        val setup = com.vscodroid.SourceScan.read("src/main/kotlin/com/vscodroid/setup/FirstRunSetup.kt")
+        val setup = listOf(
+            "src/main/kotlin/com/vscodroid/setup/FirstRunSetup.kt",
+            "src/main/kotlin/com/vscodroid/setup/FirstRunShellConfig.kt",
+        ).joinToString("\n") { com.vscodroid.SourceScan.read(it) }
 
         assertTrue(environment.contains("\"NPM_CONFIG_PREFIX\" to \"\$filesDir/usr\""), "npm's prefix moved")
         assertTrue(setup.contains("File(context.filesDir, \"usr/etc/npmrc\")"), "the global file moved")
@@ -835,7 +841,11 @@ __vscodroid_pip_note() {
      */
     @Test
     fun `every writer of the settings writes through a link`() {
-        val source = com.vscodroid.SourceScan.read("src/main/kotlin/com/vscodroid/setup/FirstRunSetup.kt")
+        val source = listOf(
+            "src/main/kotlin/com/vscodroid/setup/FirstRunSetup.kt",
+            "src/main/kotlin/com/vscodroid/setup/FirstRunShellConfig.kt",
+            "src/main/kotlin/com/vscodroid/setup/SetupSettingsMigrator.kt",
+        ).joinToString("\n") { com.vscodroid.SourceScan.read(it) }
         val names = Regex("""val (\w+) = File\(Environment\.getMachineSettingsPath\(context\)\)""")
             .findAll(source).map { it.groupValues[1] }.toSet()
         val writers = names.sumOf { Regex("""writeAtomically\($it\b""").findAll(source).count() }
