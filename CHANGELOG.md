@@ -124,6 +124,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Process monitor metrics now survive bootstrap exit and server adoption by preloading into `server-main.js`.
 - Cross-port `127.0.0.1` and loopback alias requests inside the WebView are isolated from editor session cookies, redirecting safe subframe navigations to `localhost` and rejecting unsafe or alias requests.
 - SSH key generation and lookup bridge methods now strip trailing public key comments before returning keys over the workbench channel.
+- PtyHost worker threads close their message port on disconnect and honor immediate `SIGKILL` escalation instead of stalling three seconds on teardown.
+- Extension host reconnections clear failed or closed paused pipe sockets instead of locking out subsequent worker dials.
 
 ## [1.10.1] - 2026-11-21
 
