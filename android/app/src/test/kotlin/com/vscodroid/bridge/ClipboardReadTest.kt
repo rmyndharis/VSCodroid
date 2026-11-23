@@ -85,6 +85,7 @@ class ClipboardReadTest {
         every { clip.itemCount } returns 1
         every { clip.getItemAt(0) } returns item
         every { clip.description } returns description
+        every { manager.hasPrimaryClip() } returns true
         every { manager.primaryClip } returns clip
         return item
     }
@@ -143,5 +144,14 @@ class ClipboardReadTest {
         every { manager.primaryClip } returns clip
 
         assertNull(clipboard.readFromClipboard())
+    }
+
+    @Test
+    fun `hasClipboardText checks hasPrimaryClip before touching primaryClip on an empty clipboard`() {
+        every { manager.hasPrimaryClip() } returns false
+
+        assertFalse(clipboard.hasClipboardText())
+        verify(exactly = 1) { manager.hasPrimaryClip() }
+        verify(exactly = 0) { manager.primaryClip }
     }
 }

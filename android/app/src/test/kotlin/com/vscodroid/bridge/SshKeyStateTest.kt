@@ -566,13 +566,23 @@ class SshKeyStateTest {
 
     @Test
     fun `a public key kept elsewhere and linked into the ssh directory is still read`() {
-        val kept = File(files, "dotfiles/id_ed25519.pub").apply { parentFile.mkdirs(); writeText("$PUBLIC_LINE\n") }
+        val kept = File(files, "dotfiles/id_ed25519.pub").apply { parentFile?.mkdirs(); writeText("$PUBLIC_LINE\n") }
         Files.createSymbolicLink(publicKey.toPath(), kept.toPath())
 
-        assertEquals(PUBLIC_LINE, bridge.getSshPublicKey(security.getSessionToken()))
+        assertEquals(PUBLIC_LINE.substringBeforeLast(" "), bridge.getSshPublicKey(security.getSessionToken()))
         val keys = JSONArray(bridge.listSshKeys(security.getSessionToken()))
         assertEquals(1, keys.length())
         assertEquals("ssh-ed25519", keys.getJSONObject(0).getString("type"))
+    }
+
+    @Test
+    fun `getSshPublicKey strips trailing key comments consistently with listSshKeys`() {
+        publicKey.writeText("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI0000000000 alice@example.com work laptop\n")
+
+        val answer = bridge.getSshPublicKey(security.getSessionToken())
+
+        assertEquals("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI0000000000", answer)
+        assertFalse(answer.contains("alice@example.com"), "public key comment must be stripped before returning")
     }
 
     /**

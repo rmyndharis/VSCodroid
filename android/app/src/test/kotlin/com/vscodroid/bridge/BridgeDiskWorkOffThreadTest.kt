@@ -407,4 +407,22 @@ class BridgeDiskWorkOffThreadTest {
                 "collaborator instead of coming straight back to its caller",
         )
     }
+
+    @Test
+    fun `shutdown stops the bridge disk executor and refuses later commands cleanly`() {
+        val answers = Answers()
+        val bridge = bridgeWith(answers)
+        bridge.shutdown()
+
+        val field = AndroidBridge::class.java.getDeclaredField("diskWork").apply { isAccessible = true }
+        val executor = field.get(bridge) as java.util.concurrent.ExecutorService
+        assertTrue(executor.isShutdown, "shutdown() did not shut down the bridge-disk executor")
+        assertTrue(
+            (executor as? java.util.concurrent.ThreadPoolExecutor)?.allowsCoreThreadTimeOut() == true,
+            "bridge-disk executor should allow core thread timeout so idle threads exit cleanly",
+        )
+
+        val refused = bridge.listSafMirrors(security.getSessionToken(), REPLY)
+        assertTrue(refused.isNotEmpty(), "a command posted after shutdown must be refused cleanly without throwing")
+    }
 }
