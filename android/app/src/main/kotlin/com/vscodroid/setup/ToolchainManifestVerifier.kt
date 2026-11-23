@@ -39,10 +39,9 @@ internal object ToolchainManifestVerifier {
     /**
      * Base64-encoded SubjectPublicKeyInfo (DER) of the release ECDSA P-256 signing public key.
      *
-     * Empty until the maintainer generates their offline signing keypair, configures the
-     * `TOOLCHAIN_SIGNING_KEY_PEM` repository secret, and embeds the matching SPKI Base64 here.
+     * Paired with the `TOOLCHAIN_SIGNING_KEY_PEM` repository secret used by `release.yml`.
      */
-    internal const val TOOLCHAIN_MANIFEST_PUBLIC_KEY_SPKI_BASE64: String = ""
+    internal const val TOOLCHAIN_MANIFEST_PUBLIC_KEY_SPKI_BASE64: String = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE54dlfdBYykq9VleWPBftxqUhznXN2ZsdDelAYHSbPcuDJUGifUvjHoFsQHwMDL/jZ5w7KC73t/TvBW37O7yRrQ=="
 
     // Full NIST P-256 (FIPS 186-4 / SEC 2 secp256r1) domain parameters.
     private val P256_PRIME =

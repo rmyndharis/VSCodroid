@@ -268,6 +268,9 @@ class ToolchainDigestInstallTest {
     private val zipPath get() = "$releaseDir/toolchain_test.zip"
     private val manifestPath get() = "$releaseDir/toolchains.sha256"
 
+    private var savedPublicKeySpki: ByteArray? = null
+    private var savedRequireSigned: Boolean = false
+
     /** A minimal but real pack: [ToolchainManager.installFromDirectory] needs this manifest. */
     private fun packZip(payloadBytes: Int = 0): ByteArray = ByteArrayOutputStream().also { out ->
         ZipOutputStream(out).use { zip ->
@@ -316,6 +319,11 @@ class ToolchainDigestInstallTest {
 
     @BeforeEach
     fun setUp() {
+        savedPublicKeySpki = ToolchainManifestVerifier.manifestPublicKeySpki
+        savedRequireSigned = ToolchainManifestVerifier.requireSignedManifest
+        ToolchainManifestVerifier.manifestPublicKeySpki = null
+        ToolchainManifestVerifier.requireSignedManifest = false
+
         mockkObject(Logger)
         every { Logger.d(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
@@ -392,6 +400,8 @@ class ToolchainDigestInstallTest {
 
     @AfterEach
     fun tearDown() {
+        ToolchainManifestVerifier.manifestPublicKeySpki = savedPublicKeySpki
+        ToolchainManifestVerifier.requireSignedManifest = savedRequireSigned
         server.stop()
         // Before unmockkAll, and not optional: the token map is process-wide, so
         // an entry a failing case left behind declines the next install of that
