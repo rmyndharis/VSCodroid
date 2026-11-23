@@ -7,9 +7,10 @@ an empty list on first load, and keep the current folders when a running window
 reloads a non-list folders value.
 
 diff --git a/src/vs/workbench/services/configuration/browser/configurationService.ts b/src/vs/workbench/services/configuration/browser/configurationService.ts
+index 42b25dbf..d7b32bee 100644
 --- a/src/vs/workbench/services/configuration/browser/configurationService.ts
 +++ b/src/vs/workbench/services/configuration/browser/configurationService.ts
-@@ -528,7 +528,7 @@ export class WorkspaceService extends Disposable implements IWorkbenchConfigurat
+@@ -533,7 +533,7 @@ export class WorkspaceService extends Disposable implements IWorkbenchConfigurat
  	private async createMultiFolderWorkspace(workspaceIdentifier: IWorkspaceIdentifier): Promise<Workspace> {
  		await this.workspaceConfiguration.initialize({ id: workspaceIdentifier.id, configPath: workspaceIdentifier.configPath }, this.isWorkspaceTrusted, this.initialWorkspaceSettings);
  		const workspaceConfigPath = workspaceIdentifier.configPath;
@@ -18,7 +19,7 @@ diff --git a/src/vs/workbench/services/configuration/browser/configurationServic
  		const workspaceId = workspaceIdentifier.id;
  		const workspace = new Workspace(workspaceId, workspaceFolders, this.workspaceConfiguration.isTransient(), workspaceConfigPath, uri => this.uriIdentityService.extUri.ignorePathCasing(uri));
  		workspace.initialized = this.workspaceConfiguration.initialized;
-@@ -835,7 +835,7 @@ export class WorkspaceService extends Disposable implements IWorkbenchConfigurat
+@@ -840,7 +840,7 @@ export class WorkspaceService extends Disposable implements IWorkbenchConfigurat
  
  	private async onWorkspaceConfigurationChanged(fromCache: boolean): Promise<void> {
  		if (this.workspace && this.workspace.configuration) {

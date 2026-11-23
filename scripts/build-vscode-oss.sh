@@ -44,7 +44,7 @@ set -euo pipefail
 #
 # Note also the Dockerfile's own warning: the Node this build HOST runs and the Node
 # the tree targets for the DEVICE are different numbers. They coincided at 1.133.0
-# and do not at 1.139.1 (.nvmrc 24.18.0, remote/.npmrc `target` 24.20.0).
+# and do not at 1.141.2 (.nvmrc 24.18.0, remote/.npmrc `target` 24.21.0).
 #
 # Run it on an arm64 host. Every native module in the tree is built for the build
 # host, and only four of them are replaced afterwards by build-native-addons.sh:
@@ -274,7 +274,7 @@ if [ -d "$PATCHES" ] && [ -n "$(ls -A "$PATCHES"/*.patch 2>/dev/null)" ]; then
     done
     # A premise of 0022 that applying it cannot see: see the checker's header.
     python3 "$SCRIPT_DIR/check-editcontext-sync.py" "$SRC"
-    # What 0046 to 0054 decide for a composing keyboard, run on the files they
+    # What 0024 and 0049 to 0054 decide for a composing keyboard, run on the files they
     # have just patched: that the hunks landed says nothing about what the
     # rules they add up to decide.
     node "$SCRIPT_DIR/check-editcontext-ime.js" "$SRC"

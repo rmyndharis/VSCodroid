@@ -130,6 +130,7 @@ export class ExtensionHostConnection extends Disposable {
 	 */
 	private _extHostNamedPipeServer: net.Server | null;
 	private _extHostSocket: net.Socket | null;
+	private readonly _extHostPipeStore = this._register(new DisposableStore());
 	private _pipeStore: DisposableStore | null;
 	private _clientStore: DisposableStore | null;
 	private _disconnectTimeout: Timeout | null;
@@ -185,6 +186,7 @@ export class ExtensionHostConnection extends Disposable {
 	}
 
 	private _pipeSockets(extHostSocket: net.Socket, connectionData: ConnectionData): void {
+		this._extHostPipeStore.clear();
 
 		const disposables = new DisposableStore();
 		this._pipeStore = disposables;
@@ -263,7 +265,24 @@ export class ExtensionHostConnection extends Disposable {
 		this._extHostSocket = extHostSocket;
 		if (this._connectionData) {
 			this._pipeSockets(extHostSocket, this._connectionData);
+			return;
 		}
+		// Watch the paused pipe while no client is attached: an unhandled 'error'
+		// would escape, and a dead socket left in _extHostSocket would reject later
+		// re-dials. _pipeSockets clears this store before taking over ownership.
+		this._extHostPipeStore.clear();
+		const onPausedExtHostGone = () => {
+			this._extHostPipeStore.clear();
+			if (this._extHostSocket === extHostSocket) {
+				this._extHostSocket = null;
+			}
+			if (!extHostSocket.destroyed) {
+				extHostSocket.destroy();
+			}
+		};
+		this._extHostPipeStore.add(Event.fromNodeEventEmitter<void>(extHostSocket, 'end')(onPausedExtHostGone));
+		this._extHostPipeStore.add(Event.fromNodeEventEmitter<void>(extHostSocket, 'close')(onPausedExtHostGone));
+		this._extHostPipeStore.add(Event.fromNodeEventEmitter<void>(extHostSocket, 'error')(onPausedExtHostGone));
 	}
 
 	/**
@@ -304,6 +323,7 @@ export class ExtensionHostConnection extends Disposable {
 			this._pipeStore.dispose();
 			this._pipeStore = null;
 		}
+		this._extHostPipeStore.clear();
 		if (this._connectionData) {
 			this._connectionData.socket.dispose();
 			this._connectionData = null;
@@ -430,6 +450,7 @@ export class ExtensionHostConnection extends Disposable {
 			this._pipeStore.dispose();
 			this._pipeStore = null;
 		}
+		this._extHostPipeStore.dispose();
 		// Closed before the socket is destroyed, so a host that reacts to the close
 		// by dialling again is refused by the operating system rather than accepted
 		// and dropped in a loop.

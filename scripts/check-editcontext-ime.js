@@ -640,6 +640,49 @@ class Page {
         await this.settle();
     }
 
+    // Simulates a deferred prepareRender scheduler: intercepts _updateEditContext calls originating
+    // from model content or cursor listeners, queueing them (capturing or omitting the edit epoch)
+    // until flushDeferredUpdates() runs, while leaving direct calls (such as refusal recovery) live.
+    deferRenderUpdates({ captureEpoch = false } = {}) {
+        const original = this.editContext._updateEditContext.bind(this.editContext);
+        this._deferredQueue = [];
+        this._inModelOrCursorEvent = false;
+        const origApply = this.model.applyEdits.bind(this.model);
+        this.model.applyEdits = (edits) => {
+            this._inModelOrCursorEvent = true;
+            try {
+                return origApply(edits);
+            } finally {
+                this._inModelOrCursorEvent = false;
+            }
+        };
+        const origCursorEvent = this.cursorEvent.bind(this);
+        this.cursorEvent = (reason) => {
+            this._inModelOrCursorEvent = true;
+            try {
+                return origCursorEvent(reason);
+            } finally {
+                this._inModelOrCursorEvent = false;
+            }
+        };
+        this.editContext._updateEditContext = (initializing = false, expectedEpoch) => {
+            if (!initializing && this._inModelOrCursorEvent) {
+                const epoch = captureEpoch ? this.editContext._editContextEpoch : undefined;
+                this._deferredQueue.push(() => original(false, epoch));
+                return;
+            }
+            return original(initializing, expectedEpoch);
+        };
+    }
+
+    async flushDeferredUpdates() {
+        const queue = this._deferredQueue?.splice(0) ?? [];
+        for (const run of queue) {
+            run();
+        }
+        await this.settle();
+    }
+
     // A restart of input is the host blurred and focused again with nothing told to the
     // editor in between, which is what the paused focus tracker leaves in the log.
     get restarts() {
@@ -2608,6 +2651,215 @@ check('0054 a composition ended by a Backspace move arms a suggestion at its end
     const before = model.armed();
     model.hooks.compositionEnd();
     return [[before, model.armed()], [1, 2]];
+});
+
+// --- 0024 deferred render and edit-epoch guard ---
+
+check('0024 deferred: interleaved textupdates before prepareRender do not drop edits or trigger false beyond-buffer refusal', async () => {
+    const p = page('hello', [5]);
+    p.deferRenderUpdates();
+    await p.compose();
+    await p.update('helloa', 0, 5);
+    await p.update('helloab', 0, 6);
+    await p.flushDeferredUpdates();
+    return [p.state(), { text: 'helloab', carets: [7], version: 3, restarts: 0, buffer: 'helloab', bufferCaret: 7 }];
+});
+
+check('0024 deferred: delayed prepareRender after an IME Enter does not clobber active composition', async () => {
+    const p = page('hello', [5]);
+    p.deferRenderUpdates();
+    await p.compose();
+    p.host.fire('beforeinput', { inputType: 'insertParagraph' });
+    await p.settle();
+    await p.flushDeferredUpdates();
+    return [{ ...p.state(), composing: p.buffer.composing },
+        { text: 'hello\n', carets: [6], version: 2, restarts: 0, buffer: 'hello\n', bufferCaret: 6, composing: true }];
+});
+
+check('0024 deferred: stale captured-epoch _updateEditContext cannot clobber a newer IME edit', async () => {
+    const p = page('hello', [5]);
+    p.deferRenderUpdates({ captureEpoch: true });
+    await p.compose();
+    const staleEpoch = p.editContext._editContextEpoch;
+    await p.update('helloa', 0, 5);
+    // Simulate Blink applying the next keystroke before the stale render callback fires.
+    p.buffer.text = 'helloab';
+    p.editContext._updateEditContext(false, staleEpoch);
+    const bufferAfterStale = p.buffer.text;
+    // Restore buffer to post-first-edit text before sending the real second textupdate.
+    p.buffer.text = 'helloa';
+    await p.update('helloab', 0, 6);
+    await p.flushDeferredUpdates();
+    return [{ ...p.state(), bufferAfterStale },
+        { text: 'helloab', carets: [7], version: 3, restarts: 0, buffer: 'helloab', bufferCaret: 7, bufferAfterStale: 'helloab' }];
+});
+
+check('0024 deferred: external paste followed by deferred prepareRender still restarts input over open composition', async () => {
+    const p = page('helloab', [7]);
+    p.deferRenderUpdates();
+    await p.compose();
+    await p.update('helloab', 0, 7, 7);
+    await p.paste('XYZ');
+    await p.flushDeferredUpdates();
+    return [p.state(), { text: 'helloabXYZ', carets: [10], restarts: 1, buffer: 'helloabXYZ', bufferCaret: 10 }];
+});
+
+check('0024 deferred: stale textupdate arriving after a deferred external edit is refused and preserves pasted text', async () => {
+    const p = page('hello', [5]);
+    p.deferRenderUpdates();
+    await p.compose();
+    await p.paste('XYZ');
+    // Stale update computed against pre-paste "hello" arrives before prepareRender flushes.
+    await p.update('helloa', 0, 5, 6);
+    await p.flushDeferredUpdates();
+    return [p.state(), { text: 'helloXYZ', carets: [8], version: 2, restarts: 1, buffer: 'helloXYZ', bufferCaret: 8 }];
+});
+
+check('0024 deferred: external tap to another line at the same offset clears own-edit version so restart still runs', async () => {
+    const p = page('alpha\nbeta12', [5]);
+    p.deferRenderUpdates();
+    await p.compose();
+    await p.update('alphax', 0, 5);
+    await p.flushDeferredUpdates();
+    await p.tap(13);
+    await p.flushDeferredUpdates();
+    return [p.state(), { text: 'alphax\nbeta12', carets: [13], restarts: 1, buffer: 'beta12', bufferCaret: 6 }];
+});
+
+check('0024 deferred: external edit on an unrelated line outside the EditContext window does not disrupt typing', async () => {
+    const p = page('alpha\n\nomega', [5]);
+    p.deferRenderUpdates();
+    await p.compose();
+    const endRange = p.tree.Range.fromPositions(p.model.positionAt(12), p.model.positionAt(12));
+    p.model.applyEdits([{ command: 0, range: endRange, text: '!' }]);
+    await p.update('alphax', 0, 5);
+    await p.flushDeferredUpdates();
+    return [p.state(), { text: 'alphax\n\nomega!', carets: [6], restarts: 0, buffer: 'alphax', bufferCaret: 6 }];
+});
+
+check('0024 deferred: rapid interleaved multi-cursor IME updates with deferred flush preserve every typed character', async () => {
+    const p = page('alpha\nbravo', [5, 11]);
+    p.deferRenderUpdates();
+    await p.compose();
+    await p.update('alphax', 0, 5);
+    await p.update('alphaxy', 0, 6);
+    await p.update('alphaxyz', 0, 7);
+    await p.flushDeferredUpdates();
+    return [p.state(), { text: 'alphaxyz\nbravoxyz', carets: [8, 17], restarts: 0, buffer: 'alphaxyz', bufferCaret: 8 }];
+});
+
+check('0024 deferred: captured-epoch flush after IME Enter syncs buffer and clears dirty flag', async () => {
+    const p = page('hello', [5]);
+    p.deferRenderUpdates({ captureEpoch: true });
+    await p.compose();
+    p.host.fire('beforeinput', { inputType: 'insertParagraph' });
+    await p.settle();
+    await p.flushDeferredUpdates();
+    return [{
+        ...p.state(),
+        previousText: p.editContext._previousEditContextText,
+        dirty: p.editContext._editContextWindowDirty,
+        modelVersion: p.editContext._editContextModelVersion,
+        composing: p.buffer.composing,
+    }, {
+        text: 'hello\n',
+        carets: [6],
+        buffer: 'hello\n',
+        bufferCaret: 6,
+        previousText: 'hello\n',
+        dirty: false,
+        modelVersion: p.model.version,
+        restarts: 0,
+        composing: true,
+    }];
+});
+
+check('0024 deferred: captured-epoch flush after single textupdate clears dirty flag and updates caches', async () => {
+    const p = page('hello', [5]);
+    p.deferRenderUpdates({ captureEpoch: true });
+    await p.compose();
+    await p.update('helloa', 0, 5);
+    await p.flushDeferredUpdates();
+    return [{
+        ...p.state(),
+        previousText: p.editContext._previousEditContextText,
+        dirty: p.editContext._editContextWindowDirty,
+        modelVersion: p.editContext._editContextModelVersion,
+    }, {
+        text: 'helloa',
+        carets: [6],
+        buffer: 'helloa',
+        bufferCaret: 6,
+        previousText: 'helloa',
+        dirty: false,
+        modelVersion: p.model.version,
+        restarts: 0,
+    }];
+});
+
+check('0024 deferred: external tap back to pre-edit caret in multi-line window matches sync baseline', async () => {
+    const setup = async () => {
+        const p = page('alpha', [5]);
+        await p.compose();
+        p.host.fire('beforeinput', { inputType: 'insertParagraph' });
+        await p.settle();
+        await p.update('beta', 6, 6);
+        return p;
+    };
+    const snapshot = p => ({
+        text: p.model.value,
+        carets: p.state().carets,
+        buffer: p.buffer.text,
+        bufferCaret: p.state().bufferCaret,
+        startLine: p.editContext._editContextStart.lineNumber,
+        startColumn: p.editContext._editContextStart.column,
+        restarts: p.restarts,
+    });
+    const sync = await setup();
+    await sync.update('betax', 6, 10);
+    await sync.tap(10);
+
+    const deferred = await setup();
+    deferred.deferRenderUpdates({ captureEpoch: true });
+    await deferred.update('betax', 6, 10);
+    await deferred.tap(10);
+    await deferred.flushDeferredUpdates();
+
+    const expected = {
+        text: 'alpha\nbetax',
+        carets: [10],
+        buffer: 'betax',
+        bufferCaret: 4,
+        startLine: 2,
+        startColumn: 1,
+        restarts: 1,
+    };
+    return [[snapshot(sync), snapshot(deferred)], [expected, expected]];
+});
+
+check('0024 deferred: external tap back to pre-edit caret refuses subsequent stale IME textupdate', async () => {
+    const p = page('hello', [5]);
+    p.deferRenderUpdates({ captureEpoch: true });
+    await p.compose();
+    await p.update('helloa', 0, 5);
+    await p.tap(5);
+    await p.update('helloab', 0, 6);
+    await p.flushDeferredUpdates();
+    return [p.state(), { text: 'helloa', carets: [5], version: 2, restarts: 1, buffer: 'helloa', bufferCaret: 5 }];
+});
+
+check('0024 deferred: unrelated out-of-window edit during deferred IME Enter preserves composition', async () => {
+    const p = page('alpha\n\nomega', [5]);
+    p.deferRenderUpdates({ captureEpoch: true });
+    await p.compose();
+    p.host.fire('beforeinput', { inputType: 'insertParagraph' });
+    await p.settle();
+    const endOffset = p.model.value.length;
+    const endRange = p.tree.Range.fromPositions(p.model.positionAt(endOffset), p.model.positionAt(endOffset));
+    p.model.applyEdits([{ command: 0, range: endRange, text: '!' }]);
+    await p.flushDeferredUpdates();
+    return [{ ...p.state(), composing: p.buffer.composing },
+        { text: 'alpha\n\n\nomega!', carets: [6], buffer: 'alpha\n', bufferCaret: 6, restarts: 0, composing: true }];
 });
 
 // A case that never settles leaves the event loop nothing to wait for, and Node then exits 0

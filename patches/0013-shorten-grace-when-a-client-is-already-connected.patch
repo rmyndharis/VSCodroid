@@ -48,10 +48,10 @@ to returning false, so the class keeps working unchanged for any caller that
 does not supply one.
 
 diff --git a/src/vs/server/node/remoteExtensionHostAgentServer.ts b/src/vs/server/node/remoteExtensionHostAgentServer.ts
-index e7ae07d..8a77dcc 100644
+index 7e47aa47..29c9644a 100644
 --- a/src/vs/server/node/remoteExtensionHostAgentServer.ts
 +++ b/src/vs/server/node/remoteExtensionHostAgentServer.ts
-@@ -421,7 +421,14 @@ class RemoteExtensionHostAgentServer extends Disposable implements IServerAPI {
+@@ -453,7 +453,14 @@ class RemoteExtensionHostAgentServer extends Disposable implements IServerAPI {
  				}
  
  				protocol.sendControl(VSBuffer.fromString(JSON.stringify({ type: 'ok' })));
@@ -68,7 +68,7 @@ index e7ae07d..8a77dcc 100644
  				this._managementConnections[reconnectionToken] = con;
  				this._allReconnectionTokens.add(reconnectionToken);
 diff --git a/src/vs/server/node/remoteExtensionManagement.ts b/src/vs/server/node/remoteExtensionManagement.ts
-index 4a38e83..017d747 100644
+index 4a38e83e..017d7478 100644
 --- a/src/vs/server/node/remoteExtensionManagement.ts
 +++ b/src/vs/server/node/remoteExtensionManagement.ts
 @@ -53,7 +53,8 @@ export class ManagementConnection {

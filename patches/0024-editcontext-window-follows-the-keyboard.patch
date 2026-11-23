@@ -287,8 +287,17 @@ back left the window holding both lines and the caret at the end of `zeta`,
 and `zebra` from the strip replaced `zeta` with the first line as the
 Backspace had left it.
 
+Consolidated with the lifecycle and restart rules that share this buffer window:
+constructor initialization fills the buffer from the primary selection before focus
+without queuing a restart; an open composition is tracked across compositionstart,
+compositionend and blur so an external rewrite while composing still restarts input
+even when the selection moves; a single-caret cursor event that leaves the primary
+selection unmoved keeps the buffer start and trailing lines; and a model-version and
+edit-epoch guard detects deferred _updateEditContext calls so stale updates cannot
+clobber active composition or drop interleaved IME textupdates.
+
 diff --git a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
-index c654033..7f8af73 100644
+index 5c79a9b5..210c0a9c 100644
 --- a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
 +++ b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
 @@ -9,6 +9,7 @@ import { addDisposableListener, getActiveElement, getWindow, getWindowId } from
@@ -320,10 +329,13 @@ index c654033..7f8af73 100644
  interface ITextUpdateEvent {
  	text: string;
  	selectionStart: number;
-@@ -60,6 +68,23 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -60,6 +68,36 @@ export class NativeEditContext extends AbstractEditContext {
  	private _previousEditContextSelection: OffsetRange = new OffsetRange(0, 0);
  	private _previousEditContextText: string = '';
  	private _editContextPrimarySelection: Selection = new Selection(1, 1, 1, 1);
++	// The carets of the last cursor event, and how many there were when the buffer was last built: see _caretUnmoved.
++	private _cursorCount = 1;
++	private _editContextCursorCount = 1;
 +	// Where the buffer starts in the model, which after an edit or a selection the input method made
 +	// can be before the selection's line: see _editContextStartAfter.
 +	private _editContextStart: Position = new Position(1, 1);
@@ -338,13 +350,34 @@ index c654033..7f8af73 100644
 +	private _applyingInputMethodEdit = false;
 +	// From a Backspace key press to its release, which keeps the buffer as it is: see _onKeyDown.
 +	private _deletingByKey = false;
++	// An open EditContext composition, set at compositionstart and cleared at compositionend or blur.
++	private _compositionOpen = false;
 +	// The buffer and selection the input method knew before the first rewrite of the current task,
 +	// kept until the task's rewrites are done: see _restartInputIfUnheard.
-+	private _beforeRewrite: { text: string; selection: OffsetRange } | undefined;
++	private _beforeRewrite: { text: string; selection: OffsetRange; composing: boolean; force?: boolean } | undefined;
++	// Model version and monotonic epoch for the last EditContext sync, plus the model version of
++	// the last input-method edit. Guards against deferred _updateEditContext calls so stale flushes
++	// cannot clobber an active composition and interleaved textupdates always see current cache.
++	private _editContextModelVersion = -1;
++	private _editContextEpoch = 0;
++	private _lastInputMethodEditVersion = -1;
++	private _editContextWindowDirty = false;
++	private _pendingExternalSync = false;
  
  	// Overflow guard container
  	private readonly _parent: HTMLElement;
-@@ -157,7 +182,11 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -149,6 +187,10 @@ export class NativeEditContext extends AbstractEditContext {
+ 		this._register(addDisposableListener(this.domNode.domNode, 'selectionchange', () => {
+ 			inputLatency.onSelectionChange();
+ 		}));
++		this._register(addDisposableListener(this.domNode.domNode, 'blur', () => {
++			// An empty commit can end the native composition without a compositionend.
++			this._compositionOpen = false;
++		}));
+ 
+ 		this._register(addDisposableListener(this.domNode.domNode, 'keyup', (e) => this._onKeyUp(e)));
+ 		this._register(addDisposableListener(this.domNode.domNode, 'keydown', async (e) => this._onKeyDown(e)));
+@@ -157,7 +199,11 @@ export class NativeEditContext extends AbstractEditContext {
  		this._register(addDisposableListener(this.domNode.domNode, 'beforeinput', async (e) => {
  			inputLatency.onBeforeInput();
  			if (e.inputType === 'insertParagraph' || e.inputType === 'insertLineBreak') {
@@ -356,31 +389,82 @@ index c654033..7f8af73 100644
  			}
  		}));
  		this._register(addDisposableListener(this.domNode.domNode, 'paste', (e) => {
-@@ -251,8 +280,8 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -221,6 +267,7 @@ export class NativeEditContext extends AbstractEditContext {
+ 			this._emitTypeEvent(this._viewController, e);
+ 		}));
+ 		this._register(editContextAddDisposableListener(this._editContext, 'compositionstart', (e) => {
++			this._compositionOpen = true;
+ 			this._updateEditContext();
+ 			// Utlimately fires onDidCompositionStart() on the editor to notify for example suggest model of composition state
+ 			// Updates the composition state of the cursor controller which determines behavior of typing with interceptors
+@@ -229,6 +276,7 @@ export class NativeEditContext extends AbstractEditContext {
+ 			this._context.viewModel.onCompositionStart();
+ 		}));
+ 		this._register(editContextAddDisposableListener(this._editContext, 'compositionend', (e) => {
++			this._compositionOpen = false;
+ 			this._updateEditContext();
+ 			// Utlimately fires compositionEnd() on the editor to notify for example suggest model of composition state
+ 			// Updates the composition state of the cursor controller which determines behavior of typing with interceptors
+@@ -253,16 +301,29 @@ export class NativeEditContext extends AbstractEditContext {
  		this._register(context.viewModel.model.onDidChangeContent((e) => {
  			let doChange = false;
  			for (const change of e.changes) {
 -				if (change.range.startLineNumber <= this._editContextPrimarySelection.endLineNumber
 -					&& change.range.endLineNumber >= this._editContextPrimarySelection.startLineNumber) {
-+				if (change.range.startLineNumber <= this._editContextPrimarySelection.endLineNumber + this._editContextLinesAfter
++				if (change.range.startLineNumber <= Math.max(this._editContextPrimarySelection.endLineNumber, this._primarySelection.endLineNumber) + this._editContextLinesAfter
 +					&& change.range.endLineNumber >= this._editContextStart.lineNumber) {
  					doChange = true;
  					break;
  				}
-@@ -303,6 +332,12 @@ export class NativeEditContext extends AbstractEditContext {
+ 			}
+ 			if (doChange) {
++				this._editContextWindowDirty = true;
++				this._editContextEpoch++;
++				if (this._applyingInputMethodEdit) {
++					this._lastInputMethodEditVersion = context.viewModel.model.getVersionId();
++				} else {
++					this._lastInputMethodEditVersion = -1;
++					this._pendingExternalSync = true;
++				}
+ 				this._updateEditContext();
+ 			}
+ 		}));
++
++		// The initial selection emits no cursor event, so fill the buffer before the host takes focus.
++		this._primarySelection = context.viewModel.getPrimaryCursorState().modelState.selection;
++		this._editContextStart = new Position(this._primarySelection.startLineNumber, 1);
++		this._updateEditContext(true);
+ 	}
+ 
+ 	// --- Public methods ---
+@@ -305,6 +366,26 @@ export class NativeEditContext extends AbstractEditContext {
  
  	public override onCursorStateChanged(e: ViewCursorStateChangedEvent): boolean {
  		this._primarySelection = e.modelSelections[0] ?? new Selection(1, 1, 1, 1);
-+		// The lines after the selection's stay in the buffer only across what the input method does
-+		// itself, as its earlier start does.
-+		if (!this._keepEditContextStart && !this._deletingByKey && this._expectedCaretOffset === undefined) {
-+			this._editContextLinesAfter = 0;
++		this._cursorCount = e.modelSelections.length;
++		const unmoved = this._caretUnmoved();
++		// A cursor event that leaves the caret where it was keeps the buffer where it is, the lines after
++		// the selection's included: see _caretUnmoved.
++		if (!unmoved) {
++			// The lines after the selection's stay in the buffer only across what the input method does
++			// itself, as its earlier start does.
++			if (!this._keepEditContextStart && !this._deletingByKey && this._expectedCaretOffset === undefined) {
++				this._editContextLinesAfter = 0;
++			}
++			this._editContextStart = this._editContextStartAfter(e.reason);
++			this._editContextWindowDirty = true;
++			this._editContextEpoch++;
++			if (this._applyingInputMethodEdit || this._keepEditContextStart) {
++				this._lastInputMethodEditVersion = this._context.viewModel.model.getVersionId();
++			} else {
++				this._lastInputMethodEditVersion = -1;
++				this._pendingExternalSync = true;
++			}
 +		}
-+		this._editContextStart = this._editContextStartAfter(e.reason);
  		this._screenReaderSupport.onCursorStateChanged(e);
  		this._updateEditContext();
  		return true;
-@@ -393,6 +428,7 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -395,6 +476,7 @@ export class NativeEditContext extends AbstractEditContext {
  
  	private _onKeyUp(e: KeyboardEvent) {
  		inputLatency.onKeyUp();
@@ -388,7 +472,7 @@ index c654033..7f8af73 100644
  		this._viewController.emitKeyUp(new StandardKeyboardEvent(e));
  	}
  
-@@ -403,6 +439,16 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -405,6 +487,16 @@ export class NativeEditContext extends AbstractEditContext {
  		if (standardKeyboardEvent.keyCode === KeyCode.KEY_IN_COMPOSITION) {
  			standardKeyboardEvent.stopPropagation();
  		}
@@ -405,24 +489,76 @@ index c654033..7f8af73 100644
  		this._viewController.emitKeyDown(standardKeyboardEvent);
  	}
  
-@@ -417,6 +463,8 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -413,12 +505,21 @@ export class NativeEditContext extends AbstractEditContext {
+ 		this.domNode.domNode.setAttribute('tabindex', String(options.get(EditorOption.tabIndex)));
+ 	}
+ 
+-	private _updateEditContext(): void {
++	private _updateEditContext(initializing = false, expectedEpoch?: number): void {
++		if (expectedEpoch !== undefined && expectedEpoch !== this._editContextEpoch) {
++			return;
++		}
+ 		const editContextState = this._getNewEditContextState();
+ 		if (!editContextState) {
  			return;
  		}
++		const modelVersion = this._context.viewModel.model.getVersionId();
  		const newText = editContextState.text ?? ' ';
 +		const oldText = this._editContext.text;
 +		const oldSelection = this._previousEditContextSelection;
++		const wasComposing = this._compositionOpen;
++		const isOwnEdit = this._applyingInputMethodEdit || this._keepEditContextStart ||
++			(!this._pendingExternalSync && this._lastInputMethodEditVersion !== -1);
  		// The buffer can hold IME edits this class did not write, so compare with and replace all
  		// of it: a range sized from the previous write leaves the IME's text after the new line.
  		if (newText !== this._editContext.text) {
-@@ -429,6 +477,42 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -430,17 +531,140 @@ export class NativeEditContext extends AbstractEditContext {
+ 			this._editContext.updateSelection(editContextState.selectionStartOffset, editContextState.selectionEndOffset);
  		}
  		this._editContextPrimarySelection = editContextState.editContextPrimarySelection;
++		this._editContextCursorCount = this._cursorCount;
  		this._previousEditContextSelection = new OffsetRange(editContextState.selectionStartOffset, editContextState.selectionEndOffset);
++		this._editContextModelVersion = modelVersion;
++		this._editContextWindowDirty = false;
++		this._pendingExternalSync = false;
++		this._lastInputMethodEditVersion = -1;
++		this._editContextEpoch++;
 +		// An edit or a selection of the input method's own is in its copy of the text already.
-+		if (isAndroid && !this._applyingInputMethodEdit && !this._keepEditContextStart &&
++		// Initial state predates the input connection and must not queue a restart either.
++		if (!initializing && isAndroid && !isOwnEdit &&
 +			(newText !== oldText || !this._previousEditContextSelection.equals(oldSelection))) {
-+			this._restartInputIfUnheard(oldText, oldSelection);
++			this._restartInputIfUnheard(oldText, oldSelection, wasComposing);
 +		}
++	}
++
++	// Synchronizes the JS-side EditContext cache before _emitTypeEvent inspects an update when
++	// an earlier _updateEditContext call was deferred. Returns false when an external content
++	// or cursor change has not yet reached the browser EditContext so the caller can flush the
++	// current buffer and refuse the stale update rather than corrupting text.
++	private _syncEditContextCacheIfDeferred(): boolean {
++		const modelVersion = this._context.viewModel.model.getVersionId();
++		if (!this._editContextWindowDirty && this._editContextModelVersion === modelVersion) {
++			return true;
++		}
++		if (this._pendingExternalSync) {
++			return false;
++		}
++		if (this._editContextWindowDirty) {
++			const editContextState = this._getNewEditContextState();
++			if (!editContextState) {
++				return false;
++			}
++			this._previousEditContextText = editContextState.text ?? ' ';
++			this._previousEditContextSelection = new OffsetRange(editContextState.selectionStartOffset, editContextState.selectionEndOffset);
++			this._editContextPrimarySelection = editContextState.editContextPrimarySelection;
++			this._editContextCursorCount = this._cursorCount;
++			this._editContextModelVersion = modelVersion;
++			this._editContextWindowDirty = false;
++			this._editContextEpoch++;
++		} else {
++			this._editContextModelVersion = modelVersion;
++		}
++		return true;
 +	}
 +
 +	// Makes the input method read the buffer again where nothing else tells it to. Android tells
@@ -432,21 +568,28 @@ index c654033..7f8af73 100644
 +	// offset in it, Gboard 18.4 went on offering the words of the old text, and a pick wrote over
 +	// the new one. So what the input method knew before the first rewrite of a task is kept, and
 +	// once the code that rewrote the buffer has returned, still in the same task, input restarts
-+	// if the text differs and the selection does not. It waits so that an edit whose selection
-+	// moves afterwards, as when a suggestion is accepted or text pasted, restarts nothing, two
-+	// rewrites restart input once, and the end of a composition the blur brings does not run
-+	// inside an edit. Taking focus away and giving it back restarts input, with the focus tracker
-+	// paused so that the editor is not told it lost focus.
-+	private _restartInputIfUnheard(text: string, selection: OffsetRange): void {
++	// if the text differs and the selection does not, or a composition was open and still is:
++	// a moved selection does not move the native composition's range after a paste. Waiting
++	// also lets an edit whose selection moves afterwards, a suggestion accepted or text pasted
++	// without a composition, restart nothing. Two rewrites restart input once, and a composition
++	// already ended by the page's key or tap handler restarts nothing more. The blur stays outside
++	// the edit, with the focus tracker paused so that the editor is not told it lost focus.
++	// A caller that has refused an update forces the restart, which then happens whatever the buffer holds, as long as the
++	// editor host still has the focus when the task's rewrites are done; several refusals in one task restart once.
++	private _restartInputIfUnheard(text: string, selection: OffsetRange, wasComposing: boolean, force = false): void {
 +		if (this._beforeRewrite) {
++			if (force) {
++				this._beforeRewrite.force = true;
++			}
 +			return;
 +		}
-+		this._beforeRewrite = { text, selection };
++		this._beforeRewrite = { text, selection, composing: wasComposing, force };
 +		queueMicrotask(() => {
 +			const before = this._beforeRewrite;
 +			this._beforeRewrite = undefined;
 +			const domNode = this.domNode.domNode;
-+			if (!before || this._editContext.text === before.text || !this._previousEditContextSelection.equals(before.selection) || getActiveElement() !== domNode) {
++			if (!before || (!before.force && (this._editContext.text === before.text ||
++				(!this._previousEditContextSelection.equals(before.selection) && !(before.composing && this._compositionOpen)))) || getActiveElement() !== domNode) {
 +				return;
 +			}
 +			this._focusTracker.pause();
@@ -457,11 +600,32 @@ index c654033..7f8af73 100644
  	}
  
  	private _emitTypeEvent(viewController: ViewController, e: ITextUpdateEvent): void {
-@@ -439,6 +523,31 @@ export class NativeEditContext extends AbstractEditContext {
+ 		if (!this._editContext) {
+ 			return;
+ 		}
++		if (!this._syncEditContextCacheIfDeferred()) {
++			const oldText = this._editContext.text;
++			const applyingInput = this._applyingInputMethodEdit;
++			this._applyingInputMethodEdit = true;
++			try {
++				this._updateEditContext();
++				if (this._editContext.selectionStart !== this._previousEditContextSelection.start ||
++					this._editContext.selectionEnd !== this._previousEditContextSelection.endExclusive) {
++					this._editContext.updateSelection(this._previousEditContextSelection.start, this._previousEditContextSelection.endExclusive);
++				}
++			} finally {
++				this._applyingInputMethodEdit = applyingInput;
++			}
++			if (isAndroid) {
++				this._restartInputIfUnheard(oldText, this._previousEditContextSelection, true, true);
++			}
++			return;
++		}
+ 		const selectionEndOffset = this._previousEditContextSelection.endExclusive;
  		const selectionStartOffset = this._previousEditContextSelection.start;
  		this._previousEditContextSelection = new OffsetRange(e.selectionStart, e.selectionEnd);
  
-+		if (isAndroid && e.text === '' && e.updateRangeStart === e.updateRangeEnd) {
++		if (this._isSelectionOnly(e, selectionStartOffset, selectionEndOffset)) {
 +			// No text changed: the input method set its selection, as Gboard does for a space bar swipe
 +			// and before it commits a suggestion, or sent nothing at all. The selection goes where it
 +			// asked, an earlier line the buffer holds included, and the buffer keeps its start and its
@@ -489,13 +653,18 @@ index c654033..7f8af73 100644
  		let replaceNextCharCnt = 0;
  		let replacePrevCharCnt = 0;
  		if (e.updateRangeEnd > selectionEndOffset) {
-@@ -469,15 +578,19 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -471,15 +695,24 @@ export class NativeEditContext extends AbstractEditContext {
  			replaceNextCharCnt,
  			positionDelta
  		};
 +		this._expectedCaretOffset = e.selectionStart === e.selectionEnd ? e.selectionStart : undefined;
  		this._onType(viewController, typeInput);
 +		this._expectedCaretOffset = undefined;
++	}
++
++	// Whether the update changes no text. Extended by 0049 to also skip unchanged-word rewrites.
++	private _isSelectionOnly(e: ITextUpdateEvent, _selectionStartOffset: number, _selectionEndOffset: number): boolean {
++		return isAndroid && e.text === '' && e.updateRangeStart === e.updateRangeEnd;
  	}
  
  	private _onType(viewController: ViewController, typeInput: ITypeData): void {
@@ -509,7 +678,7 @@ index c654033..7f8af73 100644
  	}
  
  	private _getNewEditContextState(): { text: string; selectionStartOffset: number; selectionEndOffset: number; editContextPrimarySelection: Selection } | undefined {
-@@ -486,13 +599,17 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -488,13 +721,17 @@ export class NativeEditContext extends AbstractEditContext {
  		if (!model.isValidRange(editContextPrimarySelection)) {
  			return;
  		}
@@ -534,7 +703,7 @@ index c654033..7f8af73 100644
  		return {
  			text,
  			selectionStartOffset,
-@@ -501,8 +618,60 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -503,8 +740,85 @@ export class NativeEditContext extends AbstractEditContext {
  		};
  	}
  
@@ -562,7 +731,8 @@ index c654033..7f8af73 100644
 +	// it moves the caret as a cursor key does: see _emitTypeEvent. After anything else, a tap, a
 +	// cursor key, a command that moves the caret, a paste or an undo, the buffer starts at the
 +	// caret's line as before. It starts there after every edit on every platform but Android, the
-+	// only one this was measured on.
++	// only one this was measured on. A cursor event that leaves the caret where it was, as the view
++	// sends when its lines wrap anew, keeps it where it is: see _caretUnmoved.
 +	private _editContextStartAfter(reason: CursorChangeReason): Position {
 +		if (this._keepEditContextStart || this._deletingByKey) {
 +			return this._editContextStart;
@@ -587,6 +757,30 @@ index c654033..7f8af73 100644
 +		return this._editContextStart;
 +	}
 +
++	// Whether the caret is the one the buffer was last built for, outside an edit of the input method's: then it
++	// has not moved, and the buffer keeps its start and the lines it holds after the selection's. The view sends the
++	// cursor again with its model position unchanged when its lines wrap anew, as a turn of the screen makes them in a
++	// file with a line wider than the screen, and when text it draws inside a line, such as a parameter hint, arrives.
++	// Moved to the caret's line there, the buffer dropped the line above that a word typed after Enter is composed
++	// with, and the caret's offset changed with it: Android told the input method that the selection moved and
++	// nothing else. With no composition open no restart followed, and Gboard 9.4, 10.8 and 12.4 put the word they had
++	// composed in at the caret again; with a syllable open, the restart that followed ended it in the middle. Kept,
++	// the buffer is the one the input method holds.
++	//
++	// It holds for one caret only, and only when one caret was there as the buffer was built. A second caret on a
++	// line the buffer holds types where the input method cannot see it, so the offsets before its own caret change
++	// under it: with a caret added above it, Gboard 15.9 replaced the line break with its next jamo. A change of the
++	// set of carets therefore moves the buffer to the primary caret's line as before.
++	//
++	// An edit through the editor, the input method's or a command's, reaches the content listener first, which
++	// writes the changed text in place at the offsets the selection had; the cursor event comes after it, so the
++	// restart for a changed text runs. For an edit from elsewhere, another editor's, the cursor event comes first if
++	// it comes at all, and then a selection has moved.
++	private _caretUnmoved(): boolean {
++		return isAndroid && !this._editContextWindowDirty && this._expectedCaretOffset === undefined && this._cursorCount === 1 && this._editContextCursorCount === 1 &&
++			this._primarySelection.equalsSelection(this._editContextPrimarySelection);
++	}
++
 +	// A buffer offset as a model position. The buffer is the model's text from _editContextStart.
 +	private _modelPositionAt(transformer: PositionOffsetTransformer, offset: number): Position {
 +		const position = transformer.getPosition(offset);
@@ -597,7 +791,7 @@ index c654033..7f8af73 100644
  	}
  
  	private _handleTextFormatUpdate(e: TextFormatUpdateEvent): void {
-@@ -510,13 +679,11 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -512,13 +826,11 @@ export class NativeEditContext extends AbstractEditContext {
  			return;
  		}
  		const formats = e.getTextFormats();
@@ -614,7 +808,7 @@ index c654033..7f8af73 100644
  			const decorationRange = Range.fromPositions(startPositionOfDecoration, endPositionOfDecoration);
  			const thickness = f.underlineThickness.toLowerCase();
  			let decorationClassName: string = CompositionClassName.NONE;
-@@ -589,9 +756,7 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -591,9 +903,7 @@ export class NativeEditContext extends AbstractEditContext {
  		const characterBounds: DOMRect[] = [];
  		const offsetTransformer = new PositionOffsetTransformer(this._editContext.text);
  		for (let offset = e.rangeStart; offset < e.rangeEnd; offset++) {
@@ -626,9 +820,10 @@ index c654033..7f8af73 100644
  			const characterModelRange = Range.fromPositions(characterStartPosition, characterEndPosition);
  			const characterViewRange = this._context.viewModel.coordinatesConverter.convertModelRangeToViewRange(characterModelRange);
 diff --git a/src/vs/editor/common/cursor/cursorTypeEditOperations.ts b/src/vs/editor/common/cursor/cursorTypeEditOperations.ts
+index b4eab5b9..30dbf44a 100644
 --- a/src/vs/editor/common/cursor/cursorTypeEditOperations.ts
 +++ b/src/vs/editor/common/cursor/cursorTypeEditOperations.ts
-@@ -762,13 +762,61 @@
+@@ -777,10 +777,58 @@ export class CompositionOperation {
  			return null;
  		}
  		const pos = selection.getPosition();
@@ -673,9 +868,9 @@ diff --git a/src/vs/editor/common/cursor/cursorTypeEditOperations.ts b/src/vs/ed
 +			lineNumber++;
 +		}
 +		return new Position(lineNumber, Math.min(model.getLineMaxColumn(lineNumber), column));
- 	}
- }
- 
++	}
++}
++
 +class CompositionCommand extends ReplaceCommand {
 +
 +	constructor(range: Range, text: string, private readonly positionDelta: number) {
@@ -688,16 +883,14 @@ diff --git a/src/vs/editor/common/cursor/cursorTypeEditOperations.ts b/src/vs/ed
 +			? CompositionOperation.positionBefore(model, end, -this.positionDelta)
 +			: CompositionOperation.positionAfter(model, end, this.positionDelta);
 +		return Selection.fromPositions(position);
-+	}
-+}
-+
- export class TypeWithoutInterceptorsOperation {
+ 	}
+ }
  
- 	public static getEdits(prevEditOperationType: EditOperationType, selections: Selection[], str: string): EditOperationResult {
 diff --git a/src/vs/editor/test/browser/controller/cursor.test.ts b/src/vs/editor/test/browser/controller/cursor.test.ts
+index 92f29c7d..ba9b9c37 100644
 --- a/src/vs/editor/test/browser/controller/cursor.test.ts
 +++ b/src/vs/editor/test/browser/controller/cursor.test.ts
-@@ -2549,6 +2549,57 @@
+@@ -2549,6 +2549,57 @@ suite('Editor Controller', () => {
  		});
  	});
  

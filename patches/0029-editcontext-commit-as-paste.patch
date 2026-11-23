@@ -22,15 +22,15 @@ as one paste. Five lines of nested braces indented by four spaces came out at
 which Ctrl+V and a long-press Paste use, was never the slow path.
 
 diff --git a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
-index 7f8af73..726acbc 100644
+index 210c0a9c..a04232a6 100644
 --- a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
 +++ b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
-@@ -587,12 +587,25 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -709,12 +709,25 @@ export class NativeEditContext extends AbstractEditContext {
  		this._applyingInputMethodEdit = true;
  		if (typeInput.replacePrevCharCnt || typeInput.replaceNextCharCnt || typeInput.positionDelta) {
  			viewController.compositionType(typeInput.text, typeInput.replacePrevCharCnt, typeInput.replaceNextCharCnt, typeInput.positionDelta);
 +		} else if (this._isPastedByInputMethod(typeInput.text)) {
-+			viewController.paste(typeInput.text, false, null, null);
++			viewController.paste(typeInput.text, false, null, null, false);
  		} else {
  			viewController.type(typeInput.text);
  		}

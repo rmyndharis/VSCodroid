@@ -34,6 +34,7 @@ const UPSTREAM_BOOTSTRAP_FORK = [
 	"import * as performance from './vs/base/common/performance.js';",
 	"import { removeGlobalNodeJsModuleLookupPaths, devInjectNodeModuleLookupPath } from './bootstrap-node.js';",
 	"import { bootstrapESM } from './bootstrap-esm.js';",
+	"import { enableNodeCompileCache, getNodeCompileCacheKindForUtilityProcess } from './vs/base/node/nodeCompileCache.js';",
 	'',
 	"performance.mark('code/fork/start');",
 	'',
@@ -438,6 +439,7 @@ function buildBootstrapWorkerScript(temporary, patchedBootstrapSource) {
 			.replace(/^import \* as performance from .*$/gm, 'const performance = { mark() {} };')
 			.replace(/^import \{ removeGlobalNodeJsModuleLookupPaths.*$/gm, '')
 			.replace(/^import \{ bootstrapESM.*$/gm, '')
+			.replace(/^import \{ enableNodeCompileCache.*$/gm, '')
 			.replace(/^import \{ isMainThread, parentPort \} from 'worker_threads';$/gm,
 				"const { isMainThread, parentPort } = require('node:worker_threads');"),
 		{ mode: 'transform', sourceUrl: 'bootstrap-fork.ts' },

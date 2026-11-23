@@ -146,10 +146,15 @@ carets on an API 36 emulator with Gboard 15.9 and WebView 134, on a build
 with an earlier form of 0051: the keyboard ended the composition that was
 open at the drop and composed the next keys at the cursor that stayed.
 
+Also handles unchanged-text updates in _isSelectionOnly (formerly a separate 0048
+patch that 0049 already replaced in full): on Android, a collapsed-selection update
+whose text matches the cached buffer slice skips the model edit path.
+
 diff --git a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
+index a04232a6..01f9fb62 100644
 --- a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
 +++ b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
-@@ -80,6 +80,9 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -83,6 +83,9 @@ export class NativeEditContext extends AbstractEditContext {
  	private _keepEditContextStart = false;
  	// While an edit the input method sent is applied, which its own copy of the text holds already.
  	private _applyingInputMethodEdit = false;
@@ -159,28 +164,26 @@ diff --git a/src/vs/editor/browser/controller/editContext/native/nativeEditConte
  	// From a Backspace key press to its release, which keeps the buffer as it is: see _onKeyDown.
  	private _deletingByKey = false;
  	// An open EditContext composition, set at compositionstart and cleared at compositionend or blur.
-@@ -471,6 +474,9 @@ export class NativeEditContext extends AbstractEditContext {
- 	}
- 
- 	private _updateEditContext(initializing = false): void {
+@@ -509,6 +512,15 @@ export class NativeEditContext extends AbstractEditContext {
+ 		if (expectedEpoch !== undefined && expectedEpoch !== this._editContextEpoch) {
+ 			return;
+ 		}
 +		if (this._dismissingCursors) {
++			// Nothing is written to the buffer while the cursors go, and the caret that stays is the one it was built for: the count is taken here, so that where no edit
++			// follows (a read-only editor, an edit the editor discards) a later cursor event keeps the buffer: see _caretUnmoved.
++			this._editContextCursorCount = this._cursorCount;
++			if (!this._pendingExternalSync) {
++				this._editContextWindowDirty = false;
++			}
 +			return;
 +		}
  		const editContextState = this._getNewEditContextState();
  		if (!editContextState) {
  			return;
-@@ -540,14 +546,36 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -640,6 +652,35 @@ export class NativeEditContext extends AbstractEditContext {
  		const selectionStartOffset = this._previousEditContextSelection.start;
  		this._previousEditContextSelection = new OffsetRange(e.selectionStart, e.selectionEnd);
  
--		if (isAndroid && ((e.text === '' && e.updateRangeStart === e.updateRangeEnd) ||
--			(selectionStartOffset === selectionEndOffset &&
--				((e.selectionStart === selectionStartOffset && e.selectionEnd === selectionEndOffset) ||
--					this._context.viewModel.getCursorStates().length === 1) &&
--				e.updateRangeStart >= 0 && e.updateRangeEnd <= this._previousEditContextText.length &&
--				e.updateRangeEnd - e.updateRangeStart === e.text.length &&
--				this._previousEditContextText.slice(e.updateRangeStart, e.updateRangeEnd) === e.text))) {
--			// Compare the cache: the native buffer already includes the input method's change.
 +		// With several cursors, an update that reaches outside the primary selection is about the
 +		// text around the primary caret. Where every cursor holds that same text, replacing as many
 +		// characters before and after each of them with the update's text is one edit at every cursor,
@@ -210,14 +213,16 @@ diff --git a/src/vs/editor/browser/controller/editContext/native/nativeEditConte
 +			this._dismissOtherCursors();
 +		}
 +
-+		if (this._isSelectionOnly(e, selectionStartOffset, selectionEndOffset)) {
+ 		if (this._isSelectionOnly(e, selectionStartOffset, selectionEndOffset)) {
  			// No text changed: the input method set its selection, as Gboard does for a space bar swipe
  			// and before it commits a suggestion, or sent nothing at all. The selection goes where it
- 			// asked, an earlier line the buffer holds included, and the buffer keeps its start and its
-@@ -607,6 +635,114 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -700,9 +741,112 @@ export class NativeEditContext extends AbstractEditContext {
  		this._expectedCaretOffset = undefined;
  	}
  
+-	// Whether the update changes no text. Extended by 0049 to also skip unchanged-word rewrites.
+-	private _isSelectionOnly(e: ITextUpdateEvent, _selectionStartOffset: number, _selectionEndOffset: number): boolean {
+-		return isAndroid && e.text === '' && e.updateRangeStart === e.updateRangeEnd;
 +	// Whether the update changes no text. It replaces nothing with nothing, or its text is the cached
 +	// text of its range, with a collapsed selection that it keeps or, with a single cursor, moves.
 +	// Compare the cache: the native buffer already includes the input method's change.
@@ -324,8 +329,6 @@ diff --git a/src/vs/editor/browser/controller/editContext/native/nativeEditConte
 +			this._keepEditContextStart = false;
 +			this._dismissingCursors = false;
 +		}
-+	}
-+
+ 	}
+ 
  	private _onType(viewController: ViewController, typeInput: ITypeData): void {
- 		this._applyingInputMethodEdit = true;
- 		if (typeInput.replacePrevCharCnt || typeInput.replaceNextCharCnt || typeInput.positionDelta) {

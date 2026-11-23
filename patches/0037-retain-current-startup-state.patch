@@ -3,10 +3,51 @@ Retain current configuration and close canceled host startup
 Keep accepted configuration generations monotonic and stop extension-host
 startup after disposal, including pipe ownership before worker creation.
 
+diff --git a/src/vs/server/node/extensionHostConnection.ts b/src/vs/server/node/extensionHostConnection.ts
+index 92119bfd..d773c00b 100644
+--- a/src/vs/server/node/extensionHostConnection.ts
++++ b/src/vs/server/node/extensionHostConnection.ts
+@@ -474,6 +474,7 @@ export class ExtensionHostConnection extends Disposable {
+ 	}
+ 
+ 	public async start(startParams: IRemoteExtensionHostStartParams): Promise<void> {
++		if (this._disposed) return;
+ 		try {
+ 			let execArgv: string[] = process.execArgv ? process.execArgv.filter(a => !/^--inspect(-brk)?=/.test(a)) : [];
+ 			// eslint-disable-next-line local/code-no-any-casts, @typescript-eslint/no-explicit-any
+@@ -487,6 +488,7 @@ export class ExtensionHostConnection extends Disposable {
+ 			this._log(`Starting extension host process...`);
+ 
+ 			const env = await buildUserEnvironment(startParams.env, true, startParams.language, this._environmentService, this._logService, this._configurationService);
++			if (this._disposed) return;
+ 			removeDangerousEnvVariables(env);
+ 
+ 			let extHostNamedPipeServer: net.Server | null;
+@@ -496,6 +498,11 @@ export class ExtensionHostConnection extends Disposable {
+ 				extHostNamedPipeServer = null;
+ 			} else {
+ 				const { namedPipeServer, pipeName } = await this._listenOnPipe();
++				if (this._disposed) {
++					namedPipeServer.close();
++					return;
++				}
++				this._extHostNamedPipeServer = namedPipeServer;
+ 				writeExtHostConnection(new IPCExtHostConnection(pipeName), env);
+ 				extHostNamedPipeServer = namedPipeServer;
+ 			}
+@@ -550,7 +557,6 @@ export class ExtensionHostConnection extends Disposable {
+ 				// re-dials this pipe every time a client goes away, which is how it
+ 				// survives a reconnection without a socket handle ever crossing the
+ 				// worker boundary.
+-				this._extHostNamedPipeServer = extHostNamedPipeServer;
+ 				extHostNamedPipeServer.on('connection', (socket) => {
+ 					this._acceptExtHostPipe(socket);
+ 				});
 diff --git a/src/vs/workbench/services/configuration/browser/configuration.ts b/src/vs/workbench/services/configuration/browser/configuration.ts
+index 62d5baa1..0ad11d3a 100644
 --- a/src/vs/workbench/services/configuration/browser/configuration.ts
 +++ b/src/vs/workbench/services/configuration/browser/configuration.ts
-@@ -650,6 +650,7 @@
+@@ -650,6 +650,7 @@ export class WorkspaceConfiguration extends Disposable {
  	public readonly onDidUpdateConfiguration = this._onDidUpdateConfiguration.event;
  
  	private _initialized: boolean = false;
@@ -14,7 +55,7 @@ diff --git a/src/vs/workbench/services/configuration/browser/configuration.ts b/
  	get initialized(): boolean { return this._initialized; }
  	constructor(
  		private readonly configurationCache: IConfigurationCache,
-@@ -663,13 +664,14 @@
+@@ -663,13 +664,14 @@ export class WorkspaceConfiguration extends Disposable {
  	}
  
  	async initialize(workspaceIdentifier: IWorkspaceIdentifier, workspaceTrusted: boolean, initialContents?: string | null): Promise<void> {
@@ -30,7 +71,7 @@ diff --git a/src/vs/workbench/services/configuration/browser/configuration.ts b/
  			} else {
  				this.doInitialize(new FileServiceBasedWorkspaceConfiguration(this.fileService, this.uriIdentityService, this.logService));
  			}
-@@ -717,11 +719,16 @@
+@@ -717,11 +719,16 @@ export class WorkspaceConfiguration extends Disposable {
  		return this._workspaceConfiguration.getRestrictedSettings();
  	}
  
@@ -48,7 +89,7 @@ diff --git a/src/vs/workbench/services/configuration/browser/configuration.ts b/
  			this.doInitialize(fileServiceBasedWorkspaceConfiguration);
  			this.onDidWorkspaceConfigurationChange(false, true);
  		}
-@@ -1032,6 +1039,8 @@
+@@ -1032,6 +1039,8 @@ export class FolderConfiguration extends Disposable {
  
  	private folderConfiguration: CachedFolderConfiguration | FileServiceBasedConfiguration;
  	private loadedFolderConfiguration: CachedFolderConfiguration | FileServiceBasedConfiguration | undefined;
@@ -57,7 +98,7 @@ diff --git a/src/vs/workbench/services/configuration/browser/configuration.ts b/
  	private readonly scopes: ConfigurationScope[];
  	private readonly configurationFolder: URI;
  	private cachedFolderConfiguration: CachedFolderConfiguration;
-@@ -1069,7 +1078,12 @@
+@@ -1069,7 +1078,12 @@ export class FolderConfiguration extends Disposable {
  
  	loadConfiguration(): Promise<ConfigurationModel> {
  		const folderConfiguration = this.folderConfiguration;
@@ -70,47 +111,9 @@ diff --git a/src/vs/workbench/services/configuration/browser/configuration.ts b/
  			this.loadedFolderConfiguration = folderConfiguration;
  			return configurationModel;
  		});
-diff --git a/src/vs/server/node/extensionHostConnection.ts b/src/vs/server/node/extensionHostConnection.ts
---- a/src/vs/server/node/extensionHostConnection.ts
-+++ b/src/vs/server/node/extensionHostConnection.ts
-@@ -453,6 +453,7 @@
- 	}
- 
- 	public async start(startParams: IRemoteExtensionHostStartParams): Promise<void> {
-+		if (this._disposed) return;
- 		try {
- 			let execArgv: string[] = process.execArgv ? process.execArgv.filter(a => !/^--inspect(-brk)?=/.test(a)) : [];
- 			// eslint-disable-next-line local/code-no-any-casts, @typescript-eslint/no-explicit-any
-@@ -466,6 +467,7 @@
- 			this._log(`Starting extension host process...`);
- 
- 			const env = await buildUserEnvironment(startParams.env, true, startParams.language, this._environmentService, this._logService, this._configurationService);
-+			if (this._disposed) return;
- 			removeDangerousEnvVariables(env);
- 
- 			let extHostNamedPipeServer: net.Server | null;
-@@ -475,6 +477,11 @@
- 				extHostNamedPipeServer = null;
- 			} else {
- 				const { namedPipeServer, pipeName } = await this._listenOnPipe();
-+				if (this._disposed) {
-+					namedPipeServer.close();
-+					return;
-+				}
-+				this._extHostNamedPipeServer = namedPipeServer;
- 				writeExtHostConnection(new IPCExtHostConnection(pipeName), env);
- 				extHostNamedPipeServer = namedPipeServer;
- 			}
-@@ -529,7 +536,6 @@
- 				// re-dials this pipe every time a client goes away, which is how it
- 				// survives a reconnection without a socket handle ever crossing the
- 				// worker boundary.
--				this._extHostNamedPipeServer = extHostNamedPipeServer;
- 				extHostNamedPipeServer.on('connection', (socket) => {
- 					this._acceptExtHostPipe(socket);
- 				});
 diff --git a/src/vs/workbench/services/configuration/test/browser/configurationStartup.test.ts b/src/vs/workbench/services/configuration/test/browser/configurationStartup.test.ts
 new file mode 100644
+index 00000000..1fd36ebe
 --- /dev/null
 +++ b/src/vs/workbench/services/configuration/test/browser/configurationStartup.test.ts
 @@ -0,0 +1,119 @@
