@@ -110,7 +110,9 @@ class SshKeyStateTest {
 
         assertTrue(answer.getBoolean("success"), "an existing pair must be reported: $answer")
         assertTrue(answer.optBoolean("existed"), "the caller is not told the key already existed")
-        assertEquals(PUBLIC_LINE, answer.getString("publicKey"))
+        assertEquals(PUBLIC_LINE.substringBeforeLast(" "), answer.getString("publicKey"))
+        assertFalse(answer.getString("publicKey").contains(COMMENT))
+        assertEquals("$PUBLIC_LINE\n", publicKey.readText())
         assertEquals(
             "PRIVATE KEY", privateKey.readText(),
             "the existing private key was overwritten, which is the one thing this " +
@@ -218,7 +220,8 @@ class SshKeyStateTest {
 
         assertTrue(File(child.path + ".ran").isFile, "the controlled child never completed")
         assertTrue(answer.getBoolean("success"), answer.toString())
-        assertEquals(PUBLIC_LINE, answer.getString("publicKey"))
+        assertEquals(PUBLIC_LINE.substringBeforeLast(" "), answer.getString("publicKey"))
+        assertFalse(answer.getString("publicKey").contains(COMMENT))
         assertEquals("DUMMY PRIVATE\n", privateKey.readText())
         assertEquals("$PUBLIC_LINE\n", publicKey.readText())
         assertEquals(
@@ -583,6 +586,20 @@ class SshKeyStateTest {
 
         assertEquals("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI0000000000", answer)
         assertFalse(answer.contains("alice@example.com"), "public key comment must be stripped before returning")
+    }
+
+    @Test
+    fun `generateSshKey strips multi-word trailing comments on existing imported keys`() {
+        privateKey.writeText("PRIVATE KEY")
+        publicKey.writeText("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI0000000000 alice@corp.example work laptop\n")
+
+        val answer = JSONObject(bridge.generateSshKey(security.getSessionToken(), ""))
+
+        assertTrue(answer.getBoolean("success"), "an existing pair must succeed: $answer")
+        assertTrue(answer.optBoolean("existed"), "an existing pair must set existed=true")
+        val returnedKey = answer.getString("publicKey")
+        assertEquals("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI0000000000", returnedKey)
+        assertFalse(returnedKey.contains("alice@corp.example"), "public key comment must be stripped before returning")
     }
 
     /**

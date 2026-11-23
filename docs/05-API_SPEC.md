@@ -690,6 +690,9 @@ fun generateSshKey(authToken: String, comment: String): String
 // `existed` appears ONLY on the reuse path -- absent, not false, on a fresh
 // generation. It is the only way to tell "a key was made for you, upload it"
 // from "you already had one": publicKey looks identical either way.
+// Returned `publicKey` omits any trailing comment (returning "<type> <key>",
+// matching getSshPublicKey and listSshKeys), while ~/.ssh/id_ed25519.pub on disk
+// retains its comment.
 //
 // ANSWERED INLINE, unlike the four disk-walking commands, so it holds the
 // page's main thread until ssh-keygen exits. Bounded rather than open ended:
@@ -703,9 +706,10 @@ fun generateSshKey(authToken: String, comment: String): String
 
 @JavascriptInterface
 fun getSshPublicKey(authToken: String): String
-// Reads ~/.ssh/id_ed25519.pub. Returns "" if there is no such file --
-// empty string is also what a refused token returns, so it is not evidence
-// that the key is missing.
+// Reads ~/.ssh/id_ed25519.pub and returns "<type> <key>" with any trailing
+// comment stripped (matching generateSshKey and listSshKeys), or "" when the
+// file is missing, cannot be read, or the token is refused (so "" alone is not
+// evidence that the key is missing).
 
 @JavascriptInterface
 fun listSshKeys(authToken: String): String

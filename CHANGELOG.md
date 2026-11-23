@@ -123,6 +123,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bundled extensions clear pending bridge timers on reply and deactivation, restrict Run File to local workspace schemes, avoid `NaN%` storage readings, and prefer resolved LAN addresses when advising dev-server binds.
 - Process monitor metrics now survive bootstrap exit and server adoption by preloading into `server-main.js`.
 - Cross-port `127.0.0.1` and loopback alias requests inside the WebView are isolated from editor session cookies, redirecting safe subframe navigations to `localhost` and rejecting unsafe or alias requests.
+- SSH key generation and lookup bridge methods now strip trailing public key comments before returning keys over the workbench channel.
 
 ## [1.10.1] - 2026-11-21
 
