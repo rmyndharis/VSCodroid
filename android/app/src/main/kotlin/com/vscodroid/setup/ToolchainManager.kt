@@ -102,6 +102,42 @@ class ToolchainManager(private val context: Context) {
     private fun installMarker(packName: String) = File(installMarkerDir, "$packName.json")
 
     /**
+     * Persists a lightweight marker when a Play-delivered toolchain is uninstalled so launch
+     * reconciliation retries pack removal instead of reinstalling a pack Play kept on disk.
+     */
+    private val packReleaseMarkerDir = File(context.filesDir, "home/.vscodroid/toolchain-uninstalled")
+
+    private fun packReleaseMarker(packName: String): File? {
+        if (!isSinglePathSegment(packName)) return null
+        return File(packReleaseMarkerDir, packName)
+    }
+
+    private fun markPackReleasePending(packName: String): Long = synchronized(packOperationLock) {
+        val generation = nextPackReleaseGeneration.incrementAndGet()
+        packReleaseGenerations[packName] = generation
+        val marker = packReleaseMarker(packName) ?: run {
+            Logger.w(tag, "Refusing to write pack release marker for invalid pack name: ${redactToken(packName)}")
+            return@synchronized generation
+        }
+        packReleaseMarkerDir.mkdirs()
+        if (!writeAtomically(marker) { it.write(packName.toByteArray()) }) {
+            Logger.w(tag, "Could not persist pending pack release marker for $packName")
+        }
+        generation
+    }
+
+    private fun clearPackReleaseMarker(packName: String, dropPendingRelease: Boolean = false) {
+        synchronized(packOperationLock) {
+            packReleaseGenerations[packName] = nextPackReleaseGeneration.incrementAndGet()
+            if (dropPendingRelease) pendingPackReleases.remove(packName)
+            val marker = packReleaseMarker(packName) ?: return
+            if (marker.exists() || Files.isSymbolicLink(marker.toPath())) {
+                marker.delete()
+            }
+        }
+    }
+
+    /**
      * The two derived files that make a toolchain command reachable from
      * something that is not bash, both named from [Environment] so the writer
      * here and the reader there cannot drift apart.
@@ -237,6 +273,29 @@ class ToolchainManager(private val context: Context) {
          * reads it through [packsDownloading].
          */
         @Volatile var percent = 0
+
+        /** Currently open HTTP connection for this transfer, disconnected on cancel. */
+        @Volatile var activeConnection: HttpURLConnection? = null
+
+        /** Sleeps up to [backoffMs] while not cancelled, waking immediately on cancellation. */
+        fun waitBackoff(backoffMs: Long) {
+            val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(backoffMs)
+            synchronized(this) {
+                while (!cancelled) {
+                    val remainingNanos = deadline - System.nanoTime()
+                    if (remainingNanos <= 0L) break
+                    val waitMs = remainingNanos / 1_000_000L
+                    val waitNanos = (remainingNanos % 1_000_000L).toInt()
+                    try {
+                        @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
+                        (this as Object).wait(waitMs, waitNanos)
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        break
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -509,6 +568,8 @@ class ToolchainManager(private val context: Context) {
         private val packOperationLock = Any()
         private val packRemovalsInFlight = mutableSetOf<String>()
         private val pendingPackReleases = mutableMapOf<String, () -> Unit>()
+        private val packReleaseGenerations = mutableMapOf<String, Long>()
+        private val nextPackReleaseGeneration = java.util.concurrent.atomic.AtomicLong()
 
         /**
          * The token for each pack with a download outstanding, so [cancel] can
@@ -808,6 +869,9 @@ class ToolchainManager(private val context: Context) {
             return
         }
 
+        // An explicit install supersedes any pending release or deferred removePack from an earlier uninstall.
+        clearPackReleaseMarker(info.packName, dropPendingRelease = true)
+
         if (shouldUseHttpFallback()) {
             val url = info.downloadUrl
             if (url == null) {
@@ -896,13 +960,18 @@ class ToolchainManager(private val context: Context) {
         // download carries on, and a token only the destroyed manager could see
         // made the transfer uncancellable from anywhere.
         val transfer = httpDownloads[info.packName]
+        var connToClose: HttpURLConnection? = null
         // Under the token's monitor, which the transfer's finally holds while it gives the pack back and
         // before it reads the flag: a token still here once the flag is set means the finally will see the
         // flag, and report CANCELED.
         val transferReportsItsEnd = transfer != null && synchronized(transfer) {
             transfer.cancelled = true
+            @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
+            (transfer as Object).notifyAll()
+            connToClose = transfer.activeConnection
             httpDownloads[info.packName] === transfer
         }
+        connToClose?.let(::disconnectAsync)
         // This manager's Play request ends here, and not only when Play reports CANCELED: Play cancels only a
         // download that is running, so a pack waiting on its cellular-data question, or already delivered, sends
         // nothing back, and the request left standing made every later Install of the pack return without a fetch.
@@ -948,6 +1017,14 @@ class ToolchainManager(private val context: Context) {
                 }
         } catch (e: Exception) {
             Logger.e(tag, "Failed to show confirmation dialog", e)
+        }
+    }
+
+    /** Disconnects an active HTTP request off the calling thread so UI cancel stays non-blocking. */
+    private fun disconnectAsync(conn: HttpURLConnection) {
+        Thread({ runCatching { conn.disconnect() } }, "toolchain-cancel").apply {
+            isDaemon = true
+            start()
         }
     }
 
@@ -1048,6 +1125,7 @@ class ToolchainManager(private val context: Context) {
             }
         }
 
+        val packName = "toolchain_$name"
         if (manifestObj == null) {
             // The uninstall twin of the "Unknown toolchain" line in [install]:
             // [toolchainShortName] returns a name it does not recognise unchanged,
@@ -1059,21 +1137,71 @@ class ToolchainManager(private val context: Context) {
             // taken the Remove button off the card while the removal is queued,
             // and this is the only thing that ever puts it right for a record
             // that was already gone.
-            report("toolchain_$name", AssetPackStatus.NOT_INSTALLED, 0)
+            report(packName, AssetPackStatus.NOT_INSTALLED, 0)
             return
         }
 
-        if (!removeToolchainFiles(name, manifestObj, state)) {
-            failRemoval("toolchain_$name")
+        val outcome = removeToolchainFiles(name, manifestObj, state, requireBaseLibListing = true)
+        if (outcome == RemovalOutcome.UNCHANGED) {
+            failRemoval(packName)
             return
         }
+
+        val viaPlay = !shouldUseHttpFallback()
+        if (outcome == RemovalOutcome.PARTIAL) {
+            // Files were already deleted before removal stopped, so leaving the record in place
+            // would keep exporting broken wrappers. Reclaim any prior pending marker first so its
+            // witness is not silently overwritten, write a cleanup marker for leftovers, drop the
+            // broken entry from state and derived files, and report FAILED so Retry reinstalls.
+            val pendingMarker = installMarker(packName)
+            val priorMarkerExisted = pathExistsNoFollow(pendingMarker)
+            if (priorMarkerExisted) {
+                val pending = runCatching { JSONObject(pendingMarker.readText()) }.getOrNull()
+                val priorSettled = pending != null && pending.optString("name") == name &&
+                    (toolchainPathsAreOwned(pending, manifestObj) ||
+                        reclaimPartialCopy(
+                            name,
+                            pending,
+                            reclaimSameRootOrphans = true,
+                            restoreSymlinks = false,
+                        ))
+                if (!priorSettled) {
+                    Logger.w(tag, "Keeping $packName record: prior pending marker could not be settled during partial removal")
+                    fail(packName, ToolchainFailure.REMOVAL)
+                    return
+                }
+            }
+            installMarkerDir.mkdirs()
+            if (!writeAtomically(pendingMarker) { it.write(manifestObj.toString().toByteArray()) }) {
+                Logger.e(tag, "Could not record cleanup marker for partially removed $packName; keeping state record")
+                fail(packName, ToolchainFailure.STORAGE)
+                return
+            }
+            val releaseGen = if (viaPlay) markPackReleasePending(packName) else null
+            state.remove(idx)
+            if (!writeState(state)) {
+                if (!priorMarkerExisted) pendingMarker.delete()
+                if (viaPlay) clearPackReleaseMarker(packName, dropPendingRelease = true)
+                fail(packName, ToolchainFailure.STORAGE)
+                return
+            }
+            regenerateDerivedFilesLocked()
+            if (priorMarkerExisted) {
+                cancel(packName)
+            }
+            if (viaPlay) releasePack(packName, expectedGeneration = releaseGen)
+            fail(packName, ToolchainFailure.REMOVAL)
+            return
+        }
+
+        val releaseGen = if (viaPlay) markPackReleasePending(packName) else null
 
         // Remove from state
         state.remove(idx)
         // Asked, exactly as [installFromDirectoryHoldingPack] asks it, and for the
         // sibling reason: the record is what everything else reads, so a removal
         // whose record write failed is not a removal that happened. The files are
-        // gone either way -- they were deleted above -- but reporting
+        // gone either way, they were deleted above, but reporting
         // NOT_INSTALLED on top of a record that still names the toolchain tells
         // the user it is gone while the next launch draws it as installed and
         // `getAllToolchainEnv` goes on exporting JAVA_HOME for a directory that no
@@ -1088,23 +1216,48 @@ class ToolchainManager(private val context: Context) {
         // writes a temporary file and renames it, and what stops that is space or
         // an I/O fault, both of which "free some space and try again" survives.
         if (!writeState(state)) {
-            fail("toolchain_$name", ToolchainFailure.STORAGE)
+            if (viaPlay) clearPackReleaseMarker(packName, dropPendingRelease = true)
+            fail(packName, ToolchainFailure.STORAGE)
             return
         }
         regenerateDerivedFilesLocked()
 
-        val pendingMarker = installMarker("toolchain_$name")
+        val pendingMarker = installMarker(packName)
         if (pendingMarker.exists() || Files.isSymbolicLink(pendingMarker.toPath())) {
             val pending = runCatching { JSONObject(pendingMarker.readText()) }.getOrNull()
             if (pending != null && pending.optString("name") == name && reclaimPartialCopy(name, pending)) {
                 pendingMarker.delete()
             }
             // Removing a failed reinstall also cancels the delivery that could bring it back.
-            cancel("toolchain_$name")
+            cancel(packName)
+        }
+        if (viaPlay) {
+            releasePack(packName, expectedGeneration = releaseGen)
         }
 
         Logger.i(tag, "Uninstalled toolchain: $name")
-        report("toolchain_$name", AssetPackStatus.NOT_INSTALLED, 0)
+        report(packName, AssetPackStatus.NOT_INSTALLED, 0)
+    }
+
+    private enum class RemovalOutcome { UNCHANGED, PARTIAL, COMPLETE }
+
+    private fun pathExistsNoFollow(file: File): Boolean =
+        file.exists() || Files.isSymbolicLink(file.toPath())
+
+    private fun countEntriesNoFollow(root: File): Int {
+        if (!pathExistsNoFollow(root)) return 0
+        if (Files.isSymbolicLink(root.toPath()) || !root.isDirectory) return 1
+        var count = 0
+        val stack = ArrayDeque<File>()
+        stack.addLast(root)
+        while (stack.isNotEmpty()) {
+            val f = stack.removeLast()
+            count++
+            if (!Files.isSymbolicLink(f.toPath()) && f.isDirectory) {
+                f.listFiles()?.forEach { stack.addLast(it) }
+            }
+        }
+        return count
     }
 
     /**
@@ -1122,24 +1275,61 @@ class ToolchainManager(private val context: Context) {
      * Touches no record. The caller decides whether the toolchain is still
      * installed and writes `toolchains.json` itself.
      */
-    private fun removeToolchainFiles(name: String, manifest: JSONObject, state: JSONArray): Boolean {
+    private fun removeToolchainFiles(
+        name: String,
+        manifest: JSONObject,
+        state: JSONArray,
+        requireBaseLibListing: Boolean = false,
+    ): RemovalOutcome {
         val paths = toolchainRemovalPaths(manifest).associateWith { confinedToolchainPath(it) }
         if (paths.values.any { it == null }) {
             Logger.w(tag, "Keeping $name: a managed path has a redirected ancestor")
-            return false
+            return RemovalOutcome.UNCHANGED
         }
+
+        val otherLibs = otherToolchainLibs(state, name)
+        val otherLibSymlinks = otherToolchainLibSymlinks(state, name)
+        val otherSymlinks = otherToolchainSymlinks(state, name)
+        val otherBinaries = otherToolchainBinaries(state, name)
+
+        val libs = manifest.optJSONArray("libs")
+        val libNames = if (libs != null) (0 until libs.length()).map { libs.getString(it) } else emptyList()
+        val unsharedLibs = libNames.filter { it !in otherLibs && it !in otherLibSymlinks }
+        val baseAssets: Set<String>? = if (unsharedLibs.isNotEmpty()) {
+            try {
+                context.assets.list("usr/lib")?.toSet()
+            } catch (e: Exception) {
+                Logger.w(tag, "Cannot list base usr/lib assets; keeping all libs: ${e.message}")
+                null
+            }
+        } else {
+            emptySet()
+        }
+        if (requireBaseLibListing && unsharedLibs.isNotEmpty() && baseAssets == null) {
+            Logger.w(tag, "Keeping $name: base usr/lib asset listing unavailable before removal")
+            return RemovalOutcome.UNCHANGED
+        }
+
         // A copy of one of these files that a dying process cut short left its temporary file
         // beside it, which no manifest names, so the removal below would never find it.
         paths.values.mapNotNullTo(HashSet()) { it?.parentFile }.forEach(::sweepStrayTemps)
         val expectedGone = paths.keys.toMutableSet()
+        var deletedAny = false
+
         // Delete symlinks from usr/bin/ (use Os.lstat to catch dangling symlinks)
         val symlinks = manifest.optJSONObject("symlinks")
         if (symlinks != null) {
             for (key in symlinks.keys()) {
-                val link = paths.getValue("usr/bin/$key")!!
+                val rel = "usr/bin/$key"
+                if (key in otherSymlinks || rel in otherBinaries) {
+                    expectedGone.remove(rel)
+                    Logger.i(tag, "Keeping symlink $key: another installed toolchain declares it")
+                    continue
+                }
+                val link = paths.getValue(rel)!!
                 val linkExists = try { Os.lstat(link.absolutePath); true } catch (e: Exception) { false }
-                if (linkExists) {
-                    link.delete()
+                if (linkExists && link.delete()) {
+                    deletedAny = true
                     Logger.d(tag, "Removed symlink: $key")
                 }
             }
@@ -1150,10 +1340,18 @@ class ToolchainManager(private val context: Context) {
         val binaries = manifest.optJSONArray("binaries")
         if (binaries != null) {
             for (i in 0 until binaries.length()) {
-                val binFile = paths.getValue(binaries.getString(i))!!
-                if (binFile.exists() || Files.isSymbolicLink(binFile.toPath())) {
-                    binFile.delete()
-                    Logger.d(tag, "Removed binary: ${binaries.getString(i)}")
+                val binPath = binaries.getString(i)
+                val sharedAsSymlink = binPath.startsWith("usr/bin/") &&
+                    binPath.removePrefix("usr/bin/") in otherSymlinks
+                if (binPath in otherBinaries || sharedAsSymlink) {
+                    expectedGone.remove(binPath)
+                    Logger.i(tag, "Keeping binary $binPath: another installed toolchain declares it")
+                    continue
+                }
+                val binFile = paths.getValue(binPath)!!
+                if (pathExistsNoFollow(binFile) && binFile.delete()) {
+                    deletedAny = true
+                    Logger.d(tag, "Removed binary: $binPath")
                 }
             }
         }
@@ -1162,12 +1360,16 @@ class ToolchainManager(private val context: Context) {
         val installRoot = manifest.optString("installRoot", "")
         if (installRoot.isNotEmpty()) {
             val dir = paths.getValue(installRoot)!!
-            if (dir.exists() || Files.isSymbolicLink(dir.toPath())) {
+            if (pathExistsNoFollow(dir)) {
+                val beforeCount = countEntriesNoFollow(dir)
                 // Link-aware, not File.deleteRecursively, which follows a directory
                 // link: `ln -s ~/projects/mygem/lib/mygem` into Ruby's load path is an
                 // ordinary thing to do, and removing Ruby then emptied the project.
-                StorageManager.deleteRecursive(dir, context.filesDir.parentFile)
-                Logger.d(tag, "Deleted install root: $installRoot")
+                val freed = StorageManager.deleteRecursive(dir, context.filesDir.parentFile)
+                if (freed > 0L || countEntriesNoFollow(dir) < beforeCount) {
+                    deletedAny = true
+                    Logger.d(tag, "Deleted install root: $installRoot")
+                }
             }
         }
 
@@ -1179,68 +1381,63 @@ class ToolchainManager(private val context: Context) {
         // script, and nothing beside it is touched: a header the user installed
         // into usr/include next to them survives.
         for (path in ownedPaths(manifest)) {
-            // For a file, a link and a directory alike, and link-aware for the
-            // reason the install root's delete is.
-            StorageManager.deleteRecursive(
-                paths.getValue(path.relativeTo(context.filesDir).path)!!, context.filesDir.parentFile,
-            )
-            Logger.d(tag, "Removed owned path: ${path.relativeTo(context.filesDir).path}")
+            val rel = path.relativeTo(context.filesDir).path
+            val target = paths.getValue(rel)!!
+            if (pathExistsNoFollow(target)) {
+                val beforeCount = countEntriesNoFollow(target)
+                // For a file, a link and a directory alike, and link-aware for the
+                // reason the install root's delete is.
+                val freed = StorageManager.deleteRecursive(target, context.filesDir.parentFile)
+                if (freed > 0L || countEntriesNoFollow(target) < beforeCount) {
+                    deletedAny = true
+                    Logger.d(tag, "Removed owned path: $rel")
+                }
+            }
         }
 
         // Delete library symlinks (versioned sonames)
         val libSymlinks = manifest.optJSONObject("libSymlinks")
         if (libSymlinks != null) {
             for (linkName in libSymlinks.keys()) {
-                val linkFile = paths.getValue("usr/lib/$linkName")!!
+                val rel = "usr/lib/$linkName"
+                if (linkName in otherLibSymlinks || linkName in otherLibs) {
+                    expectedGone.remove(rel)
+                    Logger.i(tag, "Keeping lib symlink $linkName: another installed toolchain declares it")
+                    continue
+                }
+                val linkFile = paths.getValue(rel)!!
                 val linkExists = try { Os.lstat(linkFile.absolutePath); true } catch (e: Exception) { false }
-                if (linkExists) {
-                    linkFile.delete()
+                if (linkExists && linkFile.delete()) {
+                    deletedAny = true
                     Logger.d(tag, "Removed lib symlink: $linkName")
                 }
             }
         }
 
-        // Delete libs that were copied to usr/lib/ -- but usr/lib is shared with
-        // the base install, and a manifest may name a library the base APK also
-        // ships. Ruby's libffi.so is the live case: Python's _ctypes links it, so
-        // deleting it here broke `import ctypes` until the next app update, with
-        // nothing pointing at the uninstall that caused it. What the base ships
-        // is read from the APK's own assets rather than kept as a list here; if
-        // that listing cannot be read, nothing is deleted -- a leftover library
-        // is reclaimed by the next install, a deleted base library is not.
-        //
-        // The other installed toolchains are added to that listing, because they
-        // share the directory on exactly the same terms and the check was made
-        // for one of the two sharers only. Removing A would take a library B also
-        // ships, and B then fails at its next dlopen with an error naming the
-        // library rather than the uninstall. No two shipped manifests name the
-        // same library today, so this is a floor rather than a repair -- and the
-        // manifests are regenerated from upstream packages, so what they name is
-        // not this repository's choice to keep disjoint.
-        val libs = manifest.optJSONArray("libs")
-        if (libs != null) {
-            val baseShipped = try {
-                context.assets.list("usr/lib")?.toSet()?.plus(otherToolchainLibs(state, name))
-            } catch (e: Exception) {
-                Logger.w(tag, "Cannot list base usr/lib assets; keeping all libs: ${e.message}")
-                null
-            }
-            val names = (0 until libs.length()).map { libs.getString(it) }
-            val keep = names.toSet() - toolchainLibsSafeToRemove(names, baseShipped).toSet()
+        // Delete libs that were copied to usr/lib/, preserving any library shipped by the base APK
+        // or declared by another installed toolchain.
+        if (libNames.isNotEmpty()) {
+            val baseShipped = baseAssets?.plus(otherLibs)?.plus(otherLibSymlinks)
+            val safeToRemove = toolchainLibsSafeToRemove(libNames, baseShipped)
+            val keep = libNames.toSet() - safeToRemove.toSet()
             for (libName in keep) {
-                if (baseShipped != null || libName in otherToolchainLibs(state, name)) {
+                if (baseShipped != null || libName in otherLibs || libName in otherLibSymlinks) {
                     expectedGone.remove("usr/lib/$libName")
                 }
-                Logger.i(tag, "Keeping $libName: the base install ships it too")
+                Logger.i(tag, "Keeping $libName: the base install or another toolchain ships it too")
             }
-            for (libName in toolchainLibsSafeToRemove(names, baseShipped)) {
+            for (libName in safeToRemove) {
                 val lib = paths.getValue("usr/lib/$libName")!!
-                if (lib.exists() || Files.isSymbolicLink(lib.toPath())) lib.delete()
+                if (pathExistsNoFollow(lib) && lib.delete()) {
+                    deletedAny = true
+                }
             }
         }
-        return expectedGone.all { path ->
-            val file = paths.getValue(path)!!
-            !file.exists() && !Files.isSymbolicLink(file.toPath())
+        val allGone = expectedGone.all { path -> !pathExistsNoFollow(paths.getValue(path)!!) }
+        return when {
+            allGone -> RemovalOutcome.COMPLETE
+            deletedAny -> RemovalOutcome.PARTIAL
+            else -> RemovalOutcome.UNCHANGED
         }
     }
 
@@ -1276,6 +1473,32 @@ class ToolchainManager(private val context: Context) {
                 it.parentFile.canonicalFile == it.parentFile
         }
     }.getOrNull()
+
+    /** Whether [relative] is lexically a clean path inside `usr/` with no traversal or leading slash. */
+    private fun isLexicalUsrPath(relative: String): Boolean {
+        if (relative.isEmpty() || relative.startsWith("/")) return false
+        val parts = relative.split('/')
+        return parts.size >= 2 && parts[0] == "usr" && parts.none { it.isEmpty() || it == "." || it == ".." }
+    }
+
+    /** Whether [name] is a single safe entry name with no path separators or traversal segments. */
+    private fun isSinglePathSegment(name: String): Boolean =
+        name.isNotEmpty() && name != "." && name != ".." && '/' !in name && '\\' !in name
+
+    /** Resolves [relative] strictly under `filesDir/usr/`, refusing traversal and symlinked ancestors. */
+    private fun confinedUsrPath(relative: String): File? =
+        if (isLexicalUsrPath(relative)) confinedToolchainPath(relative) else null
+
+    /** Confirms a link target stays under `filesDir/usr/`, including when the target itself is a link. */
+    private fun isConfinedUsrTarget(relative: String): Boolean {
+        val resolved = confinedUsrPath(relative) ?: return false
+        val usrRoot = runCatching { File(context.filesDir.canonicalFile, "usr") }.getOrNull() ?: return false
+        if (Files.isSymbolicLink(resolved.toPath()) || resolved.exists()) {
+            val canonical = runCatching { resolved.canonicalFile }.getOrNull() ?: return false
+            if (!canonical.path.startsWith(usrRoot.path + File.separator)) return false
+        }
+        return true
+    }
 
     // -- Asset pack state handling --
 
@@ -1490,7 +1713,11 @@ class ToolchainManager(private val context: Context) {
                 RETIRED_TOOLCHAINS.keys.forEach { name ->
                     val packName = "toolchain_$name"
                     try {
-                        if (assetPackManager.getPackLocation(packName) == null) return@forEach
+                        val genBefore = synchronized(packOperationLock) { packReleaseGenerations[packName] }
+                        if (assetPackManager.getPackLocation(packName) == null) {
+                            clearPackReleaseMarkerIfUnchanged(packName, genBefore)
+                            return@forEach
+                        }
                         Logger.i(tag, "Reclaiming a delivered pack for a retired toolchain: $packName")
                         releasePack(packName)
                     } catch (e: Exception) {
@@ -1501,6 +1728,44 @@ class ToolchainManager(private val context: Context) {
                 Logger.w(tag, "Could not reconcile delivered packs: ${e.message}")
             }
         }
+    }
+
+    /** Clears a release marker when Play reported no delivered pack and no newer event intervened. */
+    private fun clearPackReleaseMarkerIfUnchanged(packName: String, expectedGeneration: Long?) {
+        synchronized(packOperationLock) {
+            if (packName in installsInFlight || packName in packRemovalsInFlight) return
+            if (packReleaseGenerations[packName] != expectedGeneration) return
+            val marker = packReleaseMarker(packName) ?: return
+            if (marker.exists() || Files.isSymbolicLink(marker.toPath())) {
+                marker.delete()
+            }
+        }
+    }
+
+    /**
+     * Atomically checks for a pending-release marker and, if present, claims the pack for removal
+     * under [packOperationLock]. Returns true when reconciliation must not install the delivery.
+     */
+    private fun releasePackIfPending(packName: String): Boolean {
+        val generationToRelease: Long? = synchronized(packOperationLock) {
+            val marker = packReleaseMarker(packName)
+            val pending = marker != null && (marker.exists() || Files.isSymbolicLink(marker.toPath()))
+            if (!pending) return false
+            if (packName in installsInFlight || packName in packRemovalsInFlight) return true
+            packRemovalsInFlight.add(packName)
+            packReleaseGenerations[packName] ?: nextPackReleaseGeneration.incrementAndGet().also {
+                packReleaseGenerations[packName] = it
+            }
+        }
+        if (generationToRelease != null) {
+            Logger.i(
+                tag,
+                "Reclaiming a delivered pack for an uninstalled toolchain: " +
+                    packName,
+            )
+            startRemovePack(packName, generationToRelease)
+        }
+        return true
     }
 
     /**
@@ -1518,12 +1783,17 @@ class ToolchainManager(private val context: Context) {
         // installed toolchain was never asked about, so a delivered pack
         // whose removal did not happen was passed over on every launch
         // for the life of the install.
+        val generationBefore = synchronized(packOperationLock) { packReleaseGenerations[info.packName] }
         val location = try {
             assetPackManager.getPackLocation(info.packName)
         } catch (e: Exception) {
             Logger.w(tag, "Could not ask Play about ${info.packName}: ${e.message}")
-            null
-        } ?: return
+            return
+        }
+        if (location == null) {
+            clearPackReleaseMarkerIfUnchanged(info.packName, generationBefore)
+            return
+        }
         if (info.packName.removePrefix("toolchain_") in installed && !installIsPending(info.packName)) {
             // The toolchain is already in `usr/`, so this delivery has
             // nothing left to give and is pure duplicate storage. It
@@ -1543,6 +1813,9 @@ class ToolchainManager(private val context: Context) {
                     info.packName,
             )
             releasePack(info.packName)
+            return
+        }
+        if (releasePackIfPending(info.packName)) {
             return
         }
         val assetsPath = location.assetsPath() ?: return
@@ -1582,7 +1855,7 @@ class ToolchainManager(private val context: Context) {
      *
      * Play writes the pack into `filesDir/assetpacks` and keeps it until asked, so
      * each route that is done with a delivery ends here: an install that wrote its
-     * record, a cancel, and the launch-time reclaim in [reconcileDeliveredPacks]. A
+     * record, a cancel, an uninstall, and the launch-time reclaim in [reconcileDeliveredPacks]. A
      * refused install is deliberately not one of them; [installDeliveredPack] says
      * why.
      *
@@ -1590,24 +1863,31 @@ class ToolchainManager(private val context: Context) {
      * call and the HTTP delivery path never registered one; an exception here must not
      * replace the failure the caller is on its way to report.
      */
-    private fun releasePack(packName: String) {
-        synchronized(packOperationLock) {
+    private fun releasePack(packName: String, expectedGeneration: Long? = null) {
+        val releaseGeneration = synchronized(packOperationLock) {
+            if (expectedGeneration != null && packReleaseGenerations[packName] != expectedGeneration) return
             if (packName in packRemovalsInFlight) return
             if (packName in installsInFlight) {
-                pendingPackReleases[packName] = { releasePack(packName) }
+                val deferredGeneration = expectedGeneration
+                pendingPackReleases[packName] = { releasePack(packName, deferredGeneration) }
                 return
             }
             // Keep new readers out until Play finishes the asynchronous delete.
             packRemovalsInFlight.add(packName)
+            packReleaseGenerations[packName] ?: nextPackReleaseGeneration.incrementAndGet().also {
+                packReleaseGenerations[packName] = it
+            }
         }
+        startRemovePack(packName, releaseGeneration)
+    }
+
+    /**
+     * Issues Play's asynchronous `removePack` for a pack already entered in [packRemovalsInFlight]
+     * under [releaseGeneration], clearing its pending-release marker synchronously on completion
+     * only when removal succeeded and no newer uninstall or install superseded [releaseGeneration].
+     */
+    private fun startRemovePack(packName: String, releaseGeneration: Long) {
         try {
-            // `removePack` posts the delete and returns; the Task is how Play says
-            // whether it happened. Logging success on the return alone said "freed"
-            // for a delete that failed or never ran, and the pack it left behind is
-            // a whole toolchain in `filesDir/assetpacks` -- 185 MB for Java 25 --
-            // that no space pre-flight here counts, because both of them measure
-            // free space rather than what Play is holding. So the one line that
-            // would have named the leak was the line asserting it had not happened.
             assetPackManager.removePack(packName)
                 .addOnSuccessListener {
                     Logger.i(tag, "Removed asset pack $packName (freed duplicate storage)")
@@ -1620,8 +1900,17 @@ class ToolchainManager(private val context: Context) {
                         e,
                     )
                 }
-                .addOnCompleteListener(Executor { it.run() }) {
-                    synchronized(packOperationLock) { packRemovalsInFlight.remove(packName) }
+                .addOnCompleteListener(Executor { it.run() }) { task ->
+                    val succeeded = runCatching { task.isSuccessful }.getOrDefault(false)
+                    synchronized(packOperationLock) {
+                        packRemovalsInFlight.remove(packName)
+                        if (succeeded && packReleaseGenerations[packName] == releaseGeneration) {
+                            val marker = packReleaseMarker(packName)
+                            if (marker != null && (marker.exists() || Files.isSymbolicLink(marker.toPath()))) {
+                                marker.delete()
+                            }
+                        }
+                    }
                 }
         } catch (e: Exception) {
             synchronized(packOperationLock) { packRemovalsInFlight.remove(packName) }
@@ -1786,14 +2075,85 @@ class ToolchainManager(private val context: Context) {
             fail(packName, ToolchainFailure.CORRUPT, transferId)
             return true
         }
+        val installRoot = manifest.optString("installRoot", "")
+        if (installRoot.isNotEmpty()) {
+            if (!isOwnedPathName(installRoot)) {
+                Logger.e(tag, "Refusing installRoot outside managed usr/ subtree in $packName: ${redactToken(installRoot)}")
+                fail(packName, ToolchainFailure.CORRUPT, transferId)
+                return true
+            }
+            if (confinedUsrPath(installRoot) == null) {
+                Logger.e(tag, "Refusing installRoot with redirected ancestor in $packName: ${redactToken(installRoot)}")
+                fail(packName, ToolchainFailure.INTERNAL, transferId)
+                return false
+            }
+        }
+        val manifestLibs = manifest.optJSONArray("libs")
+        if (manifestLibs != null) {
+            for (i in 0 until manifestLibs.length()) {
+                val libName = manifestLibs.getString(i)
+                if (!isSinglePathSegment(libName)) {
+                    Logger.e(tag, "Refusing lib entry outside usr/lib/ in $packName: ${redactToken(libName)}")
+                    fail(packName, ToolchainFailure.CORRUPT, transferId)
+                    return true
+                }
+                if (confinedUsrPath("usr/lib/$libName") == null) {
+                    Logger.e(tag, "Refusing lib entry with redirected ancestor in $packName: ${redactToken(libName)}")
+                    fail(packName, ToolchainFailure.INTERNAL, transferId)
+                    return false
+                }
+            }
+        }
         val binaries = manifest.optJSONArray("binaries")
         if (binaries != null) {
             for (i in 0 until binaries.length()) {
                 val path = binaries.getString(i)
+                if (!isLexicalUsrPath(path)) {
+                    Logger.e(tag, "Refusing binary path outside usr/ in $packName: ${redactToken(path)}")
+                    fail(packName, ToolchainFailure.CORRUPT, transferId)
+                    return true
+                }
+                if (confinedUsrPath(path) == null) {
+                    Logger.e(tag, "Refusing binary path with redirected ancestor in $packName: ${redactToken(path)}")
+                    fail(packName, ToolchainFailure.INTERNAL, transferId)
+                    return false
+                }
                 if (!File(assetsDir, path).isFile) {
                     Logger.e(tag, "Missing required binary $path in asset pack $packName")
                     fail(packName, ToolchainFailure.CORRUPT, transferId)
                     return true
+                }
+            }
+        }
+        val manifestSymlinks = manifest.optJSONObject("symlinks")
+        if (manifestSymlinks != null) {
+            for (linkName in manifestSymlinks.keys()) {
+                val target = manifestSymlinks.getString(linkName)
+                if (!isSinglePathSegment(linkName) || !isLexicalUsrPath(target)) {
+                    Logger.e(tag, "Refusing symlink outside usr/ in $packName: ${redactToken(linkName)} -> ${redactToken(target)}")
+                    fail(packName, ToolchainFailure.CORRUPT, transferId)
+                    return true
+                }
+                if (confinedUsrPath("usr/bin/$linkName") == null || !isConfinedUsrTarget(target)) {
+                    Logger.e(tag, "Refusing symlink with redirected ancestor in $packName: ${redactToken(linkName)}")
+                    fail(packName, ToolchainFailure.INTERNAL, transferId)
+                    return false
+                }
+            }
+        }
+        val manifestLibSymlinks = manifest.optJSONObject("libSymlinks")
+        if (manifestLibSymlinks != null) {
+            for (linkName in manifestLibSymlinks.keys()) {
+                val targetName = manifestLibSymlinks.getString(linkName)
+                if (!isSinglePathSegment(linkName) || !isLexicalUsrPath("usr/lib/$targetName")) {
+                    Logger.e(tag, "Refusing lib symlink outside usr/ in $packName: ${redactToken(linkName)} -> ${redactToken(targetName)}")
+                    fail(packName, ToolchainFailure.CORRUPT, transferId)
+                    return true
+                }
+                if (confinedUsrPath("usr/lib/$linkName") == null || !isConfinedUsrTarget("usr/lib/$targetName")) {
+                    Logger.e(tag, "Refusing lib symlink with redirected ancestor in $packName: ${redactToken(linkName)}")
+                    fail(packName, ToolchainFailure.INTERNAL, transferId)
+                    return false
                 }
             }
         }
@@ -1826,7 +2186,7 @@ class ToolchainManager(private val context: Context) {
             if (previousMarker.exists() || Files.isSymbolicLink(previousMarker.toPath())) {
                 val previous = runCatching { JSONObject(previousMarker.readText()) }.getOrNull()
                 if (previous == null || previous.optString("name") != name ||
-                    !toolchainPathsAreOwned(previous, manifest) && !reclaimPartialCopy(name, previous)
+                    !toolchainPathsAreOwned(previous, manifest) && !reclaimPartialCopy(name, previous, reclaimSameRootOrphans = true)
                 ) {
                     Logger.w(tag, "Keeping the previous install record for $packName until its files are settled")
                     // Not a lack of room: an unreadable marker, one of another toolchain, or files it names that
@@ -1871,6 +2231,17 @@ class ToolchainManager(private val context: Context) {
             return false
         }
 
+        val binariesConfined = binaries == null || (0 until binaries.length()).all { i ->
+            val binFile = confinedUsrPath(binaries.getString(i))
+            binFile != null && !Files.isSymbolicLink(binFile.toPath())
+        }
+        if (!binariesConfined) {
+            Logger.e(tag, "Refusing $packName: binary path escaped usr/ during install")
+            if (reclaimPartialCopy(name, manifest)) installMarker(packName).delete()
+            fail(packName, ToolchainFailure.INTERNAL, transferId)
+            return false
+        }
+
         // chmod +x on the binaries the manifest names. Whether every one of them
         // took the bit decides the repair marker written with the record below.
         val execBitsSet = applyManifestExecBits(manifest)
@@ -1884,6 +2255,11 @@ class ToolchainManager(private val context: Context) {
             binDir.mkdirs()
             for (linkName in symlinks.keys()) {
                 val target = symlinks.getString(linkName)
+                if (!isSinglePathSegment(linkName) || confinedUsrPath("usr/bin/$linkName") == null || !isConfinedUsrTarget(target)) {
+                    failedLink = ToolchainFailure.INTERNAL
+                    Logger.w(tag, "Refusing symlink outside usr/: ${redactToken(linkName)} -> ${redactToken(target)}")
+                    continue
+                }
                 val targetAbsolute = "$filesDir/$target"
                 val linkFile = File(binDir, linkName)
 
@@ -1903,13 +2279,18 @@ class ToolchainManager(private val context: Context) {
             }
         }
 
-        // Create library symlinks (versioned sonames like libruby.so.4.0 → libruby.so)
+        // Create library symlinks (versioned sonames like libruby.so.4.0 -> libruby.so)
         // Android assets can't contain symlinks, so versioned sonames are created at install time.
         val libSymlinks = manifest.optJSONObject("libSymlinks")
         if (libSymlinks != null) {
             val libDir = File(context.filesDir, "usr/lib")
             for (linkName in libSymlinks.keys()) {
                 val targetName = libSymlinks.getString(linkName)
+                if (!isSinglePathSegment(linkName) || confinedUsrPath("usr/lib/$linkName") == null || !isConfinedUsrTarget("usr/lib/$targetName")) {
+                    failedLink = ToolchainFailure.INTERNAL
+                    Logger.w(tag, "Refusing lib symlink outside usr/: ${redactToken(linkName)} -> ${redactToken(targetName)}")
+                    continue
+                }
                 val targetFile = File(libDir, targetName)
                 val linkFile = File(libDir, linkName)
                 if (targetFile.exists()) {
@@ -2015,6 +2396,7 @@ class ToolchainManager(private val context: Context) {
                 return false
             }
             regenerateDerivedFilesLocked()
+            clearPackReleaseMarker(packName)
         }
 
         removeSupersededTree(replaced, manifest)
@@ -2122,7 +2504,17 @@ class ToolchainManager(private val context: Context) {
         var allExecutable = true
         for (i in 0 until binaries.length()) {
             val binPath = binaries.getString(i)
-            val binFile = File(context.filesDir, binPath)
+            val binFile = confinedUsrPath(binPath)
+            if (binFile == null) {
+                Logger.w(tag, "Refusing to set execute bit outside usr/: ${redactToken(binPath)}")
+                allExecutable = false
+                continue
+            }
+            if (Files.isSymbolicLink(binFile.toPath())) {
+                Logger.w(tag, "Refusing to set execute bit on symlink: ${redactToken(binPath)}")
+                allExecutable = false
+                continue
+            }
             if (!binFile.exists() || binFile.canExecute()) continue
             if (binFile.setExecutable(true, true)) {
                 Logger.d(tag, "chmod +x: $binPath")
@@ -2134,57 +2526,231 @@ class ToolchainManager(private val context: Context) {
         return allExecutable
     }
 
+    private data class OrphanAnalysis(
+        val orphan: JSONObject,
+        val hasUnreclaimableOverlap: Boolean,
+        val overlapsInstalledExecutable: Boolean,
+    )
+
+    /**
+     * Computes the subset of [manifest] strictly owned by [manifest] that neither belongs to nor
+     * contains any path owned by [installed], while recording whether [manifest] overlaps any
+     * installed executable or unowned parent/child tree.
+     */
+    private fun analyzeOrphans(manifest: JSONObject, installed: JSONObject): OrphanAnalysis {
+        val installedPaths = toolchainRemovalPaths(installed)
+        val installedRoot = installed.optString("installRoot", "")
+        val installedTrees = buildSet {
+            installedRoot.takeIf { it.isNotEmpty() }?.let(::add)
+            ownedPaths(installed).forEach { add(it.relativeTo(context.filesDir).path) }
+        }
+        fun ownedByInstalled(path: String): Boolean =
+            path in installedPaths || installedTrees.any { path == it || path.startsWith("$it/") }
+        fun containsInstalled(tree: String): Boolean =
+            installedPaths.any { it == tree || it.startsWith("$tree/") } ||
+                installedTrees.any { it == tree || it.startsWith("$tree/") }
+
+        var hasUnreclaimableOverlap = false
+        var overlapsInstalledExecutable = false
+
+        val orphan = JSONObject().put("name", manifest.optString("name", ""))
+        val root = manifest.optString("installRoot", "")
+        if (root.isNotEmpty()) {
+            if (!ownedByInstalled(root) && !containsInstalled(root)) {
+                orphan.put("installRoot", root)
+            } else {
+                overlapsInstalledExecutable = true
+                if (root != installedRoot) {
+                    hasUnreclaimableOverlap = true
+                }
+            }
+        }
+        val orphanOwned = JSONArray()
+        for (path in ownedPaths(manifest)) {
+            val rel = path.relativeTo(context.filesDir).path
+            if (!ownedByInstalled(rel) && !containsInstalled(rel)) {
+                orphanOwned.put(rel)
+            } else {
+                overlapsInstalledExecutable = true
+                if (containsInstalled(rel) && rel !in installedTrees ||
+                    ownedByInstalled(rel) && rel !in installedPaths
+                ) {
+                    hasUnreclaimableOverlap = true
+                }
+            }
+        }
+        if (orphanOwned.length() > 0) orphan.put("ownedPaths", orphanOwned)
+
+        manifest.optJSONArray("binaries")?.let { binaries ->
+            val orphanBins = JSONArray()
+            for (i in 0 until binaries.length()) {
+                val bin = binaries.getString(i)
+                if (!ownedByInstalled(bin) && !containsInstalled(bin)) {
+                    orphanBins.put(bin)
+                } else {
+                    overlapsInstalledExecutable = true
+                }
+            }
+            if (orphanBins.length() > 0) orphan.put("binaries", orphanBins)
+        }
+        manifest.optJSONObject("symlinks")?.let { symlinks ->
+            val orphanLinks = JSONObject()
+            for (key in symlinks.keys()) {
+                if (!ownedByInstalled("usr/bin/$key")) orphanLinks.put(key, symlinks.getString(key))
+            }
+            if (orphanLinks.length() > 0) orphan.put("symlinks", orphanLinks)
+        }
+        manifest.optJSONObject("libSymlinks")?.let { libSymlinks ->
+            val orphanLibLinks = JSONObject()
+            for (key in libSymlinks.keys()) {
+                if (!ownedByInstalled("usr/lib/$key")) orphanLibLinks.put(key, libSymlinks.getString(key))
+            }
+            if (orphanLibLinks.length() > 0) orphan.put("libSymlinks", orphanLibLinks)
+        }
+        manifest.optJSONArray("libs")?.let { libs ->
+            val orphanLibs = JSONArray()
+            for (i in 0 until libs.length()) {
+                val lib = libs.getString(i)
+                if (!ownedByInstalled("usr/lib/$lib")) orphanLibs.put(lib)
+            }
+            if (orphanLibs.length() > 0) orphan.put("libs", orphanLibs)
+        }
+        return OrphanAnalysis(orphan, hasUnreclaimableOverlap, overlapsInstalledExecutable)
+    }
+
+    /**
+     * Restores shared `usr/bin` and `usr/lib` symlinks declared by both [installed] and [aborted]
+     * when the aborted upgrade removed them or left them dangling at a reclaimed tree.
+     */
+    private fun restoreSharedSymlinks(installed: JSONObject, aborted: JSONObject) {
+        val installedLinks = installed.optJSONObject("symlinks")
+        val abortedLinks = aborted.optJSONObject("symlinks")
+        if (installedLinks != null && abortedLinks != null) {
+            for (key in installedLinks.keys()) {
+                if (!abortedLinks.has(key) || !isSinglePathSegment(key)) continue
+                val targetRel = installedLinks.optString(key, "")
+                val linkFile = confinedUsrPath("usr/bin/$key") ?: continue
+                if (!isConfinedUsrTarget(targetRel)) continue
+                val targetFile = confinedUsrPath(targetRel) ?: continue
+                if (!targetFile.exists()) continue
+                val expected = "$filesDir/$targetRel"
+                val abortedTargetRel = abortedLinks.optString(key, "")
+                val abortedExpected = if (abortedTargetRel.isNotEmpty()) "$filesDir/$abortedTargetRel" else null
+                val missing = !pathExistsNoFollow(linkFile)
+                val current = if (missing) null else runCatching { Os.readlink(linkFile.absolutePath) }.getOrNull()
+                val stale = current != null && current != expected &&
+                    (current == abortedExpected || !File(current).exists())
+                if (missing || stale) {
+                    runCatching {
+                        if (!missing) linkFile.delete()
+                        File(context.filesDir, "usr/bin").mkdirs()
+                        Os.symlink(expected, File(context.filesDir, "usr/bin/$key").absolutePath)
+                    }
+                }
+            }
+        }
+
+        val installedLibLinks = installed.optJSONObject("libSymlinks")
+        val abortedLibLinks = aborted.optJSONObject("libSymlinks")
+        if (installedLibLinks != null && abortedLibLinks != null) {
+            for (key in installedLibLinks.keys()) {
+                if (!abortedLibLinks.has(key) || !isSinglePathSegment(key)) continue
+                val targetName = installedLibLinks.optString(key, "")
+                val targetRel = "usr/lib/$targetName"
+                val linkFile = confinedUsrPath("usr/lib/$key") ?: continue
+                if (!isConfinedUsrTarget(targetRel)) continue
+                val targetFile = confinedUsrPath(targetRel) ?: continue
+                if (!targetFile.exists()) continue
+                val expected = File(context.filesDir, targetRel).absolutePath
+                val abortedTargetName = abortedLibLinks.optString(key, "")
+                val abortedExpected = if (abortedTargetName.isNotEmpty()) {
+                    File(context.filesDir, "usr/lib/$abortedTargetName").absolutePath
+                } else {
+                    null
+                }
+                val missing = !pathExistsNoFollow(linkFile)
+                val current = if (missing) null else runCatching { Os.readlink(linkFile.absolutePath) }.getOrNull()
+                val stale = current != null && current != expected &&
+                    (current == abortedExpected || !File(current).exists())
+                if (missing || stale) {
+                    runCatching {
+                        if (!missing) linkFile.delete()
+                        File(context.filesDir, "usr/lib").mkdirs()
+                        Os.symlink(expected, File(context.filesDir, "usr/lib/$key").absolutePath)
+                    }
+                }
+            }
+        }
+    }
+
     /**
      * Deletes the files an install that did not finish had already written, when
      * nothing else lays claim to them.
      *
-     * The install record is written last, so both ways an install can end after
-     * the copy has started -- the copy throwing, and the record write failing --
-     * leave up to the whole unpacked size, about 185 MB for the Java 25 that
-     * ships today, under no manifest at all: [getInstalledToolchains] does not
-     * name it, the Toolchains screen offers no Remove for it, [uninstallLocked]
-     * has no record to work from, and the repair pass only visits records that
-     * exist. Clearing app data was the only way back.
-     *
-     * What goes is what [removeToolchainFiles] removes for an uninstall, taken
-     * from the manifest the caller still holds: the install root, the paths the
-     * toolchain owns, its binaries and links, and its libraries under the same
-     * guard, which keeps any library the base install or another toolchain also
-     * ships. This used to stop at the install root, on the reasoning that the
-     * rest sits in `usr/bin` and `usr/lib` beside other people's files. For a
-     * toolchain whose bulk is there that left the bulk: the C/C++ pack keeps
-     * 197 MB of its 254 MB in two libraries in `usr/lib`, and a copy that ran
-     * out of room is exactly where those bytes are needed for the retry.
-     *
-     * A recorded tree is preserved. Its marker stays pending until the same install
-     * identity reaches the record; older markers without an identity require a retry.
-     * The permission pass can repair execute bits, and is asked to once per attempt
-     * (an in-process failure or the first launch after a killed copy, whichever comes
-     * first), while content is completed from a retained Play delivery or a new
-     * verified HTTP download.
+     * For a failed cross-root upgrade over a recorded install, only paths strictly
+     * owned by the failed upgrade (and not by the installed version, other toolchains,
+     * or base `usr/lib`) are reclaimed, preserving the installed toolchain and
+     * clearing the stale pending marker so future upgrades are not blocked.
      */
-    private fun reclaimPartialCopy(name: String, manifest: JSONObject): Boolean = synchronized(stateLock) {
+    private fun reclaimPartialCopy(
+        name: String,
+        manifest: JSONObject,
+        reclaimSameRootOrphans: Boolean = false,
+        restoreSymlinks: Boolean = true,
+    ): Boolean = synchronized(stateLock) {
         val state = readableState() ?: return@synchronized false
         val installed = (0 until state.length()).mapNotNull { state.optJSONObject(it) }
             .firstOrNull { it.optString("name") == name }
         if (installed != null) {
             Logger.w(tag, "Keeping the files of $name: the record still names it")
             val installId = manifest.optString(KEY_INSTALL_ID)
-            if (installId.isNotEmpty() && installed.optString(KEY_INSTALL_ID) == installId &&
+            val installedId = installed.optString(KEY_INSTALL_ID)
+            if (installId.isNotEmpty() && installedId == installId &&
                 toolchainPathsAreOwned(manifest, installed)
             ) return@synchronized true
-            // Once per attempt: the marker stands until a retry finishes and the launch pass comes back to it every
-            // launch, while the tree changes only when an attempt writes. Asked each time, the repair re-read the whole
-            // tree under the state lock on every launch. A marker with no identity counts as one attempt.
-            val asked = installed.has(KEY_EXEC_RESET_FOR) && installed.optString(KEY_EXEC_RESET_FOR) == installId
-            if (!asked) {
-                installed.put(KEY_EXEC_REPAIRED, false)
-                installed.put(KEY_EXEC_RESET_FOR, installId)
-                if (!writeState(state)) return@synchronized false
+
+            val manifestRoot = manifest.optString("installRoot", "")
+            val installedRoot = installed.optString("installRoot", "")
+            val crossRoot = manifestRoot.isNotEmpty() && installedRoot.isNotEmpty() && manifestRoot != installedRoot
+            val analysis = analyzeOrphans(manifest, installed)
+            val hasOrphans = toolchainRemovalPaths(analysis.orphan).isNotEmpty()
+            val canReclaimOrphans = hasOrphans && (
+                crossRoot ||
+                    (reclaimSameRootOrphans && (installId.isEmpty() || installId != installedId))
+                )
+            var reclaimedAllOrphans = false
+            if (canReclaimOrphans) {
+                val outcome = removeToolchainFiles(name, analysis.orphan, state)
+                if (restoreSymlinks && outcome != RemovalOutcome.UNCHANGED) {
+                    restoreSharedSymlinks(installed, manifest)
+                }
+                reclaimedAllOrphans = outcome == RemovalOutcome.COMPLETE
+                if (reclaimedAllOrphans) {
+                    Logger.i(tag, "Reclaimed orphaned partial upgrade files for $name")
+                } else {
+                    Logger.w(tag, "Could not fully reclaim orphaned partial upgrade files for $name")
+                }
+            } else if (restoreSymlinks && crossRoot) {
+                restoreSharedSymlinks(installed, manifest)
+            }
+
+            if (analysis.overlapsInstalledExecutable || !canReclaimOrphans) {
+                // Once per attempt: the marker stands until a retry finishes and the launch pass comes back to it every
+                // launch, while the tree changes only when an attempt writes. Asked each time, the repair re-read the whole
+                // tree under the state lock on every launch. A marker with no identity counts as one attempt.
+                val asked = installed.has(KEY_EXEC_RESET_FOR) && installed.optString(KEY_EXEC_RESET_FOR) == installId
+                if (!asked) {
+                    installed.put(KEY_EXEC_REPAIRED, false)
+                    installed.put(KEY_EXEC_RESET_FOR, installId)
+                    if (!writeState(state)) return@synchronized false
+                }
+            }
+            if (canReclaimOrphans && reclaimedAllOrphans && !analysis.hasUnreclaimableOverlap) {
+                return@synchronized true
             }
             return@synchronized false
         }
-        val settled = removeToolchainFiles(name, manifest, state)
+        val settled = removeToolchainFiles(name, manifest, state) == RemovalOutcome.COMPLETE
         if (settled) {
             Logger.i(tag, "Reclaimed the partial $name files")
         } else {
@@ -2482,27 +3048,12 @@ class ToolchainManager(private val context: Context) {
                 }
                 extractDir.mkdirs()
                 try {
-                    extractZip(zipFile, extractDir)
+                    extractZip(zipFile, extractDir, isCancelled = { download.cancelled })
                 } catch (e: IOException) {
-                    // The same event the copy into `usr/` already catches in
-                    // [installFromDirectoryHoldingPack], one stage earlier and for
-                    // the same reason: this writes the whole unpacked tree, about
-                    // 185 MB for the Java 25 that ships today, and a phone that
-                    // ran out of room while the download was in flight fails here
-                    // rather than there. Left to unwind, it reached the
-                    // `catch (e: IOException)` below, which speaks for the
-                    // transfer, and the user was told "Download failed. Check your
-                    // connection and try again" for a disk that filled up after
-                    // the connection had done its job. They move to wifi and retry
-                    // for ever; the one sentence that names the remedy is the one
-                    // this reports.
-                    //
-                    // A digest-verified archive that will not unpack throws here
-                    // too, and that is a release that published a broken ZIP: no
-                    // message in the enum helps, and none did before this either.
-                    // Nothing is reclaimed because there is nothing to reclaim --
-                    // the staging tree belongs to this download alone and the
-                    // finally below deletes it whole.
+                    if (download.cancelled) {
+                        Logger.i(tag, "HTTP download cancelled for $packName")
+                        return@execute
+                    }
                     Logger.e(tag, "Could not unpack $packName", e)
                     fail(packName, ToolchainFailure.STORAGE, download.transferId)
                     return@execute
@@ -2644,11 +3195,13 @@ class ToolchainManager(private val context: Context) {
     private fun <T> retrying(what: String, download: HttpDownload, attempt: () -> T): T {
         var lastException: IOException? = null
         for (n in 0..MAX_RETRIES) {
+            if (download.cancelled) throw IOException("Download cancelled")
             try {
                 if (n > 0) {
                     val backoffMs = (1L shl n) * 1000  // 2s, 4s
                     Logger.i(tag, "Retry $n/$MAX_RETRIES for $what after ${backoffMs}ms")
-                    Thread.sleep(backoffMs)
+                    download.waitBackoff(backoffMs)
+                    if (download.cancelled) throw IOException("Download cancelled")
                 }
                 return attempt()
             } catch (e: MissingFromRelease) {
@@ -2665,68 +3218,61 @@ class ToolchainManager(private val context: Context) {
         throw lastException ?: IOException("$what failed after ${MAX_RETRIES + 1} attempts")
     }
 
-    /**
-     * Opens [url], following redirects (GitHub → CDN) up to MAX_REDIRECTS hops,
-     * and hands the connected 200 or 206 response to [body].
-     *
-     * Shared by the two things this class fetches, which is the point: they must
-     * agree about timeouts, redirects and transfer encoding or the digest one of
-     * them publishes describes a body the other one did not receive. [what]
-     * names the artifact so a 404 says which of them is missing from the
-     * release.
-     *
-     * Two statuses become types rather than a bare IOException, because a caller
-     * has to act on each: 404 is [MissingFromRelease] and 416 is [RangeRefused].
-     * Anything else outside {200, 206} is an IOException. A 206 reaches [body]
-     * because [downloadFile] resumes, so [body] has to ask which of the two it
-     * got: 206 is the remainder of a body already part-written, 200 is the whole
-     * file coming again and its output stream must truncate.
-     *
-     * @param requestHeaders set on every hop, not only the first. The only header
-     *   any caller sends is `Range`, and the hop that serves the bytes is the
-     *   redirect target, so dropping it at the redirect is exactly where a resume
-     *   would stop working.
-     */
+    /** Binds [conn] to [download] so cancellation disconnects it immediately, or throws if already cancelled. */
+    @Throws(IOException::class)
+    private fun bindActiveConnection(download: HttpDownload?, conn: HttpURLConnection) {
+        if (download == null) return
+        val cancelled = synchronized(download) {
+            if (download.cancelled) true
+            else {
+                download.activeConnection = conn
+                false
+            }
+        }
+        if (cancelled) {
+            conn.disconnect()
+            throw IOException("Download cancelled")
+        }
+    }
+
+    private fun clearActiveConnection(download: HttpDownload?, conn: HttpURLConnection) {
+        if (download == null) return
+        synchronized(download) {
+            if (download.activeConnection === conn) download.activeConnection = null
+        }
+    }
+
     @Throws(IOException::class)
     private fun <T> withRedirects(
         url: String,
         what: String,
         requestHeaders: Map<String, String> = emptyMap(),
+        download: HttpDownload? = null,
         body: (HttpURLConnection) -> T,
     ): T {
         var currentUrl = url
         var redirects = 0
 
         while (redirects < MAX_REDIRECTS) {
+            if (download?.cancelled == true) throw IOException("Download cancelled")
             val conn = URL(currentUrl).openConnection() as HttpURLConnection
+            bindActiveConnection(download, conn)
             try {
                 conn.connectTimeout = HTTP_TIMEOUT_MS
                 conn.readTimeout = HTTP_TIMEOUT_MS
                 conn.instanceFollowRedirects = false
                 conn.setRequestProperty("User-Agent", "VSCodroid")
-                // Asked for explicitly, because the length check in downloadFile
-                // is only sound if the body arrives as the header describes it.
-                // HttpURLConnection otherwise advertises gzip on its own and
-                // decodes it transparently, which leaves Content-Length
-                // measuring the compressed stream while the loop counts the
-                // decompressed one -- every download would then look truncated.
-                // Costs nothing here: these payloads are ZIPs, which no origin
-                // usefully compresses a second time.
                 conn.setRequestProperty("Accept-Encoding", "identity")
-                // Carried across every hop, deliberately. The only header any
-                // caller adds is `Range`, and dropping it at the redirect to the
-                // signed CDN address is precisely where it would stop working:
-                // that is the hop that serves the bytes.
                 requestHeaders.forEach { (name, value) -> conn.setRequestProperty(name, value) }
 
                 val responseCode = conn.responseCode
+                if (download?.cancelled == true) throw IOException("Download cancelled")
 
                 if (responseCode in 300..399) {
                     val location = conn.getHeaderField("Location")
                         ?: throw IOException("Redirect with no Location header from $currentUrl")
                     currentUrl = nextRedirectUrl(currentUrl, location)
                     redirects++
-                    conn.disconnect()
                     continue
                 }
 
@@ -2734,24 +3280,17 @@ class ToolchainManager(private val context: Context) {
                     throw MissingFromRelease("404 Not Found: $currentUrl ($what not uploaded to release?)")
                 }
 
-                // Only [downloadFile] sends a `Range`, so only it can get this,
-                // and only it can act on it: the offset it asked from is past
-                // the end of what this origin will serve.
                 if (responseCode == 416) {
                     throw RangeRefused("416 Range Not Satisfiable: $currentUrl ($what)")
                 }
 
-                // 206 is a server honouring a `Range`, which only [downloadFile]
-                // asks for. Accepted here rather than in the caller because this
-                // is where a status becomes a refusal; the caller still has to
-                // ask which of the two it got, since 200 means the whole file is
-                // coming again and its output stream must truncate.
                 if (responseCode != 200 && responseCode != 206) {
                     throw IOException("HTTP $responseCode from $currentUrl")
                 }
 
                 return body(conn)
             } finally {
+                clearActiveConnection(download, conn)
                 conn.disconnect()
             }
         }
@@ -2759,36 +3298,19 @@ class ToolchainManager(private val context: Context) {
         throw IOException("Too many redirects ($MAX_REDIRECTS) for $url")
     }
 
-    /**
-     * Reads the release's digest manifest.
-     *
-     * Bounded rather than read whole. The body is a few hundred bytes of
-     * `sha256sum` output, and this function exists because the payload it
-     * describes is not to be taken on trust -- reading an unbounded remote body
-     * into memory on the way to saying so would be the same trust by another
-     * name.
-     *
-     * A body cut at the bound cannot produce a wrong digest, though it is worth
-     * being exact about why, because there are two cases and only one of them
-     * is the obvious one. A cut landing in the *digest* leaves a field that is
-     * not 64 hex characters, which [digestFromManifest] skips. A cut landing in
-     * the *name* leaves a perfectly valid digest beside a shortened filename --
-     * nothing rejects that line, and nothing needs to: names are compared whole,
-     * so it matches no ZIP anyone asked for. Either way the lookup finds
-     * nothing and the install is refused. (This said "a line cut mid-way fails
-     * the 64-hex test", which is true of the first case only.)
-     */
     @Throws(IOException::class)
-    private fun fetchManifest(url: String): String =
-        withRedirects(url, "digest manifest") { conn ->
+    private fun fetchManifest(url: String, download: HttpDownload): String =
+        withRedirects(url, "digest manifest", download = download) { conn ->
             val buffer = CharArray(MANIFEST_MAX_CHARS)
             conn.inputStream.bufferedReader().use { reader ->
                 var total = 0
                 while (total < buffer.size) {
+                    if (download.cancelled) throw IOException("Download cancelled")
                     val n = reader.read(buffer, total, buffer.size - total)
                     if (n < 0) break
                     total += n
                 }
+                if (download.cancelled) throw IOException("Download cancelled")
                 String(buffer, 0, total)
             }
         }
@@ -2855,7 +3377,7 @@ class ToolchainManager(private val context: Context) {
         // 30 s connect and a 30 s read timeout that nothing else here would
         // interrupt.
         if (download.cancelled) return zipUrl
-        ownReleaseAssetUrl(zipUrl)?.let {
+        ownReleaseAssetUrl(zipUrl, download)?.let {
             Logger.i(tag, "Pinned this install to ${it.substringBeforeLast('/')}")
             return it
         }
@@ -2863,6 +3385,7 @@ class ToolchainManager(private val context: Context) {
         val latestUrl = latestReleaseUrlFor(zipUrl) ?: return zipUrl
         val pinned = try {
             val conn = URL(latestUrl).openConnection() as HttpURLConnection
+            bindActiveConnection(download, conn)
             try {
                 conn.connectTimeout = HTTP_TIMEOUT_MS
                 conn.readTimeout = HTTP_TIMEOUT_MS
@@ -2873,6 +3396,7 @@ class ToolchainManager(private val context: Context) {
                 val location = if (code in 300..399) conn.getHeaderField("Location") else null
                 location?.let { releaseTagFromLocation(it) }?.let { pinnedAssetUrl(zipUrl, it) }
             } finally {
+                clearActiveConnection(download, conn)
                 conn.disconnect()
             }
         } catch (e: IOException) {
@@ -2908,10 +3432,10 @@ class ToolchainManager(private val context: Context) {
      * toolchain step failed, pin to it, and turn a fallback into a refused
      * install two requests later.
      */
-    private fun ownReleaseAssetUrl(zipUrl: String): String? {
+    private fun ownReleaseAssetUrl(zipUrl: String, download: HttpDownload): String? {
         val ownTag = appReleaseTag(BuildConfig.VERSION_NAME) ?: return null
         val url = pinnedAssetUrl(zipUrl, ownTag) ?: return null
-        if (assetIsPublished(url)) return url
+        if (assetIsPublished(url, download)) return url
         Logger.i(
             tag,
             "Release $ownTag does not publish ${zipUrl.substringAfterLast('/')}; " +
@@ -2928,8 +3452,9 @@ class ToolchainManager(private val context: Context) {
      * as no: the caller's fallback is the behaviour that shipped before this,
      * and a network that cannot answer this cannot serve the payload either.
      */
-    private fun assetIsPublished(url: String): Boolean = try {
+    private fun assetIsPublished(url: String, download: HttpDownload): Boolean = try {
         val conn = URL(url).openConnection() as HttpURLConnection
+        bindActiveConnection(download, conn)
         try {
             conn.connectTimeout = HTTP_TIMEOUT_MS
             conn.readTimeout = HTTP_TIMEOUT_MS
@@ -2938,6 +3463,7 @@ class ToolchainManager(private val context: Context) {
             conn.setRequestProperty("User-Agent", "VSCodroid")
             conn.responseCode in 200..399
         } finally {
+            clearActiveConnection(download, conn)
             conn.disconnect()
         }
     } catch (e: IOException) {
@@ -2967,7 +3493,7 @@ class ToolchainManager(private val context: Context) {
     private fun publishedDigestFor(zipUrl: String, download: HttpDownload): String {
         val zipName = zipUrl.substringAfterLast('/')
         val manifest = retrying("$zipName digest manifest", download) {
-            fetchManifest(manifestUrlFor(zipUrl))
+            fetchManifest(manifestUrlFor(zipUrl), download)
         }
         return digestFromManifest(manifest, zipName)
             // [MissingFromRelease], not the plain IOException it extends. The two are
@@ -3038,7 +3564,7 @@ class ToolchainManager(private val context: Context) {
         val alreadyHave = destFile.length()
         val headers =
             if (alreadyHave > 0) mapOf("Range" to "bytes=$alreadyHave-") else emptyMap()
-        withRedirects(url, "toolchain ZIP", headers) { conn ->
+        withRedirects(url, "toolchain ZIP", headers, download = download) { conn ->
             // 206 means the server is sending the remainder and the bytes on disk
             // stand; anything else means it is sending the file from the start and
             // they do not.
@@ -3126,36 +3652,24 @@ class ToolchainManager(private val context: Context) {
 
     /**
      * Extracts a ZIP archive to the destination directory.
-     * Includes zip-slip protection (rejects entries that escape destDir).
+     * Enforces zip-slip protection, cancellation checks, and total byte/entry limits.
      */
     @Throws(IOException::class, SecurityException::class)
-    private fun extractZip(zipFile: File, destDir: File) {
-        val canonicalDest = destDir.canonicalPath
-
-        ZipInputStream(zipFile.inputStream().buffered()).use { zis ->
-            var entry = zis.nextEntry
-            while (entry != null) {
-                val outFile = File(destDir, entry.name)
-                val canonicalOut = outFile.canonicalPath
-
-                if (!canonicalOut.startsWith(canonicalDest + File.separator) && canonicalOut != canonicalDest) {
-                    throw SecurityException("Zip slip detected: ${entry.name}")
-                }
-
-                if (entry.isDirectory) {
-                    outFile.mkdirs()
-                } else {
-                    outFile.parentFile?.mkdirs()
-                    FileOutputStream(outFile).use { out ->
-                        zis.copyTo(out)
-                    }
-                }
-
-                zis.closeEntry()
-                entry = zis.nextEntry
-            }
-        }
-
+    private fun extractZip(
+        zipFile: File,
+        destDir: File,
+        isCancelled: () -> Boolean = { false },
+        maxBytes: Long = MAX_EXTRACT_BYTES,
+        maxEntries: Int = MAX_EXTRACT_ENTRIES,
+    ) {
+        extractToolchainZip(
+            zipFile = zipFile,
+            destDir = destDir,
+            appRoot = context.filesDir.parentFile,
+            isCancelled = isCancelled,
+            maxBytes = maxBytes,
+            maxEntries = maxEntries,
+        )
         Logger.i(tag, "Extracted ${zipFile.name} to ${destDir.absolutePath}")
     }
 
@@ -4552,7 +5066,10 @@ class ToolchainManager(private val context: Context) {
             // Its name proves no ownership, so only the complete .json markers are consumed.
             if (!marker.name.endsWith(".json")) continue
             val packName = marker.name.removeSuffix(".json")
-            if (!claimPack(packName, readsDeliveredPack = false)) continue
+            val claimed = synchronized(packOperationLock) {
+                !httpDownloads.containsKey(packName) && claimPack(packName, readsDeliveredPack = false)
+            }
+            if (!claimed) continue
             try {
                 val manifest = runCatching { JSONObject(marker.readText()) }.getOrNull()
                 val name = manifest?.optString("name", "").orEmpty()
@@ -4642,9 +5159,20 @@ class ToolchainManager(private val context: Context) {
 
             val name = entry.optString("name", "?")
             val installRoot = entry.optString("installRoot", "")
-            val root = if (installRoot.isEmpty()) null else File(context.filesDir, installRoot)
+            val root = if (installRoot.isEmpty()) {
+                null
+            } else if (!isOwnedPathName(installRoot)) {
+                Logger.w(tag, "Skipping repair walk for $name: installRoot is outside managed usr/ subtree")
+                null
+            } else {
+                confinedUsrPath(installRoot).also {
+                    if (it == null) {
+                        Logger.w(tag, "Skipping repair walk for $name: installRoot has a redirected ancestor")
+                    }
+                }
+            }
 
-            if (root != null && root.isDirectory) {
+            if (root != null && !Files.isSymbolicLink(root.toPath()) && root.isDirectory) {
                 val fixed = markExecutablesUnder(root)
                 if (fixed > 0) {
                     Logger.i(tag, "Restored the execute bit on $fixed binaries in $name")
@@ -5190,9 +5718,18 @@ internal fun markExecutablesIn(root: File, isLink: (File) -> Boolean = ::isSymli
  * choice to make.
  */
 internal fun isShellFunctionName(name: String): Boolean {
-    if (name.isEmpty()) return false
-    return name.none { it in SHELL_UNSAFE || it.isWhitespace() }
+    if (name.isEmpty() || name.startsWith("#") || name in SHELL_RESERVED_WORDS) return false
+    if (name.all { it in '0'..'9' }) return false
+    return name.none { it in SHELL_UNSAFE || it.isWhitespace() || it.isISOControl() }
 }
+
+/** Bash reserved words that cannot appear unquoted as a `name() { ...; }` function identifier. */
+private val SHELL_RESERVED_WORDS = setOf(
+    "if", "then", "else", "elif", "fi",
+    "case", "esac", "for", "select", "while", "until", "do", "done", "in",
+    "function", "time", "coproc",
+    "{", "}", "!", "[[", "]]",
+)
 
 /**
  * The characters measured to break a function definition or to silently define one
@@ -5271,16 +5808,118 @@ internal fun isCompleteTransfer(declaredBytes: Long, receivedBytes: Long): Boole
  *
  * @throws IOException when following the hop would leave TLS behind
  */
+internal const val MAX_EXTRACT_BYTES = 2L * 1024 * 1024 * 1024 // 2 GiB
+internal const val MAX_EXTRACT_ENTRIES = 50_000
+
+/**
+ * Extracts [zipFile] into [destDir] with zip-slip confinement, cancellation checks per entry and
+ * per read chunk, and explicit upper bounds on total extracted bytes and entry count.
+ */
+@Throws(IOException::class, SecurityException::class)
+internal fun extractToolchainZip(
+    zipFile: File,
+    destDir: File,
+    appRoot: File? = destDir.parentFile,
+    isCancelled: () -> Boolean = { false },
+    maxBytes: Long = MAX_EXTRACT_BYTES,
+    maxEntries: Int = MAX_EXTRACT_ENTRIES,
+) {
+    if (isCancelled()) throw IOException("Extraction cancelled")
+    val canonicalDest = destDir.canonicalPath
+    var entryCount = 0
+    var totalBytes = 0L
+    val buffer = ByteArray(8192)
+    val created = ArrayDeque<File>()
+
+    try {
+        ZipInputStream(zipFile.inputStream().buffered()).use { zis ->
+            var entry = zis.nextEntry
+            while (entry != null) {
+                if (isCancelled()) throw IOException("Extraction cancelled")
+                entryCount++
+                if (entryCount > maxEntries) {
+                    throw SecurityException("Zip entry limit exceeded ($maxEntries)")
+                }
+                val outFile = File(destDir, entry.name)
+                val canonicalOut = outFile.canonicalPath
+
+                if (entry.isDirectory) {
+                    if (!canonicalOut.startsWith(canonicalDest + File.separator) && canonicalOut != canonicalDest) {
+                        throw SecurityException("Zip slip detected: ${entry.name}")
+                    }
+                    if (canonicalOut != canonicalDest) {
+                        outFile.mkdirs()
+                        created.addLast(outFile)
+                    }
+                } else {
+                    if (!canonicalOut.startsWith(canonicalDest + File.separator)) {
+                        throw SecurityException("Zip slip detected: ${entry.name}")
+                    }
+                    outFile.parentFile?.mkdirs()
+                    if (Files.isSymbolicLink(outFile.toPath())) {
+                        throw SecurityException("Refusing to write zip entry through symlink: ${entry.name}")
+                    }
+                    created.addLast(outFile)
+                    FileOutputStream(outFile).use { out ->
+                        while (true) {
+                            if (isCancelled()) throw IOException("Extraction cancelled")
+                            val read = zis.read(buffer)
+                            if (read < 0) break
+                            totalBytes += read
+                            if (totalBytes > maxBytes) {
+                                throw SecurityException("Zip extracted size limit exceeded ($maxBytes bytes)")
+                            }
+                            out.write(buffer, 0, read)
+                        }
+                    }
+                }
+
+                zis.closeEntry()
+                entry = zis.nextEntry
+            }
+        }
+    } catch (e: Throwable) {
+        StorageManager.deleteRecursive(destDir, appRoot)
+        while (created.isNotEmpty()) {
+            val path = created.removeLast()
+            if (!Files.isSymbolicLink(path.toPath())) {
+                path.delete()
+            }
+        }
+        throw e
+    }
+}
+
+/** GitHub release and release-asset hosts allowed for HTTPS toolchain download redirects. */
+private fun isAllowedToolchainHost(host: String): Boolean {
+    val normalized = host.lowercase(java.util.Locale.ROOT).removeSuffix(".")
+    if (normalized.isEmpty() || normalized.split('.').any { it.isEmpty() }) return false
+    return normalized == "github.com" ||
+        (normalized.endsWith(".githubusercontent.com") && normalized.length > ".githubusercontent.com".length)
+}
+
 @Throws(IOException::class)
 internal fun nextRedirectUrl(currentUrl: String, location: String): String {
-    val next = if (location.startsWith("http")) location
-               else URL(URL(currentUrl), location).toString()
-    if (currentUrl.startsWith("https://", ignoreCase = true) &&
-        !next.startsWith("https://", ignoreCase = true)
-    ) {
-        throw IOException("Refusing a redirect from $currentUrl to cleartext $next")
+    if (location.isBlank()) {
+        throw IOException("Refusing a redirect with a blank Location header from $currentUrl")
     }
-    return next
+    val current = URL(currentUrl)
+    val next = URL(current, location)
+    if (!next.protocol.equals("https", ignoreCase = true) && !next.protocol.equals("http", ignoreCase = true)) {
+        throw IOException("Refusing a redirect from $currentUrl to unsupported scheme ${next.protocol}")
+    }
+    if (current.protocol.equals("https", ignoreCase = true)) {
+        if (!next.protocol.equals("https", ignoreCase = true)) {
+            throw IOException("Refusing a redirect from $currentUrl to cleartext $next")
+        }
+        if (next.port != -1 && next.port != 443) {
+            throw IOException("Refusing a redirect from $currentUrl to non-standard port ${next.port}")
+        }
+        if (next.userInfo != null || !isAllowedToolchainHost(next.host)) {
+            throw IOException("Refusing a redirect from $currentUrl to disallowed host ${next.host}")
+        }
+    }
+    return next.toString()
 }
 
 /**
@@ -5713,6 +6352,42 @@ internal fun otherToolchainLibs(state: JSONArray, exceptName: String): Set<Strin
         if (entry.optString("name") == exceptName) continue
         val libs = entry.optJSONArray("libs") ?: continue
         for (j in 0 until libs.length()) shared.add(libs.getString(j))
+    }
+    return shared
+}
+
+/** Every `usr/lib` symlink key declared by another installed toolchain. */
+internal fun otherToolchainLibSymlinks(state: JSONArray, exceptName: String): Set<String> {
+    val shared = mutableSetOf<String>()
+    for (i in 0 until state.length()) {
+        val entry = state.optJSONObject(i) ?: continue
+        if (entry.optString("name") == exceptName) continue
+        val links = entry.optJSONObject("libSymlinks") ?: continue
+        links.keys().forEach { shared.add(it) }
+    }
+    return shared
+}
+
+/** Every `usr/bin` symlink key declared by another installed toolchain. */
+internal fun otherToolchainSymlinks(state: JSONArray, exceptName: String): Set<String> {
+    val shared = mutableSetOf<String>()
+    for (i in 0 until state.length()) {
+        val entry = state.optJSONObject(i) ?: continue
+        if (entry.optString("name") == exceptName) continue
+        val links = entry.optJSONObject("symlinks") ?: continue
+        links.keys().forEach { shared.add(it) }
+    }
+    return shared
+}
+
+/** Every manifest binary path declared by another installed toolchain. */
+internal fun otherToolchainBinaries(state: JSONArray, exceptName: String): Set<String> {
+    val shared = mutableSetOf<String>()
+    for (i in 0 until state.length()) {
+        val entry = state.optJSONObject(i) ?: continue
+        if (entry.optString("name") == exceptName) continue
+        val binaries = entry.optJSONArray("binaries") ?: continue
+        for (j in 0 until binaries.length()) shared.add(binaries.getString(j))
     }
     return shared
 }
