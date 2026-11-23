@@ -17,7 +17,7 @@ before. The modal's minimum width and height are capped at the available window 
 and the modal is positioned from the dimensions the resizable element really draws.
 
 diff --git a/src/vs/workbench/browser/parts/editor/modalEditorPart.ts b/src/vs/workbench/browser/parts/editor/modalEditorPart.ts
-index ca467f29..5c08826c 100644
+index 4f21135d..a406daed 100644
 --- a/src/vs/workbench/browser/parts/editor/modalEditorPart.ts
 +++ b/src/vs/workbench/browser/parts/editor/modalEditorPart.ts
 @@ -705,6 +705,15 @@ export class ModalEditorPart {
@@ -37,10 +37,10 @@ index ca467f29..5c08826c 100644
  			if (isFirstLayout) {
  				isFirstLayout = false;
 diff --git a/src/vs/workbench/contrib/preferences/browser/settingsEditor2.ts b/src/vs/workbench/contrib/preferences/browser/settingsEditor2.ts
-index 9f9907cf..8ba482d2 100644
+index 9637a692..8956e91d 100644
 --- a/src/vs/workbench/contrib/preferences/browser/settingsEditor2.ts
 +++ b/src/vs/workbench/contrib/preferences/browser/settingsEditor2.ts
-@@ -127,6 +127,9 @@ export class SettingsEditor2 extends EditorPane {
+@@ -128,6 +128,9 @@ export class SettingsEditor2 extends EditorPane {
  	private static TOC_MIN_WIDTH: number = 100;
  	private static TOC_RESET_WIDTH: number = 200;
  	private static EDITOR_MIN_WIDTH: number = 500;
@@ -50,7 +50,7 @@ index 9f9907cf..8ba482d2 100644
  	// Below NARROW_TOTAL_WIDTH, we only render the editor rather than the ToC.
  	private static NARROW_TOTAL_WIDTH: number = this.TOC_RESET_WIDTH + this.EDITOR_MIN_WIDTH;
  
-@@ -449,7 +452,7 @@ export class SettingsEditor2 extends EditorPane {
+@@ -463,7 +466,7 @@ export class SettingsEditor2 extends EditorPane {
  		}
  	}
  
@@ -59,7 +59,7 @@ index 9f9907cf..8ba482d2 100644
  	override get maximumWidth(): number { return Number.POSITIVE_INFINITY; }
  	override get minimumHeight() { return 180; }
  
-@@ -1091,7 +1094,7 @@ export class SettingsEditor2 extends EditorPane {
+@@ -1105,7 +1108,7 @@ export class SettingsEditor2 extends EditorPane {
  		this.splitView.addView({
  			onDidChange: Event.None,
  			element: this.settingsTreeContainer,

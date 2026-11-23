@@ -309,6 +309,16 @@
 0024 editcontext restart by focus|out/vs/code/browser/workbench/workbench.js x2|this._focusTracker.pause()
 0024 editcontext own edits restart nothing|out/vs/code/browser/workbench/workbench.js x3|_applyingInputMethodEdit=
 0024 editcontext Backspace key keeps the window|out/vs/code/browser/workbench/workbench.js x5|this._deletingByKey
+0024 open composition cleared on blur|out/vs/code/browser/workbench/workbench.js|this.domNode.domNode, 'blur', () =>
+0024 open composition read at the restart|out/vs/code/browser/workbench/workbench.js|.composing&&this._compositionOpen)
+0024 restart forced flag|out/vs/code/browser/workbench/workbench.js|this._beforeRewrite.force=
+0024 editcontext initial cursor|out/vs/code/browser/workbench/workbench.js|getPrimaryCursorState().modelState.selection
+0024 editcontext initial window|out/vs/code/browser/workbench/workbench.js|this._primarySelection.startLineNumber
+0024 buffer kept while the caret stays|out/vs/code/browser/workbench/workbench.js|this._caretUnmoved(
+0024 buffer kept for one caret only|out/vs/code/browser/workbench/workbench.js|this._editContextCursorCount
+0024 count taken on buffer sync and cursor drop|out/vs/code/browser/workbench/workbench.js x2|this._editContextCursorCount=this._cursorCount
+0024 editcontext deferred cache sync guard|out/vs/code/browser/workbench/workbench.js|this._syncEditContextCacheIfDeferred(
+0024 editcontext model version and epoch tracking|out/vs/code/browser/workbench/workbench.js x3|this._editContextEpoch
 # 0025's rows: a composition that typed nothing arms no quick suggestion and
 # checks no trigger character, and on Android a touch outside the editor ends
 # the session. Property names, as for 0024, each 0 times in the shipped
@@ -394,20 +404,9 @@
 0043 regular-file check in serveFile|out/server-main.js|Not a regular file:
 0044 gesture target inside a shadow root|out/vs/code/browser/workbench/workbench.js|composedPath()[0]
 0045 color picker opened by a swatch tap|out/vs/code/browser/workbench/workbench.js|closest(".colorpicker-color-decoration")
-# 0046's own text in the bundle is the blur listener that clears the open mark: its registration survives the minifier, its body does not, since the minifier writes
-# the boolean it assigns as !1 and the patch writes false. The other three places that set and clear the mark are booleans as well. The saved mark and the clause that
-# reads it at the restart are lines 0050 rewrote when it added the forced restart, so the second row is met by 0050's text and fails only when the final source stops
-# reading the mark. The bare member this._compositionOpen cannot stand for the patch: the rules of 0050 read it as well, so a count of it is met with 0046's own uses
-# gone. The listeners are run on the patched source by scripts/check-editcontext-ime.js.
-0046 open composition cleared on blur|out/vs/code/browser/workbench/workbench.js|this.domNode.domNode, 'blur', () =>
-0046 open composition read at the restart (set and cleared by listeners that check-editcontext-ime.js runs)|out/vs/code/browser/workbench/workbench.js|.composing&&this._compositionOpen)
-0047 editcontext initial cursor|out/vs/code/browser/workbench/workbench.js|getPrimaryCursorState().modelState.selection
-0047 editcontext initial window|out/vs/code/browser/workbench/workbench.js|this._primarySelection.startLineNumber
-# 0049 moved 0048's test into _isSelectionOnly, so every line of it in the bundle is one 0049 wrote again and no text of 0048's own is left: no row can be met by
-# 0048 alone. The row below names the test's single-cursor alternative, which 0049 writes once again where 0048 wrote it and no other patch writes, so it fails
-# only when the final source drops that clause. The cache the test reads, this._previousEditContextText.slice( and this._previousEditContextText.length, is written a dozen times each by 0049
-# and 0050, so a row on either is met with the test gone. What the test decides is run on the patched source by scripts/check-editcontext-ime.js.
-0048 unchanged input, a moved selection with one cursor only (the test sits in _isSelectionOnly since 0049; check-editcontext-ime.js runs it)|out/vs/code/browser/workbench/workbench.js|getCursorStates().length===1
+# 0049 rows: multi-cursor composing and unchanged-word skipping in _isSelectionOnly
+# (consolidated from the former 0048 patch that 0049 replaced in full).
+0049 unchanged input, a moved selection with one cursor only|out/vs/code/browser/workbench/workbench.js|getCursorStates().length===1
 0049 same text at every cursor|out/vs/code/browser/workbench/workbench.js|this._cursorsHoldSameText(
 0049 several cursors|out/vs/code/browser/workbench/workbench.js|getCursorStates().length>1
 0049 buffer held while cursors go|out/vs/code/browser/workbench/workbench.js|this._dismissingCursors
@@ -421,8 +420,8 @@
 0050 typed composition exempt|out/vs/code/browser/workbench/workbench.js|this._isInStepRewrite(
 # The read of the flag that says whether the open composition has typed anything since it started.
 0050 composition typed flag read|out/vs/code/browser/workbench/workbench.js|this._compositionTyped&&
-# The forced restart that a refusal asks for: it happens whatever the buffer holds, so that the keyboard reads the buffer and the caret again.
-0050 restart forced after a refusal|out/vs/code/browser/workbench/workbench.js|this._beforeRewrite.force=
+# The count of forced restarts incremented when a forced restart runs.
+0050 forced restart counted|out/vs/code/browser/workbench/workbench.js|this._refusalRestarts++
 # The test for a reopened word written back short: the part of the range before the caret is written over the whole range, with the caret inside it, so the tail after the caret is dropped.
 0050 tail drop on reopen|out/vs/code/browser/workbench/workbench.js|this._isTailDropOnReopen(
 # The bound on forced restarts: after six without a change of text an update is no longer refused.
@@ -461,14 +460,6 @@
 0050 range beyond the buffer refused|out/vs/code/browser/workbench/workbench.js|this._isBeyondBuffer(
 # Past the bound an update is passed with its range clamped to the end of the buffer, so no unit that the buffer does not hold is replaced.
 0050 update clamped to the buffer|out/vs/code/browser/workbench/workbench.js|updateRangeEnd:this._previousEditContextText.length,selectionStart:
-# 0051 rows for the stack. Each pattern is a member or call that the patch adds to nativeEditContext.ts. Member names are properties, which minification keeps, and each pattern
-# is found in what the patch itself adds. The comment above a row says what that row pins.
-# The test that the caret is the one the buffer was last built for, so that a cursor event leaves the buffer where it is.
-0051 buffer kept while the caret stays|out/vs/code/browser/workbench/workbench.js|this._caretUnmoved(
-# The count of carets the buffer was built for, which limits keeping the buffer to a single caret.
-0051 buffer kept for one caret only|out/vs/code/browser/workbench/workbench.js|this._editContextCursorCount
-# The count is taken where the buffer is built and again where the other carets are dropped, so the assignment is there twice. The second copy is the one that keeps the buffer when no edit follows the drop.
-0051 count taken when the other carets are dropped|out/vs/code/browser/workbench/workbench.js x2|this._editContextCursorCount=this._cursorCount
 0052 suggest list tap bounds|out/vs/code/browser/workbench/workbench.js|this._onListTap(
 # The call that refilters an open suggestion list on a content change while a composition is open, on Android.
 0053 suggest refilter while composing|out/vs/code/browser/workbench/workbench.js|this._refilterWhileComposing()

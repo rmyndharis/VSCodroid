@@ -44,7 +44,7 @@ enough that the parent is not covered by the submenu, 0 events ignored, parent
 scrolled to its 110px maximum, submenu dismissed.
 
 diff --git a/src/vs/base/browser/ui/menu/menu.ts b/src/vs/base/browser/ui/menu/menu.ts
-index 7bb39f0..057fcaa 100644
+index 188837f4..c6eff05e 100644
 --- a/src/vs/base/browser/ui/menu/menu.ts
 +++ b/src/vs/base/browser/ui/menu/menu.ts
 @@ -5,7 +5,7 @@
@@ -56,14 +56,14 @@ index 7bb39f0..057fcaa 100644
  import { createStyleSheet } from '../../domStylesheets.js';
  import { StandardKeyboardEvent } from '../../keyboardEvent.js';
  import { StandardMouseEvent } from '../../mouseEvent.js';
-@@ -265,8 +265,36 @@
+@@ -266,9 +266,37 @@ export class Menu extends ActionBar {
  		this.styleScrollElement(scrollElement, menuStyles);
  
  		// Support scroll on menu drag
 +		let panStartedInSubmenu = false;
  		this._register(addDisposableListener(menuElement, TouchEventType.Change, e => {
  			EventHelper.stop(e, true);
-+
+ 
 +			// A submenu is appended inside the item that opens it, so a pan that
 +			// started in an open submenu is dispatched to this menu as well: the
 +			// gesture goes to every registered target that DOM-contains the touch and
@@ -90,6 +90,7 @@ index 7bb39f0..057fcaa 100644
 +			if (panStartedInSubmenu) {
 +				return;
 +			}
- 
++
  			const scrollTop = this.scrollableElement.getScrollPosition().scrollTop;
  			this.scrollableElement.setScrollPosition({ scrollTop: scrollTop - e.translationY });
+ 		}));

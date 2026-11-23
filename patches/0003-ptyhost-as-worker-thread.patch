@@ -49,13 +49,13 @@ Extension Host is a separate step because it also has to stop passing sockets ov
 its channel.
 
 diff --git a/src/bootstrap-fork.ts b/src/bootstrap-fork.ts
-index b87e855b..57e08d49 100644
+index 09b88058..40ba90b7 100644
 --- a/src/bootstrap-fork.ts
 +++ b/src/bootstrap-fork.ts
-@@ -6,6 +6,63 @@
- import * as performance from './vs/base/common/performance.js';
+@@ -7,6 +7,63 @@ import * as performance from './vs/base/common/performance.js';
  import { removeGlobalNodeJsModuleLookupPaths, devInjectNodeModuleLookupPath } from './bootstrap-node.js';
  import { bootstrapESM } from './bootstrap-esm.js';
+ import { enableNodeCompileCache, getNodeCompileCacheKindForUtilityProcess } from './vs/base/node/nodeCompileCache.js';
 +import { isMainThread, parentPort } from 'worker_threads';
 +
 +// Running as a worker_threads Worker instead of a child_process fork, this
@@ -118,7 +118,7 @@ index b87e855b..57e08d49 100644
  
 diff --git a/src/vs/base/node/workerAsChildProcess.ts b/src/vs/base/node/workerAsChildProcess.ts
 new file mode 100644
-index 00000000..e4fc8ae9
+index 00000000..7635fcb6
 --- /dev/null
 +++ b/src/vs/base/node/workerAsChildProcess.ts
 @@ -0,0 +1,210 @@
@@ -333,7 +333,7 @@ index 00000000..e4fc8ae9
 +	return fork(modulePath, args, options);
 +}
 diff --git a/src/vs/base/parts/ipc/node/ipc.cp.ts b/src/vs/base/parts/ipc/node/ipc.cp.ts
-index 73630126..afa610a3 100644
+index e07b3ab7..b515890d 100644
 --- a/src/vs/base/parts/ipc/node/ipc.cp.ts
 +++ b/src/vs/base/parts/ipc/node/ipc.cp.ts
 @@ -4,6 +4,7 @@
@@ -361,7 +361,7 @@ index 73630126..afa610a3 100644
  }
  
  export class Client implements IChannelClient, IDisposable {
-@@ -203,7 +214,13 @@ export class Client implements IChannelClient, IDisposable {
+@@ -204,7 +215,13 @@ export class Client implements IChannelClient, IDisposable {
  
  			removeDangerousEnvVariables(forkOpts.env);
  

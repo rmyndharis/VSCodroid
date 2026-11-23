@@ -38,10 +38,10 @@ productService.enableTelemetry, which the branding overlay sets to false, so it
 never renders here.
 
 diff --git a/src/vs/workbench/contrib/extensions/browser/extensions.contribution.ts b/src/vs/workbench/contrib/extensions/browser/extensions.contribution.ts
-index b04aae0a..9e3d53ce 100644
+index b06c588b..ca633e52 100644
 --- a/src/vs/workbench/contrib/extensions/browser/extensions.contribution.ts
 +++ b/src/vs/workbench/contrib/extensions/browser/extensions.contribution.ts
-@@ -956,8 +956,8 @@ class ExtensionsContributions extends Disposable implements IWorkbenchContributi
+@@ -989,8 +989,8 @@ class ExtensionsContributions extends Disposable implements IWorkbenchContributi
  				if (requireReload) {
  					notificationService.prompt(
  						Severity.Info,
@@ -53,10 +53,10 @@ index b04aae0a..9e3d53ce 100644
  							label: localize('InstallVSIXAction.reloadNow', "Reload Now"),
  							run: () => hostService.reload()
 diff --git a/src/vs/workbench/contrib/extensions/browser/extensionsActions.ts b/src/vs/workbench/contrib/extensions/browser/extensionsActions.ts
-index 83d08390..01d98080 100644
+index 79468b8c..84f1d25f 100644
 --- a/src/vs/workbench/contrib/extensions/browser/extensionsActions.ts
 +++ b/src/vs/workbench/contrib/extensions/browser/extensionsActions.ts
-@@ -941,7 +941,7 @@ export class UninstallAction extends ExtensionAction {
+@@ -945,7 +945,7 @@ export class UninstallAction extends ExtensionAction {
  
  		try {
  			await this.extensionsWorkbenchService.uninstall(this.extension);
@@ -101,10 +101,10 @@ index 168a3d01..5a5b0d6b 100644
  			type: 'steps',
  			steps: [
 diff --git a/src/vs/workbench/contrib/welcomeOnboarding/browser/onboardingVariationA.ts b/src/vs/workbench/contrib/welcomeOnboarding/browser/onboardingVariationA.ts
-index 0bcd4fcd..de9429a9 100644
+index ff993368..ff79fb0d 100644
 --- a/src/vs/workbench/contrib/welcomeOnboarding/browser/onboardingVariationA.ts
 +++ b/src/vs/workbench/contrib/welcomeOnboarding/browser/onboardingVariationA.ts
-@@ -180,7 +180,7 @@ export class OnboardingVariationA extends Disposable implements IOnboardingServi
+@@ -183,7 +183,7 @@ export class OnboardingVariationA extends Disposable implements IOnboardingServi
  		this.overlay = append(container, $('.onboarding-a-overlay'));
  		this.overlay.setAttribute('role', 'dialog');
  		this.overlay.setAttribute('aria-modal', 'true');
@@ -113,7 +113,7 @@ index 0bcd4fcd..de9429a9 100644
  
  		// Card
  		this.card = append(this.overlay, $('.onboarding-a-card'));
-@@ -479,7 +479,7 @@ export class OnboardingVariationA extends Disposable implements IOnboardingServi
+@@ -486,7 +486,7 @@ export class OnboardingVariationA extends Disposable implements IOnboardingServi
  		const content = append(wrapper, $('.onboarding-a-signin-content'));
  		const contentMain = append(content, $('.onboarding-a-signin-content-main'));
  		const title = append(contentMain, $('h2.onboarding-a-signin-title'));

@@ -70,7 +70,7 @@ PRUNED = (
 )
 
 # Every file of the Copilot extension's @github/copilot package, as the build
-# packages it at this pin (@github/copilot 1.0.73, Code - OSS 1.139.1).
+# packages it at this pin (@github/copilot 1.0.73, Code - OSS 1.141.2).
 #
 # The build copies that package into the tree while the extension's own build
 # runs its postinstall a second time, and that postinstall deletes and rewrites

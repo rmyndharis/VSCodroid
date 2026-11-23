@@ -44,10 +44,10 @@ the selection during it (crbug 379170477), so a key that moves the caret
 while a word composes still writes the recomposed word over the old range.
 
 diff --git a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
-index 528a8e0..c654033 100644
+index bedf3f2c..5c79a9b5 100644
 --- a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
 +++ b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
-@@ -417,10 +417,12 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -419,10 +419,12 @@ export class NativeEditContext extends AbstractEditContext {
  			return;
  		}
  		const newText = editContextState.text ?? ' ';
@@ -63,7 +63,7 @@ index 528a8e0..c654033 100644
  		if (editContextState.selectionStartOffset !== this._previousEditContextSelection.start ||
  			editContextState.selectionEndOffset !== this._previousEditContextSelection.endExclusive) {
  			this._editContext.updateSelection(editContextState.selectionStartOffset, editContextState.selectionEndOffset);
-@@ -445,17 +447,21 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -447,17 +449,21 @@ export class NativeEditContext extends AbstractEditContext {
  		if (e.updateRangeStart < selectionStartOffset) {
  			replacePrevCharCnt = selectionStartOffset - e.updateRangeStart;
  		}

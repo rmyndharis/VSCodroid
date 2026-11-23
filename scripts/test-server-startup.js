@@ -76,7 +76,8 @@ function deferred() { let resolve; const promise = new Promise(answer => { resol
 class Store {
     constructor() { this.items = []; this.disposed = false; }
     add(item) { if (this.disposed) item.dispose(); else this.items.push(item); return item; }
-    dispose() { if (this.disposed) return; this.disposed = true; for (const item of this.items.splice(0)) item.dispose(); }
+    clear() { for (const item of this.items.splice(0)) item.dispose(); }
+    dispose() { if (this.disposed) return; this.disposed = true; this.clear(); }
 }
 class Disposable { constructor() { this.store = new Store(); } _register(item) { return this.store.add(item); } dispose() { this.store.dispose(); } }
 class Emitter {

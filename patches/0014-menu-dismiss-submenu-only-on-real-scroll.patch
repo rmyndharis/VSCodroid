@@ -26,10 +26,10 @@ Upstream: the same change is proposed against microsoft/vscode; this patch
 carries it until it lands in a version this build pins.
 
 diff --git a/src/vs/base/browser/ui/menu/menu.ts b/src/vs/base/browser/ui/menu/menu.ts
-index 7bb39f0..ca3b750 100644
+index f6b4122a..188837f4 100644
 --- a/src/vs/base/browser/ui/menu/menu.ts
 +++ b/src/vs/base/browser/ui/menu/menu.ts
-@@ -821,7 +821,17 @@ class SubmenuMenuActionViewItem extends BaseMenuActionViewItem {
+@@ -822,7 +822,17 @@ class SubmenuMenuActionViewItem extends BaseMenuActionViewItem {
  			}
  		}));
  

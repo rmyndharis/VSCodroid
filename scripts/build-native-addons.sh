@@ -39,7 +39,7 @@ ZEROMQ_OUTPUT="${ZEROMQ_OUTPUT:-$ROOT_DIR/android/app/src/main/assets/usr/lib/no
 # bundled libnode.so. NODE_MODULE_VERSION moves with the major, and a different
 # one gets every addon here rejected at load with no useful message: terminals
 # stop working and the log says only that a module could not be loaded. The rest
-# of the version may differ, and does at the 1.139.1 pin (`target` 24.20.0,
+# of the version may differ, and does at the 1.141.2 pin (`target` 24.21.0,
 # these headers 24.18.0). The check at the end compares the major of these
 # headers with the runtime actually being shipped, so those two cannot drift
 # apart silently; nothing here reads remote/.npmrc.
