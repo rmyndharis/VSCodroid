@@ -43,7 +43,11 @@ Two details that are load-bearing rather than tidy:
 The accepted pipe socket is paused whenever no client is attached. A socket with
 no 'data' listener is still flowing, so the bytes the host writes between its
 re-dial and the client's return would be emitted to nobody and dropped, which
-puts the hole back in a place nothing can see.
+puts the hole back in a place nothing can see. While paused without a client,
+its end, close, and error events are watched inside _extHostPipeStore so an
+error does not escape unhandled and a closed pipe clears _extHostSocket before
+the next re-dial; _pipeSockets clears _extHostPipeStore before taking ownership
+in _pipeStore.
 
 The grace now lives on the server. Upstream leaves it to the host, which starts
 it when its own socket closes; here that close is the reconnect mechanism, so
@@ -146,7 +150,7 @@ index 06d614be..42fd0d16 100644
  import { createRandomIPCHandle, NodeSocket, WebSocketNodeSocket } from '../../base/parts/ipc/node/ipc.net.js';
  import { IConfigurationService } from '../../platform/configuration/common/configuration.js';
  import { ILogService } from '../../platform/log/common/log.js';
-@@ -115,6 +117,22 @@ export class ExtensionHostConnection extends Disposable {
+@@ -115,6 +117,23 @@ export class ExtensionHostConnection extends Disposable {
  	private _remoteAddress: string;
  	private _extensionHostProcess: cp.ChildProcess | null;
  	private _connectionData: ConnectionData | null;
@@ -163,13 +167,14 @@ index 06d614be..42fd0d16 100644
 +	 */
 +	private _extHostNamedPipeServer: net.Server | null;
 +	private _extHostSocket: net.Socket | null;
++	private readonly _extHostPipeStore = this._register(new DisposableStore());
 +	private _pipeStore: DisposableStore | null;
 +	private _clientStore: DisposableStore | null;
 +	private _disconnectTimeout: Timeout | null;
  
  	constructor(
  		private readonly _reconnectionToken: string,
-@@ -127,14 +145,24 @@ export class ExtensionHostConnection extends Disposable {
+@@ -127,14 +146,24 @@ export class ExtensionHostConnection extends Disposable {
  		@IConfigurationService private readonly _configurationService: IConfigurationService
  	) {
  		super();
@@ -195,12 +200,13 @@ index 06d614be..42fd0d16 100644
  
  		this._log(`New connection established.`);
  	}
-@@ -156,26 +184,51 @@ export class ExtensionHostConnection extends Disposable {
+@@ -156,26 +185,52 @@ export class ExtensionHostConnection extends Disposable {
  		this._logService.error(`${this._logPrefix}${_str}`);
  	}
  
 -	private async _pipeSockets(extHostSocket: net.Socket, connectionData: ConnectionData): Promise<void> {
 +	private _pipeSockets(extHostSocket: net.Socket, connectionData: ConnectionData): void {
++		this._extHostPipeStore.clear();
  
  		const disposables = new DisposableStore();
 -		disposables.add(connectionData.socket);
@@ -261,7 +267,7 @@ index 06d614be..42fd0d16 100644
  
  		disposables.add(connectionData.socket.onData((e) => extHostSocket.write(e.buffer)));
  		disposables.add(Event.fromNodeEventEmitter<Buffer>(extHostSocket, 'data')((e) => {
-@@ -185,22 +238,138 @@ export class ExtensionHostConnection extends Disposable {
+@@ -185,22 +240,156 @@ export class ExtensionHostConnection extends Disposable {
  		if (connectionData.initialDataChunk.byteLength > 0) {
  			extHostSocket.write(connectionData.initialDataChunk.buffer);
  		}
@@ -290,7 +296,24 @@ index 06d614be..42fd0d16 100644
 +		this._extHostSocket = extHostSocket;
 +		if (this._connectionData) {
 +			this._pipeSockets(extHostSocket, this._connectionData);
++			return;
 +		}
++		// Watch the paused pipe while no client is attached: an unhandled 'error'
++		// would escape, and a dead socket left in _extHostSocket would reject later
++		// re-dials. _pipeSockets clears this store before taking over ownership.
++		this._extHostPipeStore.clear();
++		const onPausedExtHostGone = () => {
++			this._extHostPipeStore.clear();
++			if (this._extHostSocket === extHostSocket) {
++				this._extHostSocket = null;
++			}
++			if (!extHostSocket.destroyed) {
++				extHostSocket.destroy();
++			}
++		};
++		this._extHostPipeStore.add(Event.fromNodeEventEmitter<void>(extHostSocket, 'end')(onPausedExtHostGone));
++		this._extHostPipeStore.add(Event.fromNodeEventEmitter<void>(extHostSocket, 'close')(onPausedExtHostGone));
++		this._extHostPipeStore.add(Event.fromNodeEventEmitter<void>(extHostSocket, 'error')(onPausedExtHostGone));
 +	}
 +
 +	/**
@@ -331,6 +354,7 @@ index 06d614be..42fd0d16 100644
 +			this._pipeStore.dispose();
 +			this._pipeStore = null;
 +		}
++		this._extHostPipeStore.clear();
 +		if (this._connectionData) {
 +			this._connectionData.socket.dispose();
 +			this._connectionData = null;
@@ -408,7 +432,7 @@ index 06d614be..42fd0d16 100644
  		if (!this._extensionHostProcess) {
  			return;
  		}
-@@ -218,13 +387,29 @@ export class ExtensionHostConnection extends Disposable {
+@@ -218,13 +407,29 @@ export class ExtensionHostConnection extends Disposable {
  		}
  		const connectionData = new ConnectionData(_socket, initialDataChunk);
  
@@ -443,7 +467,7 @@ index 06d614be..42fd0d16 100644
  	}
  
  	private _cleanResources(): void {
-@@ -233,6 +418,29 @@ export class ExtensionHostConnection extends Disposable {
+@@ -233,6 +438,30 @@ export class ExtensionHostConnection extends Disposable {
  			return;
  		}
  		this._disposed = true;
@@ -459,6 +483,7 @@ index 06d614be..42fd0d16 100644
 +			this._pipeStore.dispose();
 +			this._pipeStore = null;
 +		}
++		this._extHostPipeStore.dispose();
 +		// Closed before the socket is destroyed, so a host that reacts to the close
 +		// by dialling again is refused by the operating system rather than accepted
 +		// and dropped in a loop.
@@ -473,7 +498,7 @@ index 06d614be..42fd0d16 100644
  		if (this._connectionData) {
  			this._connectionData.socket.end();
  			this._connectionData = null;
-@@ -287,7 +495,11 @@ export class ExtensionHostConnection extends Disposable {
+@@ -287,7 +516,11 @@ export class ExtensionHostConnection extends Disposable {
  			if (this._configurationService.getValue<boolean>('extensions.supportNodeGlobalNavigator')) {
  				args.push('--supportGlobalNavigator');
  			}
@@ -486,7 +511,7 @@ index 06d614be..42fd0d16 100644
  			const pid = this._extensionHostProcess.pid;
  			this._log(`<${pid}> Launched Extension Host Process.`);
  
-@@ -313,9 +525,13 @@ export class ExtensionHostConnection extends Disposable {
+@@ -313,9 +546,13 @@ export class ExtensionHostConnection extends Disposable {
  			});
  
  			if (extHostNamedPipeServer) {

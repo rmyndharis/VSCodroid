@@ -45,16 +45,26 @@ class WorkerHostShutdownPatchTest {
         return patch.readText()
     }
 
+    /** Strips patch `+` prefixes and omits removed `-` or diff header lines before matching. */
+    private fun addedLines(): String =
+        source().lineSequence()
+            .filter { it.startsWith("+") && !it.startsWith("+++") }
+            .map { it.drop(1) }
+            .joinToString("\n")
+
     @Test
     fun `the shutdown waits for the worker to exit`() {
-        val js = source()
-        assertTrue(js.contains("once('exit'")) {
+        val js = addedLines()
+        assertTrue(js.contains("this._worker.on('exit',") || js.contains("once('exit'")) {
             "The adaptor no longer waits for the worker's exit event. Without it the " +
                 "thread is stopped on a timer, and a Pty Host still writing a terminal's " +
                 "last output loses whatever had not been flushed."
         }
-        assertTrue(js.contains("clearTimeout(deadline)")) {
-            "The exit no longer cancels the deadline, so the terminate() fires anyway " +
+        assertTrue(
+            Regex("""this\._worker\.(?:on|once)\('exit',[\s\S]*?clearTimeout\(this\._killTimer\);""")
+                .containsMatchIn(js),
+        ) {
+            "The exit no longer cancels the grace timer, so terminate() fires anyway " +
                 "against a thread that has already gone."
         }
         assertTrue(!Regex("""terminate\(\);\s*\},\s*\d""").containsMatchIn(js)) {
@@ -66,13 +76,16 @@ class WorkerHostShutdownPatchTest {
 
     @Test
     fun `the wait is bounded by a ceiling that is named`() {
-        val js = source()
+        val js = addedLines()
         assertTrue(Regex("""const WORKER_EXIT_GRACE_MS = [\d_]+;""").containsMatchIn(js)) {
             "The ceiling on the wait is gone or is no longer a named constant. A Worker " +
                 "keeps its host process alive, so a module that never exits would hold the " +
                 "whole server open, and a bound nobody can find is a bound nobody can weigh."
         }
-        assertTrue(js.contains("setTimeout(() => { this._worker.terminate(); }, WORKER_EXIT_GRACE_MS)")) {
+        assertTrue(
+            Regex("""this\._killTimer\s*=\s*setTimeout\(\(\)\s*=>\s*\{\s*this\._killTimer\s*=\s*undefined;\s*this\._worker\.terminate\(\);\s*\},\s*WORKER_EXIT_GRACE_MS\)""")
+                .containsMatchIn(js),
+        ) {
             "Nothing stops a worker that never answers the disconnect. The wait has to " +
                 "end somewhere, and that somewhere is this timer."
         }
