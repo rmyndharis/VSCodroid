@@ -466,3 +466,5 @@
 0053 suggest refilter while composing|out/vs/code/browser/workbench/workbench.js|this._refilterWhileComposing()
 # The call in the cursor listener that follows a caret typing moved while a keyboard composes a word.
 0054 suggest while a keyboard composes|out/vs/code/browser/workbench/workbench.js|this._typedWhileComposing && this._composesTypedLetters()
+# Wildcard 127.0.0.1 ports removed from webWorkerExtensionHostIframe.html connect-src.
+0055 webworker iframe connect-src|out/vs/workbench/services/extensions/worker/webWorkerExtensionHostIframe.html|connect-src 'self' https: wss: http://localhost:* ws://localhost:*;

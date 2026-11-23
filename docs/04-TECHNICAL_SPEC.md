@@ -1738,6 +1738,7 @@ flowchart TD
   P --> P52["0052 suggest: a retargeted touch outside the list closes it"]
   P --> P53["0053 suggest: an open list follows the letters of a composition"]
   P --> P54["0054 suggest: a word typed while a keyboard composes opens the list"]
+  P --> P55["0055 worker iframe: restrict connect-src off wildcard 127.0.0.1 ports"]
 ```
 
 Five of these are load-bearing in ways their titles understate:

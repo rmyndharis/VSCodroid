@@ -1,0 +1,26 @@
+Remove wildcard 127.0.0.1 ports from webWorkerExtensionHostIframe.html connect-src.
+
+The web worker extension host iframe runs same-origin with the editor server on
+http://127.0.0.1:<editorPort>, so all editor HTTP and WebSocket connections
+already match 'self'. Leaving http://127.0.0.1:* and ws://127.0.0.1:* in
+connect-src lets worker code reach arbitrary local ports on 127.0.0.1 where
+browser cookies (including vscode-tkn) are shared across ports on the same host.
+
+Removing http://127.0.0.1:* and ws://127.0.0.1:* keeps 'self' for the editor
+server and retains https:, wss:, http://localhost:* and ws://localhost:* for
+remote and local dev-server connections, without modifying the inline script
+body or its pinned SHA-256 hash.
+
+diff --git a/src/vs/workbench/services/extensions/worker/webWorkerExtensionHostIframe.html b/src/vs/workbench/services/extensions/worker/webWorkerExtensionHostIframe.html
+index 3c3c5863..fe9f6446 100644
+--- a/src/vs/workbench/services/extensions/worker/webWorkerExtensionHostIframe.html
++++ b/src/vs/workbench/services/extensions/worker/webWorkerExtensionHostIframe.html
+@@ -5,7 +5,7 @@
+ 			default-src 'none';
+ 			child-src 'self' data: blob:;
+ 			script-src 'self' 'unsafe-eval' 'sha256-daEgfo2VIXpx2Np71KqCCbkeQwv+68vPrx54XRcbdcs=' https: http://localhost:* blob:;
+-			connect-src 'self' https: wss: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*;"/>
++			connect-src 'self' https: wss: http://localhost:* ws://localhost:*;"/>
+ 	</head>
+ 	<body>
+ 	<script>
