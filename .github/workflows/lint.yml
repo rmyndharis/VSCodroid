@@ -406,6 +406,7 @@ jobs:
           node scripts/test-xdg-open.js
           node scripts/test-page-scripts.js
           node scripts/test-server-serve-file.js
+          node scripts/test-worker-thread-patches.js
 
       - name: Run lint
         working-directory: android

@@ -13,7 +13,9 @@ bootstrap-fork gains the bridge, before anything that gates on process.send. In 
 real fork isMainThread is true and none of it runs, so the same file serves both.
 The parent cannot close a Worker's channel the way it closes a fork's, so
 shutdown is asked for in-band with __vsc_disconnect and the module runs its
-normal teardown.
+normal teardown. Once synchronous disconnect listeners return, bootstrap-fork
+closes parentPort so the Worker event loop drains naturally and runs process
+exit handlers instead of waiting out the grace timer until terminate().
 
 workerAsChildProcess.ts is a new adaptor presenting the small part of the
 ChildProcess surface the IPC actually touches: send, connected, kill, pid, the
@@ -24,8 +26,9 @@ behaving oddly on a device. Two details are load-bearing: a Worker rejects
 otherwise throws ERR_WORKER_INVALID_EXEC_ARGV before the module loads; and an
 intentional kill is reported as (0, <the signal asked for>) because callers read a
 non-zero code without a signal as a crash. kill() takes that signal and honours
-SIGKILL by terminating at once; it used to take none, so a caller escalating past
-the graceful path silently got the graceful path.
+SIGKILL by terminating at once, including when a caller escalates after an
+earlier graceful kill; it used to take none, so a caller escalating past the
+graceful path silently got the graceful path.
 
 The graceful path itself waits for the worker's exit event. It used to pause for a
 fixed 200ms and terminate whatever the module was doing, which is shorter than the
@@ -49,7 +52,7 @@ diff --git a/src/bootstrap-fork.ts b/src/bootstrap-fork.ts
 index b87e855b..57e08d49 100644
 --- a/src/bootstrap-fork.ts
 +++ b/src/bootstrap-fork.ts
-@@ -6,6 +6,36 @@
+@@ -6,6 +6,63 @@
  import * as performance from './vs/base/common/performance.js';
  import { removeGlobalNodeJsModuleLookupPaths, devInjectNodeModuleLookupPath } from './bootstrap-node.js';
  import { bootstrapESM } from './bootstrap-esm.js';
@@ -69,15 +72,42 @@ index b87e855b..57e08d49 100644
 +		connected?: boolean;
 +		disconnect?: () => void;
 +	};
++	let portClosed = false;
++	const closePort = () => {
++		if (!portClosed) {
++			portClosed = true;
++			port.close();
++		}
++	};
++	let disconnecting = false;
++	const disconnect = () => {
++		if (disconnecting) {
++			return;
++		}
++		if (!proc.connected) {
++			closePort();
++			return;
++		}
++		disconnecting = true;
++		proc.connected = false;
++		try {
++			process.emit('disconnect' as never);
++		} finally {
++			disconnecting = false;
++			closePort();
++		}
++	};
 +	proc.send = (message: unknown) => { port.postMessage(message); return true; };
 +	proc.connected = true;
-+	proc.disconnect = () => { process.emit('disconnect' as never); };
++	proc.disconnect = disconnect;
 +	port.on('message', (message: unknown) => {
 +		// The parent cannot close a Worker's channel the way it closes a fork's, so
 +		// it asks for shutdown in-band and the module runs its normal teardown.
++		// Closing parentPort strictly after disconnect listeners return lets the
++		// Worker event loop drain naturally and fire process 'exit' handlers instead
++		// of hanging until the parent's grace deadline calls terminate().
 +		if (message && typeof message === 'object' && '__vsc_disconnect' in message) {
-+			proc.connected = false;
-+			process.emit('disconnect' as never);
++			disconnect();
 +			return;
 +		}
 +		process.emit('message' as never, message as never);
@@ -91,7 +121,7 @@ new file mode 100644
 index 00000000..e4fc8ae9
 --- /dev/null
 +++ b/src/vs/base/node/workerAsChildProcess.ts
-@@ -0,0 +1,200 @@
+@@ -0,0 +1,210 @@
 +/*---------------------------------------------------------------------------------------------
 + *  Copyright (c) Microsoft Corporation. All rights reserved.
 + *  Licensed under the MIT License. See License.txt in the project root for license information.
@@ -140,6 +170,10 @@ index 00000000..e4fc8ae9
 +
 +	private readonly _worker: Worker;
 +	private _connected = true;
++	private _exited = false;
++	private _killed = false;
++	private _killSignal: NodeJS.Signals | number = 'SIGTERM';
++	private _killTimer: ReturnType<typeof setTimeout> | undefined;
 +
 +	constructor(modulePath: string, args: string[], options: ForkOptions) {
 +		super();
@@ -175,7 +209,12 @@ index 00000000..e4fc8ae9
 +		});
 +
 +		this._worker.on('exit', (code: number) => {
++			this._exited = true;
 +			this._connected = false;
++			if (this._killTimer !== undefined) {
++				clearTimeout(this._killTimer);
++				this._killTimer = undefined;
++			}
 +			// A fork reports (code, signal); a Worker only has a code, and reports 1
 +			// for a terminate() we asked for. Callers treat a non-zero code without
 +			// SIGTERM as a crash and log it, so an intentional shutdown is reported
@@ -183,9 +222,6 @@ index 00000000..e4fc8ae9
 +			this.emit('exit', this._killed ? 0 : code, this._killed ? this._killSignal : null);
 +		});
 +	}
-+
-+	private _killed = false;
-+	private _killSignal: NodeJS.Signals | number = 'SIGTERM';
 +
 +	/**
 +	 * The worker's thread id, NOT an OS pid -- a Worker has none, it runs inside
@@ -236,6 +272,26 @@ index 00000000..e4fc8ae9
 +	}
 +
 +	kill(signal?: NodeJS.Signals | number): void {
++		if (this._exited) {
++			return;
++		}
++
++		// SIGKILL means stop now, and a caller reaching for it has already decided
++		// the graceful path did not work. Checking this before the _killed guard
++		// lets a caller escalate from an earlier graceful kill instead of waiting
++		// out the rest of WORKER_EXIT_GRACE_MS.
++		if (signal === 'SIGKILL' || signal === 9) {
++			this._killed = true;
++			this._connected = false;
++			this._killSignal = 'SIGKILL';
++			if (this._killTimer !== undefined) {
++				clearTimeout(this._killTimer);
++				this._killTimer = undefined;
++			}
++			this._worker.terminate();
++			return;
++		}
++
 +		if (this._killed) {
 +			return;
 +		}
@@ -243,40 +299,24 @@ index 00000000..e4fc8ae9
 +		this._connected = false;
 +		this._killSignal = signal ?? 'SIGTERM';
 +
-+		// SIGKILL means stop now, and a caller reaching for it has already decided
-+		// the graceful path did not work. Without the parameter this method took no
-+		// signal at all, so such a caller silently got the 200ms path below -- the
-+		// exact behaviour it was escalating away from, with nothing to say so.
-+		// Both callers in this tree pass no signal today (ipc.cp.ts disposeClient,
-+		// extensionHostConnection dispose), so this changes nothing until one of
-+		// them escalates.
-+		if (signal === 'SIGKILL' || signal === 9) {
-+			this._worker.terminate();
-+			return;
-+		}
-+
 +		// Give the module the disconnect it would get from a closing IPC channel,
 +		// so its own shutdown runs, then wait for it to go. terminate() alone would
-+		// drop pending work -- for the Pty Host that means orphaned shells.
++		// drop pending work; for the Pty Host that means orphaned shells.
 +		try {
 +			this._worker.postMessage({ __vsc_disconnect: true });
 +		} catch {
 +			// The thread may already be gone; the deadline below covers it.
 +		}
 +
-+		// Waited on, not timed. This used to terminate() 200ms later whatever the
-+		// module was doing, which is a deadline wearing a shutdown's clothes: the
-+		// Pty Host writes a terminal's remaining output as it tears down, and
-+		// anything still buffered at 200ms was cut off mid-write with nothing said.
-+		// The exit event is the module reporting that its teardown finished, and
-+		// waiting for it costs nothing in the normal case, where it arrives first.
-+		//
-+		// The bound stays, because a wait with no bound is a hang: a Worker keeps
-+		// its host process alive, so a module that never exits would keep the
-+		// server open for good. It is stated as WORKER_EXIT_GRACE_MS rather than
-+		// buried here, and it is a ceiling rather than a pause.
-+		const deadline = setTimeout(() => { this._worker.terminate(); }, WORKER_EXIT_GRACE_MS);
-+		this._worker.once('exit', () => clearTimeout(deadline));
++		// Waited on, not timed. The exit event is the module reporting that its
++		// teardown finished, and closing parentPort on disconnect lets a healthy
++		// worker exit in milliseconds. The bound stays because a Worker keeps its
++		// host process alive, so a module that never exits would hold the server
++		// open; WORKER_EXIT_GRACE_MS is that ceiling.
++		this._killTimer = setTimeout(() => {
++			this._killTimer = undefined;
++			this._worker.terminate();
++		}, WORKER_EXIT_GRACE_MS);
 +	}
 +}
 +
