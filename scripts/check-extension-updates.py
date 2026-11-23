@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Require a new directory version for changed bundled manifests or browser entries.
+"""Require a new directory version for changed bundled manifests, entries, or translations.
 
 A directory is compared with its content in the first release tag that carries it,
 which is what devices hold. One that no release tag carries yet has reached no
@@ -49,6 +49,39 @@ def first_releases():
     return first
 
 
+def watched_files(directory, original, current, original_files):
+    """Files whose content changes require bumping the extension's directory version."""
+    files = set(directory.glob("package.nls*.json"))
+    files.update(
+        directory / name
+        for name in original_files
+        if name.startswith("package.nls") and name.endswith(".json")
+    )
+    for manifest in (original, current):
+        for field in ("browser", "main"):
+            entry = manifest.get(field)
+            if isinstance(entry, str) and entry:
+                files.add(directory / entry)
+
+    l10n_dirs = {"l10n"}
+    for manifest in (original, current):
+        l10n_rel = manifest.get("l10n")
+        if isinstance(l10n_rel, str) and l10n_rel:
+            l10n_dirs.add(Path(l10n_rel).as_posix().rstrip("/"))
+
+    for l10n_rel in l10n_dirs:
+        l10n_path = directory / l10n_rel
+        if l10n_path.is_dir():
+            files.update(l10n_path.glob("bundle.l10n*.json"))
+        prefix = f"{l10n_rel}/bundle.l10n"
+        files.update(
+            directory / name
+            for name in original_files
+            if name.startswith(prefix) and name.endswith(".json")
+        )
+    return sorted(files)
+
+
 def problems():
     failures = []
     released = first_releases()
@@ -62,14 +95,13 @@ def problems():
         current = json.loads(manifest.read_text())
         if json.dumps(current, sort_keys=True) != json.dumps(original, sort_keys=True):
             failures.append(f"{directory.name}: package.json changed without a directory version bump")
-        original_files = git("ls-tree", "-r", "--name-only", f"{baseline}:{directory.relative_to(ROOT).as_posix()}")
-        files = set(directory.glob("package.nls*.json"))
-        files.update(directory / name for name in original_files.splitlines() if name.startswith("package.nls") and name.endswith(".json"))
-        if original.get("browser"):
-            files.add(directory / original["browser"])
-        for file in sorted(files):
+        original_files = git(
+            "ls-tree", "-r", "--name-only", f"{baseline}:{directory.relative_to(ROOT).as_posix()}"
+        ).splitlines()
+        for file in watched_files(directory, original, current, original_files):
+            display = file.relative_to(directory).as_posix()
             if not file.is_file():
-                failures.append(f"{directory.name}: {file.name} removed without a directory version bump")
+                failures.append(f"{directory.name}: {display} removed without a directory version bump")
                 continue
             relative = file.relative_to(ROOT).as_posix()
             existed = subprocess.run(
@@ -77,7 +109,7 @@ def problems():
                 capture_output=True,
             ).returncode == 0
             if not existed:
-                failures.append(f"{directory.name}: {file.name} added without a directory version bump")
+                failures.append(f"{directory.name}: {display} added without a directory version bump")
                 continue
             before = git("show", f"{baseline}:{relative}")
             now = file.read_text().strip()
@@ -86,7 +118,7 @@ def problems():
                 if file.suffix == ".json" else before == now
             )
             if not same:
-                failures.append(f"{directory.name}: {file.name} changed without a directory version bump")
+                failures.append(f"{directory.name}: {display} changed without a directory version bump")
     return failures
 
 
@@ -96,5 +128,5 @@ if __name__ == "__main__":
     for failure in failures:
         print(failure)
     if not failures:
-        print("ok: bundled extension manifests and browser entries retain their directory version")
+        print("ok: bundled extension manifests, entry points and translations retain their directory version")
     sys.exit(bool(failures))
