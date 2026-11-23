@@ -25,6 +25,7 @@ import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.cert.Certificate
 import java.util.Base64
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import androidx.core.content.edit
@@ -1933,28 +1934,32 @@ class FirstRunSetup(
         }
 
         val sshConfig = File(sshDir, "config")
-        if (!sshConfig.exists()) {
-            // Atomic and loud, the pair createBashProfile is, and this was the
-            // last exists()-guarded writer in the file still using writeText.
-            // writeText creates and truncates before writing a byte, so a kill or
-            // a full disk here left an empty config that satisfies the guard
-            // above for ever, on a writer runSetupLocked reaches only when the
-            // version moves and that repairTruncatedSetupFiles does not cover.
-            // What that costs is every clone, fetch and push over ssh: an empty
-            // config is still readable, so GIT_SSH_COMMAND passes it with -F, and
-            // without its absolute IdentityFile and UserKnownHostsFile the Termux
-            // ssh resolves ~ to its own compiled-in prefix, which is not a path
-            // this app can read.
-            // Through a link, as createBashrc writes: a config kept in a dotfiles
-            // folder and linked here was replaced by a copy, which ssh then read
-            // while the person's own file came back beside it unread.
-            if (!writeSshConfig()) {
-                // Not thrown for a link into a folder that has gone, for the reason createBashrc gives.
-                if (!Files.isSymbolicLink(sshConfig.toPath())) throw IOException("could not write $sshConfig")
-                Logger.w(tag, linkedFileUnwritten(sshConfig))
-                return
+        val configured = holdingWriteLock(sshConfig) {
+            if (!sshConfig.exists()) {
+                // Atomic and loud, the pair createBashProfile is, and this was the
+                // last exists()-guarded writer in the file still using writeText.
+                // writeText creates and truncates before writing a byte, so a kill or
+                // a full disk here left an empty config that satisfies the guard
+                // above for ever, on a writer runSetupLocked reaches only when the
+                // version moves and that repairTruncatedSetupFiles does not cover.
+                // What that costs is every clone, fetch and push over ssh: an empty
+                // config is still readable, so GIT_SSH_COMMAND passes it with -F, and
+                // without its absolute IdentityFile and UserKnownHostsFile the Termux
+                // ssh resolves ~ to its own compiled-in prefix, which is not a path
+                // this app can read.
+                // Through a link, as createBashrc writes: a config kept in a dotfiles
+                // folder and linked here was replaced by a copy, which ssh then read
+                // while the person's own file came back beside it unread.
+                if (!writeSshConfig()) {
+                    // Not thrown for a link into a folder that has gone, for the reason createBashrc gives.
+                    if (!Files.isSymbolicLink(sshConfig.toPath())) throw IOException("could not write $sshConfig")
+                    Logger.w(tag, linkedFileUnwritten(sshConfig))
+                    return@holdingWriteLock false
+                }
             }
+            true
         }
+        if (!configured) return
 
         Logger.i(tag, "SSH defaults configured")
     }
@@ -2016,7 +2021,8 @@ class FirstRunSetup(
 
         // Append npm/npx functions to .bashrc if not already present
         val bashrc = File(context.filesDir, "home/.bashrc")
-        if (bashrc.exists()) {
+        holdingWriteLock(bashrc) {
+            if (!bashrc.exists()) return@holdingWriteLock
             // Kept as bytes and written back unchanged. Decoding to search for
             // the guards is fine -- they are ASCII -- but decoding to REWRITE
             // is not: readText replaces any byte that is not valid UTF-8 with
@@ -2150,20 +2156,20 @@ class FirstRunSetup(
         // set it, with nothing on screen and nothing in the log to say so. The
         // owned lines are ASCII, so encoding the result back through the same
         // mapping is lossless as well.
-        val existing = if (npmrc.exists()) String(npmrc.readBytes(), Charsets.ISO_8859_1) else ""
-        val carriedOver = existing
-            .lines()
-            .filterNot { ownedLine.containsMatchIn(it) }
-            .dropLastWhile { it.isBlank() }
-        val expectedContent =
-            (listOf("script-shell=$bashPath", "os=android") + carriedOver)
-                .joinToString("\n", postfix = "\n")
-        // Compared against that same decoding rather than a second `readText`.
-        // A file holding one byte that is not valid UTF-8 would never compare
-        // equal to what was just written to it, so every launch would rewrite an
-        // already-correct file for ever.
-        var written = existing == expectedContent
-        if (!written) {
+        val written = holdingWriteLock(npmrc, throughLink = false) {
+            val existing = if (npmrc.exists()) String(npmrc.readBytes(), Charsets.ISO_8859_1) else ""
+            val carriedOver = existing
+                .lines()
+                .filterNot { ownedLine.containsMatchIn(it) }
+                .dropLastWhile { it.isBlank() }
+            val expectedContent =
+                (listOf("script-shell=$bashPath", "os=android") + carriedOver)
+                    .joinToString("\n", postfix = "\n")
+            // Compared against that same decoding rather than a second `readText`.
+            // A file holding one byte that is not valid UTF-8 would never compare
+            // equal to what was just written to it, so every launch would rewrite an
+            // already-correct file for ever.
+            if (existing == expectedContent) return@holdingWriteLock true
             // Atomically, like every other setup file this class writes. This one
             // was the exception, and it is a bad one to be: `writeText` truncates
             // before it writes, so a write that runs out of disk leaves an empty
@@ -2183,12 +2189,13 @@ class FirstRunSetup(
             // does differ, but only on a launch that has room, which is the
             // launch that would not have broken it.
             npmrc.parentFile?.mkdirs()
-            written = writeAtomically(npmrc) { it.write(expectedContent.toByteArray(Charsets.ISO_8859_1)) }
-            if (written) {
+            val ok = writeAtomically(npmrc) { it.write(expectedContent.toByteArray(Charsets.ISO_8859_1)) }
+            if (ok) {
                 Logger.d(tag, "Updated ${npmrc.name}")
             } else {
                 Logger.w(tag, "Could not update ${npmrc.name}; it keeps whatever it held before")
             }
+            ok
         }
         // Only once the global file holds the lines: until then the linked file's are all npm has.
         if (linked && written) dropDeviceLinesFromLinkedNpmrc(ownNpmrc)
@@ -2205,18 +2212,20 @@ class FirstRunSetup(
      * a script shell or an `os` the person set stays and still overrides the global file.
      */
     private fun dropDeviceLinesFromLinkedNpmrc(link: File) {
-        // Latin-1 and a split on the line feed alone, so every other byte comes back as it was.
-        val lines = try {
-            String(link.readBytes(), Charsets.ISO_8859_1).split("\n")
-        } catch (_: IOException) {
-            return // A link to nothing.
-        }
-        val kept = lines.filterNot { DEVICE_NPMRC_LINE.containsMatchIn(it) }
-        if (kept.size == lines.size) return
-        if (writeAtomically(link, throughLink = true) { it.write(kept.joinToString("\n").toByteArray(Charsets.ISO_8859_1)) }) {
-            Logger.i(tag, "Took this device's lines out of the linked .npmrc; npm's global file holds them")
-        } else {
-            Logger.w(tag, "Could not take this device's lines out of the linked .npmrc; npm reads them before the global file")
+        holdingWriteLock(link) {
+            // Latin-1 and a split on the line feed alone, so every other byte comes back as it was.
+            val lines = try {
+                String(link.readBytes(), Charsets.ISO_8859_1).split("\n")
+            } catch (_: IOException) {
+                return@holdingWriteLock // A link to nothing.
+            }
+            val kept = lines.filterNot { DEVICE_NPMRC_LINE.containsMatchIn(it) }
+            if (kept.size == lines.size) return@holdingWriteLock
+            if (writeAtomically(link, throughLink = true) { it.write(kept.joinToString("\n").toByteArray(Charsets.ISO_8859_1)) }) {
+                Logger.i(tag, "Took this device's lines out of the linked .npmrc; npm's global file holds them")
+            } else {
+                Logger.w(tag, "Could not take this device's lines out of the linked .npmrc; npm reads them before the global file")
+            }
         }
     }
 
@@ -2328,151 +2337,155 @@ class FirstRunSetup(
      */
     fun repairTruncatedSetupFiles() {
         val bashrc = File(context.filesDir, "home/.bashrc")
-        if (bashrc.isFile) {
-            // Read as bytes and decoded only to decide: what is kept aside below is the file itself,
-            // and a decoder turns every byte that is not UTF-8 into U+FFFD.
-            val bytes = runCatching { bashrc.readBytes() }.getOrNull()
-            val text = bytes?.let { String(it, Charsets.UTF_8) }
-            val emptied = text != null && isLeftBlank(text)
-            val headerWithoutBody = text != null &&
-                text.startsWith(BASHRC_HEADER) &&
-                !text.contains("export PROJECTS_DIR")
-            // A header with nothing after it is a cut-short copy of ours. Text after the header is a
-            // person's own or a longer cut, and the header proves nothing about it.
-            val beyondHeader = headerWithoutBody && text.orEmpty().removePrefix(BASHRC_HEADER).isNotBlank()
-            // And a link is the file they keep elsewhere, often in a repository other machines read:
-            // the rewrite would put this device's paths into what the link names. Left as it is.
-            val theirs = beyondHeader && Files.isSymbolicLink(bashrc.toPath())
-            if ((emptied || headerWithoutBody) && !theirs) {
-                // Written OVER, never deleted first. Deleting is what satisfied
-                // createBashrc's `!exists()` guard, and it is also what let this
-                // repair finish the job the full disk started: the rewrite can
-                // fail, and the file was then absent -- outside the `isFile`
-                // test this branch re-enters through, outside every per-launch
-                // appender's own `exists()` guard, and outside createBashrc,
-                // which runSetupLocked reaches only when the package identity
-                // changes (versionName, versionCode or update time). So one launch that could not write turned a
-                // repairable install into one nothing repairs until the next app
-                // update. [writeBashrc] renames over the path instead: a failed
-                // write leaves the bad file exactly where it was, and this
-                // branch finds it again on the next launch. For the one shape
-                // where an appender behind this one can take that retry away
-                // before the next launch gets here, see the KDoc.
-                //
-                // Text after the header is kept aside before the rewrite, and the rewrite waits
-                // for the next launch if it cannot be kept.
-                val aside = File(context.filesDir, "home/.vscodroid/bashrc.before-repair")
-                val kept = !beyondHeader || run {
-                    aside.parentFile?.mkdirs()
-                    // The same text again is a rewrite that failed after the text was kept. Anything
-                    // else at the name is an earlier repair's, the only copy of what that one replaced,
-                    // so it moves to a free name of its own before this one takes the place.
-                    val same = runCatching { aside.isFile && aside.readBytes().contentEquals(bytes) }.getOrDefault(false)
-                    same || (
-                        (!aside.exists() || aside.renameTo(
-                            generateSequence(aside.lastModified()) { it + 1 }
-                                .map { File("${aside.path}.$it") }.first { !it.exists() },
-                        )) && writeAtomically(aside, { Logger.w(tag, it) }) { it.write(bytes ?: ByteArray(0)) }
+        holdingWriteLock(bashrc) {
+            if (bashrc.isFile) {
+                // Read as bytes and decoded only to decide: what is kept aside below is the file itself,
+                // and a decoder turns every byte that is not UTF-8 into U+FFFD.
+                val bytes = runCatching { bashrc.readBytes() }.getOrNull()
+                val text = bytes?.let { String(it, Charsets.UTF_8) }
+                val emptied = text != null && isLeftBlank(text)
+                val headerWithoutBody = text != null &&
+                    text.startsWith(BASHRC_HEADER) &&
+                    !text.contains("export PROJECTS_DIR")
+                // A header with nothing after it is a cut-short copy of ours. Text after the header is a
+                // person's own or a longer cut, and the header proves nothing about it.
+                val beyondHeader = headerWithoutBody && text.orEmpty().removePrefix(BASHRC_HEADER).isNotBlank()
+                // And a link is the file they keep elsewhere, often in a repository other machines read:
+                // the rewrite would put this device's paths into what the link names. Left as it is.
+                val theirs = beyondHeader && Files.isSymbolicLink(bashrc.toPath())
+                if ((emptied || headerWithoutBody) && !theirs) {
+                    // Written OVER, never deleted first. Deleting is what satisfied
+                    // createBashrc's `!exists()` guard, and it is also what let this
+                    // repair finish the job the full disk started: the rewrite can
+                    // fail, and the file was then absent -- outside the `isFile`
+                    // test this branch re-enters through, outside every per-launch
+                    // appender's own `exists()` guard, and outside createBashrc,
+                    // which runSetupLocked reaches only when the package identity
+                    // changes (versionName, versionCode or update time). So one launch that could not write turned a
+                    // repairable install into one nothing repairs until the next app
+                    // update. [writeBashrc] renames over the path instead: a failed
+                    // write leaves the bad file exactly where it was, and this
+                    // branch finds it again on the next launch. For the one shape
+                    // where an appender behind this one can take that retry away
+                    // before the next launch gets here, see the KDoc.
+                    //
+                    // Text after the header is kept aside before the rewrite, and the rewrite waits
+                    // for the next launch if it cannot be kept.
+                    val aside = File(context.filesDir, "home/.vscodroid/bashrc.before-repair")
+                    val kept = !beyondHeader || run {
+                        aside.parentFile?.mkdirs()
+                        // The same text again is a rewrite that failed after the text was kept. Anything
+                        // else at the name is an earlier repair's, the only copy of what that one replaced,
+                        // so it moves to a free name of its own before this one takes the place.
+                        val same = runCatching { aside.isFile && aside.readBytes().contentEquals(bytes) }.getOrDefault(false)
+                        same || (
+                            (!aside.exists() || aside.renameTo(
+                                generateSequence(aside.lastModified()) { it + 1 }
+                                    .map { File("${aside.path}.$it") }.first { !it.exists() },
+                            )) && writeAtomically(aside, { Logger.w(tag, it) }) { it.write(bytes ?: ByteArray(0)) }
+                            )
+                    }
+                    // The rewrite is not expected to throw (a failed write is
+                    // reported as false), but a throw must not skip the settings
+                    // repair below either.
+                    val rewritten = kept && runCatching { writeBashrc() }
+                        .onFailure { Logger.e(tag, "The .bashrc rewrite threw", it as? Exception) }
+                        .getOrDefault(false)
+                    if (rewritten) {
+                        Logger.i(tag, "Rewrote a half-written .bashrc")
+                    } else {
+                        Logger.e(
+                            tag,
+                            "Could not rewrite the half-written .bashrc. It is unchanged rather " +
+                                "than gone, so there is still something for the next launch to repair.",
                         )
+                    }
+                } else if (theirs) {
+                    Logger.i(tag, "Left a linked .bashrc that holds text of its own after the header as it is")
                 }
-                // The rewrite is not expected to throw (a failed write is
-                // reported as false), but a throw must not skip the settings
-                // repair below either.
-                val rewritten = kept && runCatching { writeBashrc() }
+            } else if (!bashrc.exists() && bashrc.parentFile?.isDirectory == true) {
+                // The parent test is not defensive tidying; without it this arm fired
+                // on every fresh install and could only fail. SplashActivity runs this
+                // repair ahead of the isFirstRun branch, and `home/` is created by
+                // createDirectories() inside runSetupLocked, which has not run yet:
+                // none of the repairs before this one goes near it. So writeBashrc
+                // opened `home/.bashrc.tmp~` in a directory that was not there, got
+                // FileNotFoundException, returned false, and the branch below logged
+                // at ERROR that the terminal has no prompt and no PATH, on 100% of
+                // first launches and on every relaunch after a LOW_STORAGE refusal.
+                // In a release build logcat is the only trace this project has, so a
+                // line that is always wrong costs the lines that are not.
+                //
+                // Absent, which is the one shape nothing covered. `createBashrc` is
+                // reached only from runSetupLocked, on a version change, and every
+                // per-launch appender opens with `bashrc.exists()` or returns on its
+                // absence -- so `rm ~/.bashrc` in the bundled terminal left the shell
+                // with no prompt, no PROJECTS_DIR, no aliases, no npm/npx/claude and
+                // no startup cd until the next app update.
+                //
+                // Recreating is not the "never replace what could be the user's own
+                // edit" line this method draws elsewhere: a file that is not there
+                // holds nothing of theirs, and this writes only what the app owns.
+                // `isFile` above rather than `exists()` keeps a directory at the path
+                // out of both branches; mkdirs would not repair that and neither
+                // would this.
+                //
+                // A link to a file that has gone reads as absent too. It is written
+                // through, never replaced (see linkTarget): the file is made where the
+                // link points, or, when the folder it points into has gone as well,
+                // nothing is written and the link stays, since making that folder
+                // again would undo a move the person made.
+                val linked = Files.isSymbolicLink(bashrc.toPath())
+                val written = runCatching { writeBashrc() }
                     .onFailure { Logger.e(tag, "The .bashrc rewrite threw", it as? Exception) }
                     .getOrDefault(false)
-                if (rewritten) {
-                    Logger.i(tag, "Rewrote a half-written .bashrc")
+                if (written) {
+                    Logger.i(tag, if (linked) "Wrote the file a .bashrc link names, which had gone" else "Recreated a .bashrc that had gone")
+                } else if (linked) {
+                    Logger.w(tag, LINKED_BASHRC_UNWRITTEN)
                 } else {
-                    Logger.e(
-                        tag,
-                        "Could not rewrite the half-written .bashrc. It is unchanged rather " +
-                            "than gone, so there is still something for the next launch to repair.",
-                    )
+                    Logger.e(tag, "Could not recreate the missing .bashrc; the terminal keeps no prompt, no PATH exports and no npm")
                 }
-            } else if (theirs) {
-                Logger.i(tag, "Left a linked .bashrc that holds text of its own after the header as it is")
-            }
-        } else if (!bashrc.exists() && bashrc.parentFile?.isDirectory == true) {
-            // The parent test is not defensive tidying; without it this arm fired
-            // on every fresh install and could only fail. SplashActivity runs this
-            // repair ahead of the isFirstRun branch, and `home/` is created by
-            // createDirectories() inside runSetupLocked, which has not run yet:
-            // none of the repairs before this one goes near it. So writeBashrc
-            // opened `home/.bashrc.tmp~` in a directory that was not there, got
-            // FileNotFoundException, returned false, and the branch below logged
-            // at ERROR that the terminal has no prompt and no PATH, on 100% of
-            // first launches and on every relaunch after a LOW_STORAGE refusal.
-            // In a release build logcat is the only trace this project has, so a
-            // line that is always wrong costs the lines that are not.
-            //
-            // Absent, which is the one shape nothing covered. `createBashrc` is
-            // reached only from runSetupLocked, on a version change, and every
-            // per-launch appender opens with `bashrc.exists()` or returns on its
-            // absence -- so `rm ~/.bashrc` in the bundled terminal left the shell
-            // with no prompt, no PROJECTS_DIR, no aliases, no npm/npx/claude and
-            // no startup cd until the next app update.
-            //
-            // Recreating is not the "never replace what could be the user's own
-            // edit" line this method draws elsewhere: a file that is not there
-            // holds nothing of theirs, and this writes only what the app owns.
-            // `isFile` above rather than `exists()` keeps a directory at the path
-            // out of both branches; mkdirs would not repair that and neither
-            // would this.
-            //
-            // A link to a file that has gone reads as absent too. It is written
-            // through, never replaced (see linkTarget): the file is made where the
-            // link points, or, when the folder it points into has gone as well,
-            // nothing is written and the link stays, since making that folder
-            // again would undo a move the person made.
-            val linked = Files.isSymbolicLink(bashrc.toPath())
-            val written = runCatching { writeBashrc() }
-                .onFailure { Logger.e(tag, "The .bashrc rewrite threw", it as? Exception) }
-                .getOrDefault(false)
-            if (written) {
-                Logger.i(tag, if (linked) "Wrote the file a .bashrc link names, which had gone" else "Recreated a .bashrc that had gone")
-            } else if (linked) {
-                Logger.w(tag, LINKED_BASHRC_UNWRITTEN)
-            } else {
-                Logger.e(tag, "Could not recreate the missing .bashrc; the terminal keeps no prompt, no PATH exports and no npm")
             }
         }
 
         val settings = File(Environment.getMachineSettingsPath(context))
-        val linkedSettingsGone = Files.isSymbolicLink(settings.toPath()) && !settings.exists()
-        if (settings.isFile && runCatching { isLeftBlank(settings.readText()) }.getOrDefault(false)) {
-            // Replaced rather than deleted and rewritten, for the reason above.
-            // Deleting a zero-byte file frees nothing, so the disk that emptied
-            // it is still full when the rewrite runs.
-            val rewritten = runCatching { writeDefaultSettings() }
-                .onFailure { Logger.e(tag, "The settings.json rewrite threw", it as? Exception) }
-                .getOrDefault(false)
-            if (rewritten) {
-                Logger.i(tag, "Rewrote an empty settings.json")
-            } else {
-                Logger.e(
-                    tag,
-                    "Could not rewrite the empty settings.json. It is still there rather than " +
-                        "gone, so the next launch tries again.",
-                )
-            }
-        } else if (linkedSettingsGone && !legacySettingsFile().exists()) {
-            // A link to a settings file that has gone, met as the .bashrc arm above meets one,
-            // and written through for the same reason. Setup leaves such a link as it is when
-            // the folder it points into has gone too (createDefaultSettings), and every
-            // per-launch writer of this file returns on its absence, so once the folder came
-            // back without the file the install had no terminal profile, no git.path, no
-            // claudeProcessWrapper and no verifySignature until the next update. A file at
-            // the legacy path is left to migrateSettingsToMachinePath, which runs after this
-            // and moves the person's own settings in through the link; defaults written here
-            // first would leave them behind for good.
-            val written = runCatching { writeDefaultSettings() }
-                .onFailure { Logger.e(tag, "The settings.json rewrite threw", it as? Exception) }
-                .getOrDefault(false)
-            if (written) {
-                Logger.i(tag, "Wrote the file a settings.json link names, which had gone")
-            } else {
-                Logger.w(tag, LINKED_SETTINGS_UNWRITTEN)
+        holdingWriteLock(settings) {
+            val linkedSettingsGone = Files.isSymbolicLink(settings.toPath()) && !settings.exists()
+            if (settings.isFile && runCatching { isLeftBlank(settings.readText()) }.getOrDefault(false)) {
+                // Replaced rather than deleted and rewritten, for the reason above.
+                // Deleting a zero-byte file frees nothing, so the disk that emptied
+                // it is still full when the rewrite runs.
+                val rewritten = runCatching { writeDefaultSettings() }
+                    .onFailure { Logger.e(tag, "The settings.json rewrite threw", it as? Exception) }
+                    .getOrDefault(false)
+                if (rewritten) {
+                    Logger.i(tag, "Rewrote an empty settings.json")
+                } else {
+                    Logger.e(
+                        tag,
+                        "Could not rewrite the empty settings.json. It is still there rather than " +
+                            "gone, so the next launch tries again.",
+                    )
+                }
+            } else if (linkedSettingsGone && !legacySettingsFile().exists()) {
+                // A link to a settings file that has gone, met as the .bashrc arm above meets one,
+                // and written through for the same reason. Setup leaves such a link as it is when
+                // the folder it points into has gone too (createDefaultSettings), and every
+                // per-launch writer of this file returns on its absence, so once the folder came
+                // back without the file the install had no terminal profile, no git.path, no
+                // claudeProcessWrapper and no verifySignature until the next update. A file at
+                // the legacy path is left to migrateSettingsToMachinePath, which runs after this
+                // and moves the person's own settings in through the link; defaults written here
+                // first would leave them behind for good.
+                val written = runCatching { writeDefaultSettings() }
+                    .onFailure { Logger.e(tag, "The settings.json rewrite threw", it as? Exception) }
+                    .getOrDefault(false)
+                if (written) {
+                    Logger.i(tag, "Wrote the file a settings.json link names, which had gone")
+                } else {
+                    Logger.w(tag, LINKED_SETTINGS_UNWRITTEN)
+                }
             }
         }
 
@@ -2487,14 +2500,16 @@ class FirstRunSetup(
             File(context.filesDir, "home/.bash_profile") to ::writeBashProfile,
             File(context.filesDir, "home/.tmux.conf") to ::writeTmuxConf,
         )) {
-            if (!Files.isSymbolicLink(file.toPath()) || file.exists()) continue
-            val written = runCatching { write() }
-                .onFailure { Logger.e(tag, "Writing the file a ${file.name} link names threw", it as? Exception) }
-                .getOrDefault(false)
-            if (written) {
-                Logger.i(tag, "Wrote the file a ${file.name} link names, which had gone")
-            } else {
-                Logger.w(tag, linkedFileUnwritten(file))
+            holdingWriteLock(file) {
+                if (!Files.isSymbolicLink(file.toPath()) || file.exists()) return@holdingWriteLock
+                val written = runCatching { write() }
+                    .onFailure { Logger.e(tag, "Writing the file a ${file.name} link names threw", it as? Exception) }
+                    .getOrDefault(false)
+                if (written) {
+                    Logger.i(tag, "Wrote the file a ${file.name} link names, which had gone")
+                } else {
+                    Logger.w(tag, linkedFileUnwritten(file))
+                }
             }
         }
     }
@@ -2505,7 +2520,8 @@ class FirstRunSetup(
      */
     fun ensureToolchainEnvSourcing() {
         val bashrc = File(context.filesDir, "home/.bashrc")
-        if (bashrc.exists()) {
+        holdingWriteLock(bashrc) {
+            if (!bashrc.exists()) return@holdingWriteLock
             // Bytes through unchanged, decoded only to search. See
             // [createNpmWrappers] for why the round trip would be lossy.
             val existing = bashrc.readBytes()
@@ -2657,61 +2673,63 @@ esac
      */
     fun ensurePromptFix() {
         val bashrc = File(context.filesDir, "home/.bashrc")
-        if (!bashrc.exists()) return
+        holdingWriteLock(bashrc) {
+            if (!bashrc.exists()) return@holdingWriteLock
 
-        // Latin-1, not UTF-8, and the choice is load-bearing twice over. It maps
-        // every one of the 256 byte values to exactly one character and back, so
-        // the round trip is lossless for any file the user has -- readText would
-        // turn a byte that is not valid UTF-8 into U+FFFD and this method
-        // rewrites the whole file, so a single Latin-1 accent in a comment or an
-        // alias would be destroyed on the first launch after a PROMPT_VERSION
-        // bump. And because the mapping is one byte to one character, the string
-        // offsets computed below are byte offsets, which is what lets the two
-        // halves be copied through as bytes while the new block goes in as UTF-8.
-        // Every anchor searched for here is ASCII, so the decoding cannot change
-        // what matches.
-        val bytes = bashrc.readBytes()
-        val content = String(bytes, Charsets.ISO_8859_1)
-        if (content.contains(PROMPT_MARKER_CURRENT)) return
+            // Latin-1, not UTF-8, and the choice is load-bearing twice over. It maps
+            // every one of the 256 byte values to exactly one character and back, so
+            // the round trip is lossless for any file the user has -- readText would
+            // turn a byte that is not valid UTF-8 into U+FFFD and this method
+            // rewrites the whole file, so a single Latin-1 accent in a comment or an
+            // alias would be destroyed on the first launch after a PROMPT_VERSION
+            // bump. And because the mapping is one byte to one character, the string
+            // offsets computed below are byte offsets, which is what lets the two
+            // halves be copied through as bytes while the new block goes in as UTF-8.
+            // Every anchor searched for here is ASCII, so the decoding cannot change
+            // what matches.
+            val bytes = bashrc.readBytes()
+            val content = String(bytes, Charsets.ISO_8859_1)
+            if (content.contains(PROMPT_MARKER_CURRENT)) return@holdingWriteLock
 
-        // Earliest anchor wins, so the old explanatory comment is swallowed too
-        // rather than left behind describing a mechanism the file no longer uses.
-        val start = listOf(PROMPT_BEGIN, LEGACY_PROMPT_COMMENT, PROMPT_ANCHOR_START)
-            .map { content.indexOf(it) }
-            .filter { it >= 0 }
-            .minOrNull() ?: return
+            // Earliest anchor wins, so the old explanatory comment is swallowed too
+            // rather than left behind describing a mechanism the file no longer uses.
+            val start = listOf(PROMPT_BEGIN, LEGACY_PROMPT_COMMENT, PROMPT_ANCHOR_START)
+                .map { content.indexOf(it) }
+                .filter { it >= 0 }
+                .minOrNull() ?: return@holdingWriteLock
 
-        val fenced = content.indexOf(PROMPT_END, start)
-        val end = if (fenced >= 0) {
-            content.indexOf('\n', fenced).takeIf { it >= 0 } ?: content.length
-        } else {
-            val legacy = content.indexOf(PROMPT_ANCHOR_END, start)
-            if (legacy < 0) return
-            legacy + PROMPT_ANCHOR_END.length
+            val fenced = content.indexOf(PROMPT_END, start)
+            val end = if (fenced >= 0) {
+                content.indexOf('\n', fenced).takeIf { it >= 0 } ?: content.length
+            } else {
+                val legacy = content.indexOf(PROMPT_ANCHOR_END, start)
+                if (legacy < 0) return@holdingWriteLock
+                legacy + PROMPT_ANCHOR_END.length
+            }
+
+            // Through a temporary file, and that is what makes the marker safe to
+            // put first. `writeText` truncates and then writes, so a rewrite killed
+            // partway left a .bashrc that opened with [PROMPT_MARKER_CURRENT] --
+            // the very string the early return above reads -- and ended wherever
+            // the write stopped: an unclosed `__vscodroid_prompt()` body, no
+            // PROJECTS_DIR, no cd into the workspace. Every later launch read the
+            // marker, concluded the block was current and returned, so the terminal
+            // opened on a syntax error that nothing would ever repair. Nothing
+            // appears under the real name now until all of it has been written, so
+            // the marker cannot certify a file that was never finished.
+            // The two surviving halves go out as the bytes they came in as; only the
+            // block this method owns is encoded. PROMPT_BLOCK is not pure ASCII, so
+            // it cannot ride the Latin-1 mapping out with them.
+            if (!writeAtomically(bashrc, throughLink = true) {
+                    it.write(bytes, 0, start)
+                    it.write(PROMPT_BLOCK.toByteArray())
+                    it.write(bytes, end, bytes.size - end)
+                }) {
+                Logger.w(tag, "Could not rewrite the .bashrc prompt block; it keeps the shape it had")
+                return@holdingWriteLock
+            }
+            Logger.i(tag, "Rewrote the .bashrc prompt block ($PROMPT_VERSION)")
         }
-
-        // Through a temporary file, and that is what makes the marker safe to
-        // put first. `writeText` truncates and then writes, so a rewrite killed
-        // partway left a .bashrc that opened with [PROMPT_MARKER_CURRENT] --
-        // the very string the early return above reads -- and ended wherever
-        // the write stopped: an unclosed `__vscodroid_prompt()` body, no
-        // PROJECTS_DIR, no cd into the workspace. Every later launch read the
-        // marker, concluded the block was current and returned, so the terminal
-        // opened on a syntax error that nothing would ever repair. Nothing
-        // appears under the real name now until all of it has been written, so
-        // the marker cannot certify a file that was never finished.
-        // The two surviving halves go out as the bytes they came in as; only the
-        // block this method owns is encoded. PROMPT_BLOCK is not pure ASCII, so
-        // it cannot ride the Latin-1 mapping out with them.
-        if (!writeAtomically(bashrc, throughLink = true) {
-                it.write(bytes, 0, start)
-                it.write(PROMPT_BLOCK.toByteArray())
-                it.write(bytes, end, bytes.size - end)
-            }) {
-            Logger.w(tag, "Could not rewrite the .bashrc prompt block; it keeps the shape it had")
-            return
-        }
-        Logger.i(tag, "Rewrote the .bashrc prompt block ($PROMPT_VERSION)")
     }
 
     /**
@@ -2738,30 +2756,32 @@ esac
      */
     fun ensureStartupDirGuard() {
         val bashrc = File(context.filesDir, "home/.bashrc")
-        if (!bashrc.exists()) return
+        holdingWriteLock(bashrc) {
+            if (!bashrc.exists()) return@holdingWriteLock
 
-        val bytes = bashrc.readBytes()
-        val content = String(bytes, Charsets.ISO_8859_1)
-        if (content.contains(STARTUP_DIR_MARKER_CURRENT)) return
+            val bytes = bashrc.readBytes()
+            val content = String(bytes, Charsets.ISO_8859_1)
+            if (content.contains(STARTUP_DIR_MARKER_CURRENT)) return@holdingWriteLock
 
-        // Newest first. A v1 block contains none of the v0 text, so the order does
-        // not decide anything today, and it is fixed anyway so that adding a v3 is
-        // one more entry rather than a question about which match wins.
-        val previous = listOf(LEGACY_STARTUP_DIR_BLOCK_V1, LEGACY_STARTUP_DIR_BLOCK)
-        val block = previous.firstOrNull { content.contains(it) } ?: return
-        val start = content.indexOf(block)
-        val end = start + block.length
+            // Newest first. A v1 block contains none of the v0 text, so the order does
+            // not decide anything today, and it is fixed anyway so that adding a v3 is
+            // one more entry rather than a question about which match wins.
+            val previous = listOf(LEGACY_STARTUP_DIR_BLOCK_V1, LEGACY_STARTUP_DIR_BLOCK)
+            val block = previous.firstOrNull { content.contains(it) } ?: return@holdingWriteLock
+            val start = content.indexOf(block)
+            val end = start + block.length
 
-        val written = writeAtomically(bashrc, throughLink = true) {
-            it.write(bytes, 0, start)
-            it.write(STARTUP_DIR_BLOCK.toByteArray())
-            it.write(bytes, end, bytes.size - end)
+            val written = writeAtomically(bashrc, throughLink = true) {
+                it.write(bytes, 0, start)
+                it.write(STARTUP_DIR_BLOCK.toByteArray())
+                it.write(bytes, end, bytes.size - end)
+            }
+            if (!written) {
+                Logger.w(tag, "Could not guard the startup cd in .bashrc; it keeps the shape it had")
+                return@holdingWriteLock
+            }
+            Logger.i(tag, "Guarded the startup cd in .bashrc ($STARTUP_DIR_VERSION)")
         }
-        if (!written) {
-            Logger.w(tag, "Could not guard the startup cd in .bashrc; it keeps the shape it had")
-            return
-        }
-        Logger.i(tag, "Guarded the startup cd in .bashrc ($STARTUP_DIR_VERSION)")
     }
 
     /**
@@ -3001,28 +3021,30 @@ __vscodroid_pip_explain() {
         val minor = runtime.removePrefix("libpython").removeSuffix(".so")
         val conf = File(context.filesDir, "home/.pip/pip.conf")
         val content = pipConfigContent(minor)
-        val existing = if (conf.exists()) {
-            // A file that cannot be read may be the user's, and is left alone.
-            runCatching { conf.readText() }.getOrElse {
-                Logger.w(tag, "Could not read ${conf.path}; leaving it alone")
-                return
+        holdingWriteLock(conf) {
+            val existing = if (conf.exists()) {
+                // A file that cannot be read may be the user's, and is left alone.
+                runCatching { conf.readText() }.getOrElse {
+                    Logger.w(tag, "Could not read ${conf.path}; leaving it alone")
+                    return@holdingWriteLock
+                }
+            } else {
+                null
             }
-        } else {
-            null
-        }
-        if (existing == content) return
-        // Blank is ours, as it is for .bashrc and settings.json.
-        val blank = existing != null && isLeftBlank(existing)
-        if (existing != null && !blank && !existing.startsWith(PIP_CONF_HEADER)) {
-            Logger.i(tag, "Left ${conf.path} alone: it was not written by this app")
-            return
-        }
-        conf.parentFile?.mkdirs()
-        // Through a link, as every file here a person may keep elsewhere is written.
-        if (writeAtomically(conf, throughLink = true) { it.write(content.toByteArray()) }) {
-            Logger.i(tag, "Pointed pip at the wheelhouse")
-        } else {
-            Logger.w(tag, "Could not write pip.conf; pip keeps whatever it had")
+            if (existing == content) return@holdingWriteLock
+            // Blank is ours, as it is for .bashrc and settings.json.
+            val blank = existing != null && isLeftBlank(existing)
+            if (existing != null && !blank && !existing.startsWith(PIP_CONF_HEADER)) {
+                Logger.i(tag, "Left ${conf.path} alone: it was not written by this app")
+                return@holdingWriteLock
+            }
+            conf.parentFile?.mkdirs()
+            // Through a link, as every file here a person may keep elsewhere is written.
+            if (writeAtomically(conf, throughLink = true) { it.write(content.toByteArray()) }) {
+                Logger.i(tag, "Pointed pip at the wheelhouse")
+            } else {
+                Logger.w(tag, "Could not write pip.conf; pip keeps whatever it had")
+            }
         }
     }
 
@@ -3367,28 +3389,30 @@ claude() {
     private fun migrateSettingsToMachinePath() {
         val legacy = legacySettingsFile()
         val current = File(Environment.getMachineSettingsPath(context))
-        if (current.exists() || !legacy.exists()) return
+        holdingWriteLock(current) {
+            if (current.exists() || !legacy.exists()) return@holdingWriteLock
 
-        current.parentFile?.mkdirs()
-        // Through a temporary file, because the guard above turns any partial
-        // arrival into a permanent one. A byte copy interrupted by a full disk
-        // or by process death leaves what it managed to write under the
-        // destination name; `exists()` accepts that on every later launch and
-        // returns, so the truncated file becomes the user's settings for good
-        // while the intact original sits beside it, never read and never
-        // deleted. The workbench does not report a short settings.json as an
-        // error either -- it reads it as the settings -- so the loss is silent.
-        // Failing outright instead leaves the original in place and lets the
-        // next launch, with room, finish the move.
-        // Through a link at the destination, as every writer of this file goes: replaced, a link to a settings
-        // file the person keeps elsewhere was lost.
-        val copied = legacy.inputStream().use { source ->
-            writeAtomically(current, throughLink = true) { source.copyTo(it) }
-        }
-        if (copied && legacy.delete()) {
-            Logger.i(tag, "Moved settings.json to the path the workbench reads")
-        } else {
-            Logger.e(tag, "Could not move settings.json to ${current.absolutePath}")
+            current.parentFile?.mkdirs()
+            // Through a temporary file, because the guard above turns any partial
+            // arrival into a permanent one. A byte copy interrupted by a full disk
+            // or by process death leaves what it managed to write under the
+            // destination name; `exists()` accepts that on every later launch and
+            // returns, so the truncated file becomes the user's settings for good
+            // while the intact original sits beside it, never read and never
+            // deleted. The workbench does not report a short settings.json as an
+            // error either -- it reads it as the settings -- so the loss is silent.
+            // Failing outright instead leaves the original in place and lets the
+            // next launch, with room, finish the move.
+            // Through a link at the destination, as every writer of this file goes: replaced, a link to a settings
+            // file the person keeps elsewhere was lost.
+            val copied = legacy.inputStream().use { source ->
+                writeAtomically(current, throughLink = true) { source.copyTo(it) }
+            }
+            if (copied && legacy.delete()) {
+                Logger.i(tag, "Moved settings.json to the path the workbench reads")
+            } else {
+                Logger.e(tag, "Could not move settings.json to ${current.absolutePath}")
+            }
         }
     }
 
@@ -3483,27 +3507,29 @@ claude() {
 
     private fun createBashrc() {
         val bashrc = File(context.filesDir, "home/.bashrc")
-        if (!bashrc.exists()) {
-            // Thrown, not logged. This runs only from runSetupLocked, whose
-            // markSetupComplete() is the last statement of the same try block --
-            // so swallowing the failure certifies an install that has no
-            // .bashrc, and isFirstRun() is keyed on versionName, versionCode and package update time,
-            // so setup does not run again until the app updates. Of the every-launch repairs only
-            // repairTruncatedSetupFiles would make the file, a launch later; createNpmWrappers,
-            // ensureToolchainEnvSourcing and ensurePromptFix all open with `if (bashrc.exists())`.
-            //
-            // The throw and the atomic write are worth exactly nothing apart.
-            // The throw alone is what main did, and main's retry then skipped
-            // the file, because writeText had already created a truncated one
-            // that satisfied the guard above. Atomicity alone leaves the file
-            // absent but tells no one, so no retry is offered. Together the
-            // retry starts from a clean slate and produces a working shell.
-            if (!writeBashrc()) {
-                // Not for a link: it is written through, and one into a folder that has gone is the
-                // person's and stays (see linkTarget). Throwing then would stop setup on every update
-                // for as long as the folder is away; the launch repair writes it once it can.
-                if (!Files.isSymbolicLink(bashrc.toPath())) throw IOException("could not write $bashrc")
-                Logger.w(tag, LINKED_BASHRC_UNWRITTEN)
+        holdingWriteLock(bashrc) {
+            if (!bashrc.exists()) {
+                // Thrown, not logged. This runs only from runSetupLocked, whose
+                // markSetupComplete() is the last statement of the same try block --
+                // so swallowing the failure certifies an install that has no
+                // .bashrc, and isFirstRun() is keyed on versionName, versionCode and package update time,
+                // so setup does not run again until the app updates. Of the every-launch repairs only
+                // repairTruncatedSetupFiles would make the file, a launch later; createNpmWrappers,
+                // ensureToolchainEnvSourcing and ensurePromptFix all open with `if (bashrc.exists())`.
+                //
+                // The throw and the atomic write are worth exactly nothing apart.
+                // The throw alone is what main did, and main's retry then skipped
+                // the file, because writeText had already created a truncated one
+                // that satisfied the guard above. Atomicity alone leaves the file
+                // absent but tells no one, so no retry is offered. Together the
+                // retry starts from a clean slate and produces a working shell.
+                if (!writeBashrc()) {
+                    // Not for a link: it is written through, and one into a folder that has gone is the
+                    // person's and stays (see linkTarget). Throwing then would stop setup on every update
+                    // for as long as the folder is away; the launch repair writes it once it can.
+                    if (!Files.isSymbolicLink(bashrc.toPath())) throw IOException("could not write $bashrc")
+                    Logger.w(tag, LINKED_BASHRC_UNWRITTEN)
+                }
             }
         }
     }
@@ -3554,26 +3580,28 @@ claude() {
 
     private fun createBashProfile() {
         val bashProfile = File(context.filesDir, "home/.bash_profile")
-        if (!bashProfile.exists()) {
-            // Atomic and loud, the same pair createBashrc is, and for the same
-            // pair of reasons. `writeText` creates and truncates before writing
-            // a byte, so a write that failed left a file the guard above
-            // accepts for ever, and this writer is reached only from
-            // runSetupLocked, which isFirstRun() gates on versionName,
-            // versionCode and package update time: the per-launch repair writes
-            // this path only through a link whose file has gone. What
-            // that costs is confined to INTERACTIVE LOGIN shells, which is what
-            // a tmux window is. Those read .bash_profile and never .bashrc or
-            // BASH_ENV, so they come up with no prompt, no aliases and no
-            // npm/npx/claude while the editor's own terminals (non-login) and
-            // `bash -c` (BASH_ENV) are unaffected. Throwing reaches
-            // runSetupLocked's catch, and the Retry it offers then starts from
-            // an absent file rather than a truncated one. Through a link, as
-            // createBashrc writes, and not thrown for one into a folder that has
-            // gone, for the reason it gives.
-            if (!writeBashProfile()) {
-                if (!Files.isSymbolicLink(bashProfile.toPath())) throw IOException("could not write $bashProfile")
-                Logger.w(tag, linkedFileUnwritten(bashProfile))
+        holdingWriteLock(bashProfile) {
+            if (!bashProfile.exists()) {
+                // Atomic and loud, the same pair createBashrc is, and for the same
+                // pair of reasons. `writeText` creates and truncates before writing
+                // a byte, so a write that failed left a file the guard above
+                // accepts for ever, and this writer is reached only from
+                // runSetupLocked, which isFirstRun() gates on versionName,
+                // versionCode and package update time: the per-launch repair writes
+                // this path only through a link whose file has gone. What
+                // that costs is confined to INTERACTIVE LOGIN shells, which is what
+                // a tmux window is. Those read .bash_profile and never .bashrc or
+                // BASH_ENV, so they come up with no prompt, no aliases and no
+                // npm/npx/claude while the editor's own terminals (non-login) and
+                // `bash -c` (BASH_ENV) are unaffected. Throwing reaches
+                // runSetupLocked's catch, and the Retry it offers then starts from
+                // an absent file rather than a truncated one. Through a link, as
+                // createBashrc writes, and not thrown for one into a folder that has
+                // gone, for the reason it gives.
+                if (!writeBashProfile()) {
+                    if (!Files.isSymbolicLink(bashProfile.toPath())) throw IOException("could not write $bashProfile")
+                    Logger.w(tag, linkedFileUnwritten(bashProfile))
+                }
             }
         }
     }
@@ -3593,17 +3621,19 @@ claude() {
 
     private fun createTmuxConf() {
         val tmuxConf = File(context.filesDir, "home/.tmux.conf")
-        if (!tmuxConf.exists()) {
-            // Atomic like its neighbours, so a failed write leaves nothing
-            // rather than a truncated file that answers the guard above for
-            // ever. Logged rather than thrown, which is where it parts from
-            // .bash_profile beside it: what is lost is the mouse, the colours
-            // and the scrollback, and tmux starts perfectly well without them,
-            // so failing the whole unpack over five options would cost the user
-            // more than the options are worth. Through a link, as createBashrc
-            // writes, so one to a file kept elsewhere stays a link.
-            if (!writeTmuxConf()) {
-                Logger.w(tag, "Could not write $tmuxConf; tmux will run with its own defaults")
+        holdingWriteLock(tmuxConf) {
+            if (!tmuxConf.exists()) {
+                // Atomic like its neighbours, so a failed write leaves nothing
+                // rather than a truncated file that answers the guard above for
+                // ever. Logged rather than thrown, which is where it parts from
+                // .bash_profile beside it: what is lost is the mouse, the colours
+                // and the scrollback, and tmux starts perfectly well without them,
+                // so failing the whole unpack over five options would cost the user
+                // more than the options are worth. Through a link, as createBashrc
+                // writes, so one to a file kept elsewhere stays a link.
+                if (!writeTmuxConf()) {
+                    Logger.w(tag, "Could not write $tmuxConf; tmux will run with its own defaults")
+                }
             }
         }
     }
@@ -3627,31 +3657,33 @@ claude() {
         // Environment.getMachineSettingsPath explains why it is this path and not
         // the `User/` one that looks like the obvious home for user settings.
         val settingsFile = File(Environment.getMachineSettingsPath(context))
-        if (!settingsFile.exists()) {
-            // Thrown for the reason createBashrc() throws: this runs only from
-            // runSetupLocked, markSetupComplete() is downstream in the same try
-            // block, and the every-launch repair that would otherwise catch up
-            // opens with `if (!settingsFile.exists()) return`. A swallowed
-            // failure here means no terminal profile, no git.path, no
-            // claudeProcessWrapper and no verifySignature until the app
-            // updates -- reported to the user as a successful first run.
-            if (!writeDefaultSettings()) {
-                // Not for a link into a folder that has gone, for the reason createBashrc gives:
-                // the launch repair writes through it once the folder is back (repairTruncatedSetupFiles).
-                if (!Files.isSymbolicLink(settingsFile.toPath())) throw IOException("could not write $settingsFile")
-                Logger.w(tag, LINKED_SETTINGS_UNWRITTEN)
-                return
+        holdingWriteLock(settingsFile) {
+            if (!settingsFile.exists()) {
+                // Thrown for the reason createBashrc() throws: this runs only from
+                // runSetupLocked, markSetupComplete() is downstream in the same try
+                // block, and the every-launch repair that would otherwise catch up
+                // opens with `if (!settingsFile.exists()) return`. A swallowed
+                // failure here means no terminal profile, no git.path, no
+                // claudeProcessWrapper and no verifySignature until the app
+                // updates -- reported to the user as a successful first run.
+                if (!writeDefaultSettings()) {
+                    // Not for a link into a folder that has gone, for the reason createBashrc gives:
+                    // the launch repair writes through it once the folder is back (repairTruncatedSetupFiles).
+                    if (!Files.isSymbolicLink(settingsFile.toPath())) throw IOException("could not write $settingsFile")
+                    Logger.w(tag, LINKED_SETTINGS_UNWRITTEN)
+                    return@holdingWriteLock
+                }
+                // This document is ours and was written a line ago, so it holds none
+                // of the preferences the prune exists to take out. Recording that here
+                // is what stops a fresh install spending its one pass on the second
+                // launch, over a document that by then can only differ from this one
+                // by what the USER has written into it: the Settings editor's Remote
+                // tab writes to this very file, and the pairs are matched value-exact,
+                // so a first-day choice that happens to match an old default would be
+                // deleted once and never again. An install that never carried them
+                // should never look for them.
+                markMovedDefaultsPruned()
             }
-            // This document is ours and was written a line ago, so it holds none
-            // of the preferences the prune exists to take out. Recording that here
-            // is what stops a fresh install spending its one pass on the second
-            // launch, over a document that by then can only differ from this one
-            // by what the USER has written into it: the Settings editor's Remote
-            // tab writes to this very file, and the pairs are matched value-exact,
-            // so a first-day choice that happens to match an old default would be
-            // deleted once and never again. An install that never carried them
-            // should never look for them.
-            markMovedDefaultsPruned()
         }
     }
 
@@ -4215,7 +4247,8 @@ claude() {
      * available: see [bundledIdsToRelist] for what that costs, once.
      */
     private fun previouslyBundledIds(): Set<String> =
-        prefs.getStringSet(KEY_BUNDLED_IDS, emptySet()) ?: emptySet()
+        (prefs.getStringSet(KEY_BUNDLED_IDS, emptySet()) ?: emptySet())
+            .mapTo(mutableSetOf()) { it.lowercase(Locale.ROOT) }
 
     /**
      * Each entry of an `extensions.json` as its identifier, lowercased, and the
@@ -4231,7 +4264,7 @@ claude() {
             val entries = JSONArray(manifestFile.readText())
             (0 until entries.length()).map { i ->
                 val entry = entries.getJSONObject(i)
-                val id = entry.optJSONObject("identifier")?.optString("id").orEmpty().lowercase()
+                val id = entry.optJSONObject("identifier")?.optString("id").orEmpty().lowercase(Locale.ROOT)
                 val path = entry.optJSONObject("location")?.optString("path").orEmpty()
                 val dir = entry.optString("relativeLocation")
                     .ifEmpty { if (path.isEmpty()) "" else File(path).name }
@@ -4327,7 +4360,7 @@ claude() {
             // lowercase, but nothing here should depend on the second.
             (0 until entries.length()).mapNotNullTo(mutableSetOf()) { i ->
                 entries.getJSONObject(i).optJSONObject("identifier")?.optString("id")
-                    ?.takeIf { it.isNotEmpty() }?.lowercase()
+                    ?.takeIf { it.isNotEmpty() }?.lowercase(Locale.ROOT)
             }
         } catch (e: Exception) {
             Logger.d(tag, "Could not read extensions.json, so no bundled extension reads as removed: ${e.message}")
@@ -4407,7 +4440,10 @@ claude() {
             if (publisher.isEmpty() || name.isEmpty()) return null
 
             JSONObject().apply {
-                put("identifier", JSONObject().put("id", "${publisher.lowercase()}.${name.lowercase()}"))
+                put(
+                    "identifier",
+                    JSONObject().put("id", "${publisher.lowercase(Locale.ROOT)}.${name.lowercase(Locale.ROOT)}"),
+                )
                 put("version", version)
                 put("location", JSONObject().apply {
                     put("\$mid", 1)
@@ -4483,12 +4519,14 @@ claude() {
                     (dirName.isNotEmpty() && !File(extensionsDir, dirName).exists())
                 ) {
                     dropped++
-                    entry.optJSONObject("identifier")?.optString("id")?.let { droppedIds.add(it) }
+                    entry.optJSONObject("identifier")?.optString("id")
+                        ?.let { droppedIds.add(it.lowercase(Locale.ROOT)) }
                     continue
                 }
                 if (markOwnExtensionBuiltin(entry, dirName)) metadataUpdated = true
                 kept.put(entry)
-                entry.optJSONObject("identifier")?.optString("id")?.let { keptIds.add(it) }
+                entry.optJSONObject("identifier")?.optString("id")
+                    ?.let { keptIds.add(it.lowercase(Locale.ROOT)) }
             }
 
             // Built once so the identifier of each bundled directory is read
@@ -5938,10 +5976,11 @@ internal fun bundledDirsToExtract(
     // [orphanedBundledCopies] removes an unpacked bundled copy that sits beside
     // a listed one. Unpacking next to an OLDER gallery install therefore wrote
     // 29 MiB for Python and deleted it again on every update.
+    val uninstalledIds = uninstalled.mapTo(mutableSetOf()) { it.lowercase(Locale.ROOT) }
     val galleryIds = counted
         .filter { TARGET_PLATFORM_SUFFIX.containsMatchIn(it) }
         .mapNotNull(::splitExtensionDir)
-        .map { it.first.lowercase() }
+        .map { it.first.lowercase(Locale.ROOT) }
         .toSet()
     return bundled.filter { dir ->
         if (dir.startsWith(OWN_EXTENSION_PREFIX)) return@filter true
@@ -5949,10 +5988,12 @@ internal fun bundledDirsToExtract(
         val (id, version) = splitExtensionDir(dir) ?: return@filter true
         // Lowercased to meet the record, which manifestEntryFor builds from
         // the lowercased package.json halves; a real bundled publisher is PKief.
-        if (id.lowercase() in uninstalled) return@filter false
-        if (id.lowercase() in galleryIds) return@filter false
+        val normalizedId = id.lowercase(Locale.ROOT)
+        if (normalizedId in uninstalledIds) return@filter false
+        if (normalizedId in galleryIds) return@filter false
         installed.none { (otherId, otherVersion) ->
-            otherId == id && (otherVersion == version || isOlderVersion(version, otherVersion))
+            otherId.lowercase(Locale.ROOT) == normalizedId &&
+                (otherVersion == version || isOlderVersion(version, otherVersion))
         }
     }
 }
@@ -5984,7 +6025,7 @@ internal fun bundledDirsToExtract(
  * unreadable `package.json` already gave.
  */
 internal fun bundledExtensionIds(bundled: List<String>): List<String> =
-    bundled.mapNotNull { splitExtensionDir(it)?.first?.lowercase() }
+    bundled.mapNotNull { splitExtensionDir(it)?.first?.lowercase(Locale.ROOT) }
 
 /**
  * Bundled copies an earlier update unpacked beside the user's own install of the
@@ -6022,9 +6063,9 @@ internal fun orphanedBundledCopies(
     return bundled.filter { dir ->
         if (dir.startsWith(OWN_EXTENSION_PREFIX)) return@filter false
         if (dir !in onDisk || dir in listedDirs || dir in referencedElsewhere) return@filter false
-        val id = splitExtensionDir(dir)?.first?.lowercase() ?: return@filter false
+        val id = splitExtensionDir(dir)?.first?.lowercase(Locale.ROOT) ?: return@filter false
         listed.any { (otherId, otherDir) ->
-            otherId.lowercase() == id && otherDir.isNotEmpty() && otherDir != dir && otherDir in onDisk
+            otherId.lowercase(Locale.ROOT) == id && otherDir.isNotEmpty() && otherDir != dir && otherDir in onDisk
         }
     }
 }
@@ -6238,7 +6279,7 @@ private fun writeAtomicallyTo(
     onError: ((String) -> Unit)?,
     write: (OutputStream) -> Unit,
 ): Boolean {
-    val path = dest.absolutePath
+    val path = lockKey(dest)
     val lock = claimWriteLock(path)
     try {
         synchronized(lock) {
@@ -6430,11 +6471,43 @@ private fun releaseWriteLock(path: String, lock: DestinationLock) = synchronized
 }
 
 /**
+ * Stable canonical key for [WRITE_LOCKS], resolving existing ancestor symlinks without following
+ * a symlink leaf itself (the caller resolves the leaf via [linkTarget] when `throughLink` is true).
+ * Walks up past any missing ancestor directories so keys match before and after `mkdirs()`.
+ */
+private fun lockKey(file: File): String {
+    val raw = file.toPath().toAbsolutePath()
+    try {
+        return raw.toRealPath(LinkOption.NOFOLLOW_LINKS).toString()
+    } catch (_: IOException) {
+    }
+    val missing = ArrayDeque<java.nio.file.Path>()
+    var current: java.nio.file.Path? = raw
+    while (current != null) {
+        val parent = current.parent
+        val name = current.fileName
+        if (name != null) missing.addFirst(name)
+        if (parent == null) break
+        try {
+            var resolved = parent.toRealPath()
+            for (part in missing) {
+                resolved = resolved.resolve(part)
+            }
+            return resolved.normalize().toString()
+        } catch (_: IOException) {
+            current = parent
+        }
+    }
+    return raw.normalize().toString()
+}
+
+/**
  * Runs [block] holding the lock [writeAtomically] holds for [dest], for a change of [dest] made in
  * more than one step that a write of it must not land inside.
  */
-internal fun <T> holdingWriteLock(dest: File, block: () -> T): T {
-    val path = dest.absolutePath
+internal fun <T> holdingWriteLock(dest: File, throughLink: Boolean = true, block: () -> T): T {
+    val target = if (throughLink) linkTarget(dest) ?: dest else dest
+    val path = lockKey(target)
     val lock = claimWriteLock(path)
     try {
         return synchronized(lock) { block() }
@@ -6651,32 +6724,38 @@ internal fun bundledIdsToRelist(
     keptIds: Set<String>,
     droppedIds: Set<String>,
     previouslyBundledIds: Set<String>,
-): List<String> = bundledIds.filter { id ->
-    when {
-        id in keptIds -> false
-        // Its entry was just dropped because the directory it named is gone --
-        // an upgrade swapping 1.0.0 for 1.3.0 does exactly this.
-        id in droppedIds -> true
-        // Ours, always, and this is the half that used to disagree with itself.
-        // The rule below exists so a downloaded extension the user deliberately
-        // removed does not come back on every update, and that promise is about
-        // marketplace copies. [bundledDirsToExtract] already exempts this prefix
-        // from exactly the same rule, so the directory returned on every update
-        // and then sat unlisted and unloaded, which is the state the comment in
-        // [manifestEntryFor] describes.
-        //
-        // These are not a removable preference: they carry the device folder
-        // picker, the toolchain screen and the editor defaults this app
-        // contributes, so a removed one takes those with it and nothing inside
-        // the editor can put it back. The removal that reached here was possible
-        // on releases that wrote no `isBuiltin`, and `isBuiltin` only stops the
-        // next one; it cannot relist a copy already gone. Without this arm a user
-        // who removed the welcome extension keeps the prune of the app's old
-        // editor overrides, which commits once and for all, while the defaults
-        // that replaced them never load.
-        id.startsWith(OWN_EXTENSION_PREFIX) -> true
-        // Never bundled before, so there was no copy for the user to remove.
-        else -> id !in previouslyBundledIds
+): List<String> {
+    val kept = keptIds.mapTo(HashSet()) { it.lowercase(Locale.ROOT) }
+    val dropped = droppedIds.mapTo(HashSet()) { it.lowercase(Locale.ROOT) }
+    val previous = previouslyBundledIds.mapTo(HashSet()) { it.lowercase(Locale.ROOT) }
+    return bundledIds.filter { id ->
+        val normalized = id.lowercase(Locale.ROOT)
+        when {
+            normalized in kept -> false
+            // Its entry was just dropped because the directory it named is gone --
+            // an upgrade swapping 1.0.0 for 1.3.0 does exactly this.
+            normalized in dropped -> true
+            // Ours, always, and this is the half that used to disagree with itself.
+            // The rule below exists so a downloaded extension the user deliberately
+            // removed does not come back on every update, and that promise is about
+            // marketplace copies. [bundledDirsToExtract] already exempts this prefix
+            // from exactly the same rule, so the directory returned on every update
+            // and then sat unlisted and unloaded, which is the state the comment in
+            // [manifestEntryFor] describes.
+            //
+            // These are not a removable preference: they carry the device folder
+            // picker, the toolchain screen and the editor defaults this app
+            // contributes, so a removed one takes those with it and nothing inside
+            // the editor can put it back. The removal that reached here was possible
+            // on releases that wrote no `isBuiltin`, and `isBuiltin` only stops the
+            // next one; it cannot relist a copy already gone. Without this arm a user
+            // who removed the welcome extension keeps the prune of the app's old
+            // editor overrides, which commits once and for all, while the defaults
+            // that replaced them never load.
+            normalized.startsWith(OWN_EXTENSION_PREFIX) -> true
+            // Never bundled before, so there was no copy for the user to remove.
+            else -> normalized !in previous
+        }
     }
 }
 
