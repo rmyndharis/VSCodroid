@@ -665,16 +665,23 @@ def main(tree):
               "query never reaches MainActivity and any forged sign-in callback "
               "naming an armed request id would be accepted")
 
-    # The terminal typing injector identifies these callbacks by their member names.
+    # The terminal typing injector (MainActivity.injectTerminalTypedCharacters)
+    # identifies these callbacks by their member names in xterm.js.
     xterm = tree / "node_modules/@xterm/xterm/lib/xterm.js"
     try:
-        xterm_text = xterm.read_text()
+        xterm_text = xterm.read_text(encoding="utf-8", errors="replace")
         check("_textareaChangeTimer" in xterm_text,
-              "xterm retains the terminal typing timer member")
+              "xterm retains the terminal typing timer member",
+              "MainActivity.injectTerminalTypedCharacters matches _textareaChangeTimer; "
+              "an upstream xterm upgrade renamed or minified it")
         check("_compositionPosition.end" in xterm_text,
-              "xterm retains the terminal composition end member")
+              "xterm retains the terminal composition end member",
+              "MainActivity.injectTerminalTypedCharacters matches _compositionPosition.end; "
+              "an upstream xterm upgrade renamed or minified it")
         check("_isSendingComposition" in xterm_text,
-              "xterm retains the terminal composition send member")
+              "xterm retains the terminal composition send member",
+              "MainActivity.injectTerminalTypedCharacters matches _isSendingComposition; "
+              "an upstream xterm upgrade renamed or minified it")
     except OSError as e:
         check(False, "xterm terminal typing timer is readable", str(e))
 
