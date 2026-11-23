@@ -30,11 +30,14 @@ import java.io.File
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.security.KeyFactory
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
 import java.security.Signature
+import java.security.interfaces.ECPublicKey
 import java.security.spec.ECGenParameterSpec
+import java.security.spec.X509EncodedKeySpec
 import java.util.Base64
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
@@ -617,5 +620,26 @@ class ToolchainManifestSignatureTest {
         assertEquals(AssetPackStatus.FAILED, events.last().second)
         assertEquals(listOf(ToolchainFailure.DIGEST), reasons)
         assertFalse(server.requested.contains(zipPath), "ZIP must not be downloaded when .sig is 0 bytes")
+    }
+
+    @Test
+    fun `embedded release public key is configured as valid uncompressed NIST P-256 SPKI`() {
+        assertTrue(ToolchainManifestVerifier.hasEmbeddedPublicKey)
+        assertTrue(savedRequireSigned, "embedded key should default requireSignedManifest to true")
+        val spki = savedPublicKeySpki
+        assertNotNull(spki, "embedded SPKI Base64 failed to decode")
+        val decoded = spki!!
+        val expectedHeader = byteArrayOf(
+            0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86.toByte(), 0x48, 0xce.toByte(),
+            0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a, 0x86.toByte(), 0x48, 0xce.toByte(), 0x3d,
+            0x03, 0x01, 0x07, 0x03, 0x42, 0x00, 0x04,
+        )
+        assertEquals(91, decoded.size, "uncompressed P-256 SPKI must be 91 bytes")
+        assertTrue(
+            decoded.copyOfRange(0, expectedHeader.size).contentEquals(expectedHeader),
+            "embedded key SPKI header must match uncompressed NIST P-256",
+        )
+        val parsed = KeyFactory.getInstance("EC").generatePublic(X509EncodedKeySpec(decoded))
+        assertTrue(parsed is ECPublicKey)
     }
 }

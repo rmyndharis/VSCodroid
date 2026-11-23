@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The process monitor warns, naming the file, when Settings shows **Vscodroid > Antigravity: Run Engine** on but the settings file keeps it off: an error VS Code works around, over 1 MiB, or nesting past 64 levels.
 - A notice says when sending the changes a program made while a device folder, or another folder, opened fails partway.
 - Bundled first-party extensions (`saf-bridge`, `process-monitor`, `serve-network`) now ship full 13-locale translations enforced in CI.
-- Sideload toolchain digest manifests now support ECDSA P-256 signature verification (`toolchains.sha256.sig`) alongside release workflow signing and R8 keep verification.
+- Sideload toolchain digest manifests now enforce ECDSA P-256 signature verification (`toolchains.sha256.sig`) using the embedded release public key alongside release workflow signing and R8 keep verification.
 
 ### Changed
 

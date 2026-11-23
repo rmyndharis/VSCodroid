@@ -76,8 +76,16 @@ class ToolchainLifecycleHardeningTest {
     private val stateFile get() = File(filesDir, "home/.vscodroid/toolchains.json")
     private val envFile get() = File(filesDir, "home/.vscodroid/toolchain-env.sh")
 
+    private var savedPublicKeySpki: ByteArray? = null
+    private var savedRequireSigned: Boolean = false
+
     @BeforeEach
     fun setUp() {
+        savedPublicKeySpki = ToolchainManifestVerifier.manifestPublicKeySpki
+        savedRequireSigned = ToolchainManifestVerifier.requireSignedManifest
+        ToolchainManifestVerifier.manifestPublicKeySpki = null
+        ToolchainManifestVerifier.requireSignedManifest = false
+
         mockkObject(Logger)
         every { Logger.d(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
@@ -144,6 +152,8 @@ class ToolchainLifecycleHardeningTest {
 
     @AfterEach
     fun tearDown() {
+        ToolchainManifestVerifier.manifestPublicKeySpki = savedPublicKeySpki
+        ToolchainManifestVerifier.requireSignedManifest = savedRequireSigned
         for (m in managers) {
             val executor = ToolchainManager::class.java.getDeclaredField("ioExecutor")
                 .apply { isAccessible = true }.get(m) as ExecutorService
