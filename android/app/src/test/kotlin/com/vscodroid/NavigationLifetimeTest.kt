@@ -102,7 +102,7 @@ class NavigationLifetimeTest {
     fun `a clean app navigation cannot consent to the next document unload`() {
         mockkObject(VSCodroidWebViewClient.Companion)
         every {
-            VSCodroidWebViewClient.setupServiceWorkerInterception(any(), any(), any(), any(), any(), any())
+            VSCodroidWebViewClient.setupServiceWorkerInterception(any(), any(), any(), any(), any(), any(), any())
         } just Runs
         lateinit var client: WebViewClient
         lateinit var chrome: WebChromeClient

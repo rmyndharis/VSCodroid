@@ -303,10 +303,9 @@ class EditorShutdownTest {
         set("serverProcess", null)
         val rejected = PidProcess(4242L)
         mockkConstructor(ProcessBuilder::class)
-        every { anyConstructed<ProcessBuilder>().start() } returns rejected
-        every { Environment.buildProcessEnvironment(any(), any()) } answers {
+        every { anyConstructed<ProcessBuilder>().start() } answers {
             manager.stopServer()
-            emptyMap()
+            rejected
         }
 
         assertFalse(manager.startServer())
@@ -327,11 +326,8 @@ class EditorShutdownTest {
         every { anyConstructed<ProcessBuilder>().environment() } returns environment
         every { anyConstructed<ProcessBuilder>().start() } answers {
             rejectedRun = environment.getValue("VSCODROID_SERVER_RUN_ID")
-            rejected
-        }
-        every { Environment.buildProcessEnvironment(any(), any()) } answers {
             manager.stopServer()
-            emptyMap()
+            rejected
         }
 
         assertFalse(manager.startServer())
@@ -388,11 +384,8 @@ class EditorShutdownTest {
         every { anyConstructed<ProcessBuilder>().environment() } returns environment
         every { anyConstructed<ProcessBuilder>().start() } answers {
             rejectedRun = environment.getValue("VSCODROID_SERVER_RUN_ID")
-            rejected
-        }
-        every { Environment.buildProcessEnvironment(any(), any()) } answers {
             manager.stopServer()
-            emptyMap()
+            rejected
         }
 
         assertFalse(manager.startServer())

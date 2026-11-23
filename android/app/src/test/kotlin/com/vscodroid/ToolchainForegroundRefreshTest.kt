@@ -24,11 +24,11 @@ class ToolchainForegroundRefreshTest {
         )
         val refresh = SourceScan.body(source, "private fun refreshToolchainCommands()")
         val launch = refresh.indexOf("Dispatchers.IO")
+        val ctor = refresh.indexOf("ToolchainManager(")
         val call = refresh.indexOf("regenerateDerivedFiles()")
         assertTrue(
-            launch >= 0 && call > launch,
-            "the exec table is rebuilt on the main thread, which lists usr/bin and writes " +
-                "two files every time the editor comes to the front",
+            launch >= 0 && ctor > launch && call > launch,
+            "ToolchainManager construction and exec-table refresh must both run inside Dispatchers.IO:\n$refresh",
         )
     }
 }

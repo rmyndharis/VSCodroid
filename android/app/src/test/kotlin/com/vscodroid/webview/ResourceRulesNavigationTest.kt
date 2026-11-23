@@ -78,7 +78,7 @@ class ResourceRulesNavigationTest {
     fun tearDown() = unmockkAll()
 
     private fun client() = VSCodroidWebViewClient(
-        allowedPort = PORT,
+        allowedPort = { PORT },
         resourceRules = rules,
         openFolder = { null },
         connectionToken = { null },
@@ -144,7 +144,7 @@ class ResourceRulesNavigationTest {
         val client = client()
         val holder = rules
         VSCodroidWebViewClient.setupServiceWorkerInterception(
-            PORT, { holder.roots }, { holder.sensitive }, { null }, { null },
+            { PORT }, { holder.roots }, { holder.sensitive }, { null }, { null }, { holder.staticRoots },
         ) { null }
         registered.captured.shouldInterceptRequest(request())
         assertTrue(served.size == 1 && refused.isEmpty(), "the control was not served, so nothing below is measured: $logged")
@@ -171,7 +171,7 @@ class ResourceRulesNavigationTest {
         var sensitive: List<String>? = listOf(File(home, ".ssh").canonicalPath)
         val folder = kept.parentFile.path
         VSCodroidWebViewClient.setupServiceWorkerInterception(
-            PORT, { emptyList() }, { sensitive }, { folder }, { null },
+            { PORT }, { emptyList() }, { sensitive }, { folder }, { null }, { emptyList() },
         ) { null }
         registered.captured.shouldInterceptRequest(request())
         assertTrue(served.size == 1 && refused.isEmpty(), "the control was not served, so nothing below is measured: $logged")
@@ -180,6 +180,28 @@ class ResourceRulesNavigationTest {
         registered.captured.shouldInterceptRequest(request())
 
         assertTrue(refused.size == 1, "a folder was published with no locations to judge it by: $logged")
+    }
+
+    @Test
+    fun `constructing rules and starting a navigation do not run disk resolution on the caller thread`() {
+        val callerThread = Thread.currentThread()
+        val resolveThreads = mutableListOf<Thread>()
+        rules = ResourceRules {
+            resolveThreads += Thread.currentThread()
+            val sensitive = sensitiveLocations(context)
+            publishedResourceRoots(context, sensitive) to sensitive
+        }
+        assertTrue(
+            callerThread !in resolveThreads,
+            "ResourceRules constructor ran disk resolution synchronously on the caller thread",
+        )
+
+        val client = client()
+        navigate(client)
+        assertTrue(
+            callerThread !in resolveThreads,
+            "onPageStarted ran disk resolution synchronously on the caller thread",
+        )
     }
 
     private companion object {

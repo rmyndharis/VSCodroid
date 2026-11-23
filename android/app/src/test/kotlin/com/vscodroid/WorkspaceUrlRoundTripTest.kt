@@ -344,7 +344,7 @@ class WorkspaceUrlRoundTripTest {
             ),
         )
 
-        assertTrue(bridge.contains("emptyWindowUrl(url, port)")) {
+        assertTrue(bridge.contains("emptyWindowUrl(url, serverPort)")) {
             "the page-loaded callback no longer asks whether the workbench closed the " +
                 "folder, so the closed state is remembered for as long as the WebView " +
                 "lives and no longer"
@@ -363,7 +363,7 @@ class WorkspaceUrlRoundTripTest {
                 "private fun initBridge(",
             ),
         )
-        val invalid = SourceScan.body(bridge, "else if (isWorkbenchUrl(url, port) &&")
+        val invalid = SourceScan.body(bridge, "else if (isWorkbenchUrl(url, serverPort) &&")
         assertTrue(invalid.contains("openWorkspaceFolder = null"))
         assertTrue(invalid.contains("openWorkspaceRoot = null"))
         assertFalse(invalid.contains("rememberWorkspaceFolder("))

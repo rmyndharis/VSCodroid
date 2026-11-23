@@ -80,4 +80,12 @@ class BackupRulesParityTest {
             "Android 12 and above read android:dataExtractionRules, and without it back up the whole data directory"
         }
     }
+
+    @Test
+    fun `cloud backup requires client-side encryption capabilities`() {
+        val cloud = section("cloud-backup")
+        assertEquals("true", cloud.getAttribute("disableIfNoEncryptionCapabilities")) {
+            "cloud-backup must set disableIfNoEncryptionCapabilities=\"true\" so settings are not uploaded unencrypted"
+        }
+    }
 }

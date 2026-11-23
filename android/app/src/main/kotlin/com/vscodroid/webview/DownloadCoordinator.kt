@@ -481,6 +481,13 @@ class DownloadCoordinator(
          */
         var busy: Boolean = false,
         /**
+         * Whether [onComplete] has already claimed this download to commit its sink.
+         *
+         * Once set, late or duplicate completion and chunk calls from the page are
+         * ignored so [finishClaimed] produces the single terminal outcome.
+         */
+        var finishing: Boolean = false,
+        /**
          * Whether this stands for a picker answer that belongs to no download in flight, so that
          * what is known of it is the document the picker made or returned and nothing else.
          */
@@ -964,6 +971,7 @@ class DownloadCoordinator(
     private fun claim(requestId: String, base64: String): Chunk? {
         val request = live(requestId) ?: return null
         val sink = request.sink ?: return null
+        if (request.finishing) return null
         if (request.busy) {
             // Ended rather than merely refused. Returning false stops the page
             // reading and the page does not report a refused chunk back, so a
@@ -1002,22 +1010,24 @@ class DownloadCoordinator(
      * for as long as a write to one does.
      */
     fun onComplete(requestId: String, error: String?) {
-        val request = synchronized(this) {
+        val (request, staged) = synchronized(this) {
             val request = live(requestId) ?: return
+            if (request.sink == null) return
+            if (request.finishing) return
+            if (request.busy) {
+                // A write is still inside the provider, so the sink cannot be
+                // closed here; end the download and let the writer's exit close
+                // and discard the file once it returns.
+                fail(request, error ?: "the page ended the download while it was still writing")
+                return
+            }
             if (error != null) {
                 fail(request, error)
                 return
             }
-            if (request.busy) {
-                // The page says it is finished while a piece of its own is still
-                // inside the provider. Nothing sequential produces that, and the
-                // close cannot run under the write, so the download ends as a
-                // failure and the thread inside the write removes the file.
-                fail(request, "the page ended the download while it was still writing")
-                return
-            }
             request.busy = true
-            request
+            request.finishing = true
+            request to (request.sink is StagedSink)
         }
         // A save over a document the user already had is copied into it from app storage here, whole,
         // and a provider takes as long as it takes. Every call the page makes blocks the page's own
@@ -1026,7 +1036,7 @@ class DownloadCoordinator(
         // the outcome is reported from the provider thread, and the claim above keeps every other path
         // off the request until [finishClaimed] gives it back. A direct sink's finish is only a close,
         // and is made here as it always was.
-        if (request.sink is StagedSink) providerWork.execute { finishClaimed(request) } else finishClaimed(request)
+        if (staged) providerWork.execute { finishClaimed(request) } else finishClaimed(request)
     }
 
     /** What [onComplete] does once the download is claimed, on the thread that holds the claim. */

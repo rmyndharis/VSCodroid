@@ -226,7 +226,7 @@ class SecretKeyInterceptorResponseTest {
 
     private fun client(supplier: () -> ByteArray = { keyReads += 1; keyBytes.copyOf() }) =
         VSCodroidWebViewClient(
-            allowedPort = port,
+            allowedPort = { port },
             resourceRules = noResourceRules(),
             openFolder = { null },
             connectionToken = { null },

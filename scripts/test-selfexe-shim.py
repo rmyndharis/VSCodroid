@@ -24,9 +24,11 @@ from pathlib import Path
 
 SOURCE = Path(__file__).with_name("selfexe-shim.c")
 VAR = "TERMUX_EXEC__PROC_SELF_EXE"
-# The names of two device-folder copies: twelve lowercase hex digits each.
+DATA_DIR_VAR = "TERMUX_APP__DATA_DIR"
+# The names of device-folder copies: twelve lowercase hex digits each.
 HASH = "0123456789ab"
 OTHER_HASH = "ba9876543210"
+SWAPPED_HASH = "fedcba987654"
 
 PROBE = r"""
 #include <fcntl.h>
@@ -109,10 +111,14 @@ class SelfExeShimTest(unittest.TestCase):
         (cls.user / "0").symlink_to(cls.data)
         (cls.user / "1").symlink_to(cls.data)
         (cls.other / "0").symlink_to(cls.data)
-        # `saf-mirrors` stands in for the folder the app keeps its device-folder copies
-        # in: a copy at <hash>, and the name the editor opens it by, by-name/<hash>/<name>,
-        # a link to ../../<hash>.
-        cls.mirrors = cls.root / "saf-mirrors"
+        # `app_data/files/saf-mirrors` stands in for the folder the app keeps its
+        # device-folder copies in: a copy at <hash>, and the name the editor opens it by,
+        # by-name/<hash>/<name>, a link to ../../<hash>. `app_data_link` stands in for
+        # Android's `/data/user/0/<pkg>` symlink pointing at `/data/data/<pkg>`.
+        cls.app_data = cls.root / "app"
+        cls.app_data_link = cls.root / "app-link"
+        cls.app_data_link.symlink_to(cls.app_data)
+        cls.mirrors = cls.app_data / "files" / "saf-mirrors"
         cls.copy = cls.mirrors / HASH
         cls.copy.mkdir(parents=True)
         (cls.copy / "notes.txt").write_text("in the copy")
@@ -135,19 +141,25 @@ class SelfExeShimTest(unittest.TestCase):
         # The same link in a directory that is not where the app makes them. The copy it
         # names exists in every case, so following it would succeed.
         cls.misplaced = [
-            cls.lay_out(cls.root / "elsewhere" / "by-name" / HASH),  # no saf-mirrors
-            cls.lay_out(cls.root / "notsaf-mirrors" / "by-name" / HASH),  # a name that only ends in it
+            cls.lay_out(cls.app_data / "files" / "elsewhere" / "by-name" / HASH),  # no saf-mirrors
+            cls.lay_out(cls.app_data / "files" / "notsaf-mirrors" / "by-name" / HASH),  # a name that only ends in it
             cls.lay_out(cls.mirrors / "elsewhere" / HASH),  # not under by-name
             cls.lay_out(cls.mirrors / "by-name" / HASH.upper()),  # not lowercase hex
             cls.lay_out(cls.mirrors / "by-name" / HASH[:-1]),  # too short
             cls.lay_out(cls.mirrors / "by-name" / (HASH + "c")),  # too long
         ]
-        # The right directory and the right link, over a copy that has been replaced by a link.
-        swapped = cls.root / "swapped" / "saf-mirrors"
-        (swapped / "by-name" / HASH).mkdir(parents=True)
-        (swapped / "by-name" / HASH / "project").symlink_to(f"../../{HASH}")
-        (swapped / HASH).symlink_to(cls.data)
-        cls.swapped = swapped / "by-name" / HASH
+        # Unanchored paths carrying the same saf-mirrors/by-name/<hash> shape outside the
+        # app's own files/saf-mirrors directory, including a clone inside projects/.
+        cls.unanchored = [
+            cls.lay_out(cls.root / "repo" / "saf-mirrors" / "by-name" / HASH),
+            cls.lay_out(cls.root / "repo" / "files" / "saf-mirrors" / "by-name" / HASH),
+            cls.lay_out(cls.app_data / "files" / "projects" / "repo" / "files" / "saf-mirrors" / "by-name" / HASH),
+        ]
+        # The right anchored directory and the right link, over a copy replaced by a link.
+        (cls.mirrors / "by-name" / SWAPPED_HASH).mkdir(parents=True)
+        (cls.mirrors / "by-name" / SWAPPED_HASH / "project").symlink_to(f"../../{SWAPPED_HASH}")
+        (cls.mirrors / SWAPPED_HASH).symlink_to(cls.data)
+        cls.swapped = cls.mirrors / "by-name" / SWAPPED_HASH
         opener_c = cls.root / "opener.c"
         opener_c.write_text(OPENER)
         cls.opener = cls.root / "opener"
@@ -178,10 +190,14 @@ class SelfExeShimTest(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         return result.stdout
 
-    def opened(self, parent, name, *words, preload=True):
-        env = {k: v for k, v in os.environ.items() if k not in (VAR, "LD_PRELOAD")}
+    def opened(self, parent, name, *words, preload=True, data_dir="default"):
+        env = {k: v for k, v in os.environ.items() if k not in (VAR, DATA_DIR_VAR, "LD_PRELOAD")}
         if preload:
             env["LD_PRELOAD"] = str(self.shim)
+        if data_dir == "default":
+            env[DATA_DIR_VAR] = str(self.app_data)
+        elif data_dir is not None:
+            env[DATA_DIR_VAR] = str(data_dir)
         result = subprocess.run([str(self.opener), str(parent), name, *words], env=env, capture_output=True, text=True)
         self.assertEqual(0, result.returncode, result.stderr)
         return result.stdout.strip()
@@ -302,9 +318,27 @@ class SelfExeShimTest(unittest.TestCase):
             )
 
     def test_the_named_copy_opens_with_the_variable_set_too(self):
-        env = {**os.environ, "LD_PRELOAD": str(self.shim), VAR: "/data/x/codex"}
+        env = {**os.environ, "LD_PRELOAD": str(self.shim), VAR: "/data/x/codex", DATA_DIR_VAR: str(self.app_data)}
         result = subprocess.run([str(self.opener), str(self.named), "project", *self.WALK], env=env, capture_output=True, text=True)
         self.assertEqual(f"ok {self.copy} {self.copy.stat().st_mode & 0o777:o}", result.stdout.strip())
+
+    def test_the_named_copy_opens_when_app_data_dir_is_a_symlink(self):
+        self.assertEqual(
+            f"ok {self.copy} {self.copy.stat().st_mode & 0o777:o}",
+            self.opened(self.named, "project", *self.WALK, data_dir=self.app_data_link),
+        )
+
+    def test_unanchored_saf_mirrors_paths_are_refused(self):
+        for parent in self.unanchored:
+            self.assertEqual("errno Not a directory", self.opened(parent, "project", *self.WALK), str(parent))
+
+    def test_copy_link_is_refused_without_valid_app_data_dir(self):
+        for value in (None, "", "relative/app", "/", str(self.root / "missing-app")):
+            self.assertEqual(
+                "errno Not a directory",
+                self.opened(self.named, "project", *self.WALK, data_dir=value),
+                repr(value),
+            )
 
 
 if __name__ == "__main__":

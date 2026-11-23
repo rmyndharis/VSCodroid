@@ -51,12 +51,12 @@
 // folder, and the patch tool answers ENOTDIR for it exactly as it does for "0".
 //
 // The copy is opened in its place, and only there: for a call refused with
-// ENOTDIR for a name that is a link to ../../<hash>, in a directory whose own path
-// ends in saf-mirrors/by-name/<that hash>, twelve lowercase hex digits. The copy
-// is then opened by that relative name with O_NOFOLLOW still on, rather than by
-// following the link, so the call that is answered is the one that was checked
-// and a link put in the copy's place stays refused. A link of any other form, or
-// in any other directory, is refused as before.
+// ENOTDIR for a name that is a link to ../../<hash>, in a directory whose own
+// canonical path is exactly ${TERMUX_APP__DATA_DIR}/files/saf-mirrors/by-name/<hash>,
+// twelve lowercase hex digits. The copy is then opened by that relative name with
+// O_NOFOLLOW still on, rather than by following the link, so the call that is
+// answered is the one that was checked and a link put in the copy's place stays
+// refused. A link of any other form, or in any other directory, is refused as before.
 //
 // No dependency beyond Bionic's libc, and the raw system calls for the real
 // answers, so nothing here can call back into itself.
@@ -91,9 +91,10 @@ extern long syscall(long number, ...);
 #endif
 
 // What the app names its device-folder copies (Environment.getSafMirrorDir): a
-// directory under saf-mirrors/by-name named for the copy, by twelve lowercase hex
-// digits, holding links of the form ../../<hash>.
-#define COPY_DIRECTORY "/saf-mirrors/by-name/"
+// directory under ${TERMUX_APP__DATA_DIR}/files/saf-mirrors/by-name named for
+// the copy, by twelve lowercase hex digits, holding links of the form ../../<hash>.
+#define APP_DATA_DIR_VAR "TERMUX_APP__DATA_DIR"
+#define COPY_DIRECTORY "/files/saf-mirrors/by-name/"
 #define COPY_LINK_PREFIX "../../"
 #define HASH_LENGTH 12
 
@@ -172,22 +173,44 @@ static int is_hash(const char *digits) {
 }
 
 // Whether `name` in `dirfd` is the link the app makes to a device folder's copy:
-// `dirfd` is saf-mirrors/by-name/<hash> and the link reads ../../<hash>. On a yes,
-// `copy` holds that relative name, terminated, to open in the link's place.
+// `dirfd` is exactly ${TERMUX_APP__DATA_DIR}/files/saf-mirrors/by-name/<hash>
+// (canonicalized via the kernel so /data/user/0/<pkg> matches /data/data/<pkg>)
+// and the link reads ../../<hash>. On a yes, `copy` holds that relative name,
+// terminated, to open in the link's place.
 static int names_copy_link(int dirfd, const char *name, char *copy, size_t size) {
     if (name[0] == '\0' || strchr(name, '/') != NULL) {
         return 0;
     }
+    const char *data_dir = getenv(APP_DATA_DIR_VAR);
+    if (data_dir == NULL || data_dir[0] != '/') {
+        return 0;
+    }
+    int data_fd = (int)syscall(__NR_openat, AT_FDCWD, data_dir, O_PATH | O_DIRECTORY | O_CLOEXEC, 0);
+    if (data_fd < 0) {
+        return 0;
+    }
+    char data_root[PATH_MAX];
+    ssize_t data_length = fd_path(data_fd, data_root, sizeof(data_root));
+    syscall(__NR_close, data_fd);
+    if (data_length <= 1 || data_length >= (ssize_t)sizeof(data_root)) {
+        return 0;
+    }
+
     const size_t directory = sizeof(COPY_DIRECTORY) - 1;
     const size_t prefix = sizeof(COPY_LINK_PREFIX) - 1;
     char parent[PATH_MAX];
     ssize_t length = fd_path(dirfd, parent, sizeof(parent));
     // A whole buffer may be a path cut short, which proves nothing about its end.
-    if (length < (ssize_t)(directory + HASH_LENGTH) || length >= (ssize_t)sizeof(parent)) {
+    if (length < 0 || length >= (ssize_t)sizeof(parent)) {
         return 0;
     }
-    const char *hash = parent + length - HASH_LENGTH;
-    if (memcmp(hash - directory, COPY_DIRECTORY, directory) != 0 || !is_hash(hash)) {
+    const ssize_t expected = data_length + (ssize_t)(directory + HASH_LENGTH);
+    if (length != expected || memcmp(parent, data_root, (size_t)data_length) != 0 ||
+        memcmp(parent + data_length, COPY_DIRECTORY, directory) != 0) {
+        return 0;
+    }
+    const char *hash = parent + data_length + directory;
+    if (!is_hash(hash)) {
         return 0;
     }
     // Two bytes more than the form, so a longer target cannot pass for it.

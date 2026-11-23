@@ -1005,4 +1005,27 @@ class DownloadCoordinatorTest {
         )
     }
 
+    @Test
+    fun `a premature completion while the picker is still open is ignored without emitting SAVED`() {
+        coordinator.onDownloadNamed("blob:early", "notes.txt")
+        coordinator.onDownloadStart("blob:early", null)
+        val pendingId = pickerIds.single()
+
+        coordinator.onComplete(pendingId, null)
+        coordinator.onComplete(pendingId, "premature error")
+
+        assertEquals(emptyList<Pair<DownloadOutcome, String>>(), reported, "premature onComplete reported an outcome before destination opened")
+
+        val target = destination("chosen-after-premature")
+        chooseDestination(target)
+        val id = liveRequestId()
+        assertEquals(pendingId, id)
+        coordinator.onBytes(id, encode("real contents"))
+        coordinator.onComplete(id, null)
+
+        assertEquals("real contents", documents[target]!!.written.toString())
+        assertEquals(listOf(DownloadOutcome.SAVED to "notes.txt"), reported)
+        assertEquals(emptyList<Uri>(), discarded)
+    }
+
 }

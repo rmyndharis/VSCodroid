@@ -194,6 +194,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
     // The four callbacks this screen put on the service (ready, error, gave up, stopped), kept so that
     // [onDestroy] takes off the ones that are still its own and nothing else.
     private var serviceCallbacks: Array<Any?>? = null
+    @Volatile
     private var serverPort = 0
     private var backgroundedAt = 0L
     private var bridgeInitialized = false
@@ -297,6 +298,12 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
     private var crashDialog: AlertDialog? = null
     private var awayFromHomeNotice: AlertDialog? = null
     private var awayFromHomePendingShow: (() -> Unit)? = null
+    private var androidBridge: AndroidBridge? = null
+    @Volatile
+    private var destroyed = false
+    private var activeDialogs: MutableSet<AlertDialog>? = null
+    @Volatile
+    private var pendingRemovalLatches: MutableSet<CountDownLatch>? = null
 
     // The home port of an away-from-home notice the person has not answered yet, or 0. An activity
     // taken down before the answer gives it back to the gateway, so the next editor load says it:
@@ -387,26 +394,16 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
 
     /**
      * The directories this app publishes into the WebView and the locations the
-     * interceptor must refuse to serve: resolved first in [initBridge], then again by
-     * the client at every main-frame navigation (see [com.vscodroid.webview.ResourceRules]).
+     * interceptor must refuse to serve. Marked stale by the client at every
+     * main-frame navigation and resolved lazily on the interceptor's off-main
+     * thread (see [com.vscodroid.webview.ResourceRules]).
      *
-     * Resolved on the main thread, deliberately. [publishedResourceRoots] stats
-     * external storage and canonicalises four paths (and [sensitiveLocations], which it
-     * leaves out of them), so it is disk I/O, and [MainThreadWatch] makes a debug build
-     * say so, as expected. It is also the allowlist that
-     * `shouldInterceptRequest` compares every resource request against, and
-     * [initBridge] installs the client immediately before [navigateToFolder]
-     * starts the page loading, so resolved on another thread, the first requests
-     * would arrive while the list was still empty, and an empty allowlist refuses
-     * every extension resource without a sound. A markdown preview that renders
-     * blank is a far worse trade than a few milliseconds spent after a server
-     * start that already took seconds.
-     *
-     * One holder per Activity rather than per WebView: [recreateWebView] clears
-     * `bridgeInitialized`, and the client built after a renderer crash takes the
-     * rules as they are and resolves them again at its first navigation.
+     * Built on [applicationContext] rather than `this` so the rule resolver does
+     * not retain the Activity, and one holder per Activity rather than per WebView:
+     * [recreateWebView] clears `bridgeInitialized`, and the replacement client
+     * marks the same holder stale on its first navigation.
      */
-    private val resourceRules by lazy { com.vscodroid.webview.ResourceRules.of(this) }
+    private val resourceRules by lazy { com.vscodroid.webview.ResourceRules.of(applicationContext) }
 
     /**
      * The folder the workbench currently has open, derived once per navigation.
@@ -1386,6 +1383,11 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         // which is why the manager is built on the application context and why the
         // device-folder notices in onCreate close over that and a main-thread
         // Handler rather than over this Activity.
+        destroyed = true
+        synchronized(this) { pendingRemovalLatches }?.let { latches ->
+            latches.forEach { it.countDown() }
+            latches.clear()
+        }
         keyboardDismissal.release()
         val stopping = if (::safManager.isInitialized) safManager else null
         val logTag = tag
@@ -1451,8 +1453,11 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         awayFromHomeNotice?.setOnDismissListener(null)
         // Taken down with its screen for the same reason, and handed back: see [awayFromHomeUnanswered].
         awayFromHomeNotice?.takeIf { it.isShowing }?.dismiss()
+        dismissActiveDialogs()
         returnUnansweredAwayFromHome()
         AppNotices.drop(this, carry = true)
+        androidBridge?.shutdown()
+        androidBridge = null
         webView?.destroy()
         webView = null
         super.onDestroy()
@@ -1483,10 +1488,9 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * small files written atomically, serialised with installs by the manager's lock.
      */
     private fun refreshToolchainCommands() {
-        val toolchains = ToolchainManager(applicationContext)
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                toolchains.regenerateDerivedFiles()
+                ToolchainManager(applicationContext).regenerateDerivedFiles()
             } catch (e: Exception) {
                 Logger.w(tag, "Could not refresh the toolchain commands: ${e.message}")
             }
@@ -1734,10 +1738,11 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
 
         // Up before the provider is asked anything, and named from the tree URI
         // until it answers. Everything that used to run ahead of this dialog was a
-        // cross-process round trip: persistPermission resolves the display name and
-        // reads the persisted grants to prune the recent list, and getDisplayName
-        // queries the tree a second time. All three callers are on the thread that
-        // draws the screen (the picker result, the bridge through runOnUiThread, and
+        // cross-process round trip: queryDisplayName asks the provider for the
+        // folder's display name (passed into persistPermission below so the tree is
+        // queried once), and persistPermission reads the persisted grants to prune
+        // the recent list. All three callers are on the thread that draws the
+        // screen (the picker result, the bridge through runOnUiThread, and
         // onPageFinished through adoptWorkbenchFolder), so against a network- or
         // MTP-backed provider that was seconds of frozen editor with nothing on it
         // to say why. The real name replaces the placeholder below.
@@ -1789,6 +1794,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 // reporting the first sync's progress, and the one on top named a
                 // folder nothing was copying yet.
                 dialog.show()
+                trackDialog(dialog)
 
                 // NonCancellable, and for the permission alone. The grant used to be
                 // taken on the way in, so it was taken whatever happened next; a
@@ -1798,11 +1804,12 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 // below must still be skipped in that case, which the ordinary hop
                 // after this one does by throwing.
                 val (answeredName, copyIsNew) = withContext(NonCancellable + Dispatchers.IO) {
-                    safManager.persistPermission(uri)
+                    val queriedName = safManager.queryDisplayName(uri)
+                    safManager.persistPermission(uri, queriedName)
                     // Asked before the sync below makes the copy. A copy older than this
                     // open may have been opened by its hash path, which the workbench
                     // keeps its own state under; see deviceFolderTarget.
-                    safManager.queryDisplayName(uri) to !safManager.getMirrorDir(uri).exists()
+                    queriedName to !safManager.getMirrorDir(uri).exists()
                 }
                 // The name the provider gave, or the tree's own last segment where it did
                 // not. The dialog says either, but only the first is a name: the second is
@@ -2248,6 +2255,13 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * dialog waits on the storage worker while the UI stays responsive. A positive
      * callback authorizes removal only when it arrives within the bounded wait.
      */
+    private fun removalLatches(): MutableSet<CountDownLatch> =
+        synchronized(this) {
+            pendingRemovalLatches ?: java.util.concurrent.ConcurrentHashMap.newKeySet<CountDownLatch>().also {
+                pendingRemovalLatches = it
+            }
+        }
+
     private fun confirmForcedRemoval(): Boolean {
         // The one thread this cannot be asked from, refused rather than obeyed.
         // Waiting for a dialog on the thread that has to draw it is a deadlock
@@ -2265,41 +2279,50 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         // The handle the timeout below needs. Written on the UI thread and read on
         // this one, so it is published rather than a plain field.
         val shown = AtomicReference<AlertDialog?>(null)
-        runOnUiThread {
-            // A dialog on a window that is going away throws, and this is reached
-            // from a thread that knows nothing about the screen's lifecycle. The
-            // latch is released either way, so a removal is never left waiting out
-            // the whole bound for a dialog that was never drawn.
-            if (isFinishing || isDestroyed) {
-                answered.countDown()
-                return@runOnUiThread
-            }
-            shown.set(
-                AlertDialog.Builder(this)
-                    .setMessage(getString(R.string.saf_mirror_not_a_copy))
-                    .setPositiveButton(R.string.saf_mirror_remove) { _, _ ->
-                        confirmed.set(true)
-                        answered.countDown()
-                    }
-                    .setNegativeButton(android.R.string.cancel) { _, _ -> answered.countDown() }
-                    // Back and a tap outside both land here rather than on either
-                    // button, and neither is a yes.
-                    .setOnCancelListener { answered.countDown() }
-                    .show()
-            )
-        }
-        val got = answered.await(FORCED_REMOVAL_CONFIRM_MS, TimeUnit.MILLISECONDS)
-        if (!got) {
-            // Taken down only when nobody answered: a button already dismissed its
-            // own dialog, and dismiss() is not cancel(), so this cannot release the
-            // latch a second time. Guarded like every other dialog call here,
-            // because the window may have gone while the wait ran; destroyed
-            // alone, because a screen that is only finishing still has it.
+        val latches = removalLatches()
+        latches.add(answered)
+        try {
+            if (destroyed) return false
             runOnUiThread {
-                if (!isDestroyed) shown.get()?.dismiss()
+                // A dialog on a window that is going away throws, and this is reached
+                // from a thread that knows nothing about the screen's lifecycle. The
+                // latch is released either way, so a removal is never left waiting out
+                // the whole bound for a dialog that was never drawn.
+                if (isFinishing || isDestroyed || destroyed) {
+                    answered.countDown()
+                    return@runOnUiThread
+                }
+                shown.set(
+                    trackDialog(
+                        AlertDialog.Builder(this)
+                            .setMessage(getString(R.string.saf_mirror_not_a_copy))
+                            .setPositiveButton(R.string.saf_mirror_remove) { _, _ ->
+                                confirmed.set(true)
+                                answered.countDown()
+                            }
+                            .setNegativeButton(android.R.string.cancel) { _, _ -> answered.countDown() }
+                            // Back and a tap outside both land here rather than on either
+                            // button, and neither is a yes.
+                            .setOnCancelListener { answered.countDown() }
+                            .show()
+                    ) { answered.countDown() }
+                )
             }
+            val got = answered.await(FORCED_REMOVAL_CONFIRM_MS, TimeUnit.MILLISECONDS)
+            if (!got) {
+                // Taken down only when nobody answered: a button already dismissed its
+                // own dialog, and dismiss() is not cancel(), so this cannot release the
+                // latch a second time. Guarded like every other dialog call here,
+                // because the window may have gone while the wait ran; destroyed
+                // alone, because a screen that is only finishing still has it.
+                runOnUiThread {
+                    if (!isDestroyed) shown.get()?.dismiss()
+                }
+            }
+            return got && confirmed.get()
+        } finally {
+            latches.remove(answered)
         }
-        return got && confirmed.get()
     }
 
     /**
@@ -3810,10 +3833,12 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * per WebView: [recreateWebView] clears the guard, and a server restart does not.
      */
     private fun initBridge(port: Int) {
+        if (port > 0) serverPort = port
         val wv = webView ?: return
 
-        // Skip re-initialization if this WebView already has the bridge. The port
-        // is not part of the guard.
+        // Skip re-initialization if this WebView already has the bridge. The live
+        // port above is still updated so existing clients and callbacks follow
+        // a server restart onto a new port.
         if (bridgeInitialized) return
         bridgeInitialized = true
 
@@ -3917,6 +3942,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 runOnUiThread { answerBridgeCommand(id, ok, payload) }
             },
         )
+        androidBridge = bridge
         wv.addJavascriptInterface(bridge, "AndroidBridge")
 
         // One set of rules for both entry points. The service worker is the second
@@ -3954,13 +3980,16 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         // than `self.get()?....` for that reason.
         val self = WeakReference(this)
         VSCodroidWebViewClient.setupServiceWorkerInterception(
-            port, { self.get()?.resourceRules?.roots }, { self.get()?.resourceRules?.sensitive },
+            { self.get()?.serverPort },
+            { self.get()?.resourceRules?.roots },
+            { self.get()?.resourceRules?.sensitive },
             { self.get()?.openWorkspaceRoot },
             { self.get()?.workspaceResources?.roots() },
+            { self.get()?.resourceRules?.staticRoots },
         ) { self.get()?.nodeService?.getConnectionToken() }
 
         wv.webViewClient = VSCodroidWebViewClient(
-            allowedPort = port,
+            allowedPort = { serverPort },
             resourceRules = resourceRules,
             openFolder = { openWorkspaceRoot },
             workspaceMembers = { workspaceResources.roots() },
@@ -3973,7 +4002,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 // timestamp forward rather than clearing it so the new page is not
                 // reloaded on return yet still ages from its own load if the app
                 // stays stopped for another five minutes.
-                if (isWorkbenchUrl(url, port) && backgroundedAt != 0L) {
+                if (isWorkbenchUrl(url, serverPort) && backgroundedAt != 0L) {
                     backgroundedAt = SystemClock.elapsedRealtime()
                 }
             },
@@ -4038,7 +4067,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 val opened = folderFromUrl(url)
                 if (opened != null) {
                     if (rememberWorkspaceFolder(opened)) adoptWorkbenchFolder(opened)
-                } else if (emptyWindowUrl(url, port) != null) {
+                } else if (emptyWindowUrl(url, serverPort) != null) {
                     // Closing the folder is a navigation the workbench performs on
                     // itself, so this callback is the only place Kotlin can learn
                     // it happened. The test is [emptyWindowUrl] and not
@@ -4047,7 +4076,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                     // (the next launch drops the user in the projects directory)
                     // looks nothing like the cause.
                     rememberWorkspaceFolder(null)
-                } else if (isWorkbenchUrl(url, port) &&
+                } else if (isWorkbenchUrl(url, serverPort) &&
                     workbenchSelection(workspaceQueryFromUrl(url))?.kind in setOf("folder", "workspace")
                 ) {
                     // The selected path failed validation, but this load replaced the old page.
@@ -4081,7 +4110,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 // token into a page that has no bridge to use it, and sets the
                 // flag that tells an arriving OAuth callback it has a workbench
                 // to land in. It then lands in a page that cannot consume it.
-                if (isWorkbenchUrl(url, port)) {
+                if (isWorkbenchUrl(url, serverPort)) {
                     if (backgroundedAt != 0L) {
                         backgroundedAt = SystemClock.elapsedRealtime()
                     }
@@ -6464,39 +6493,39 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                     if (held && e.target === held.target) finish(held);
                 }, true);
                 window.setTimeout = function(callback, delay) {
-                    var text = typeof callback === 'function'
-                        ? Function.prototype.toString.call(callback)
-                        : '';
-                    if (key && key.eventPhase !== 0 && !held &&
-                        (delay === 0 || delay === undefined) &&
-                        ((key.type === 'keydown' && text.indexOf('_textareaChangeTimer') >= 0) ||
-                            (key.type === 'compositionupdate' && text.indexOf('_compositionPosition.end') >= 0))) {
-                        var pending = {
-                            target: key.target, callback: callback,
-                            args: Array.prototype.slice.call(arguments, 2),
-                            comp: key.type === 'compositionupdate'
-                        };
-                        held = pending;
-                        // A cancelled edit may produce no input; do not retain its timer indefinitely.
-                        pending.id = timeout.call(window, function() { finish(pending); }, 100);
-                        return pending.id;
-                    }
-                    if (key && key.eventPhase !== 0 && key.type === 'compositionend' &&
-                        (delay === 0 || delay === undefined) && text.indexOf('_isSendingComposition') >= 0) {
-                        // The composition's own send keeps its time but stays within reach of the next key.
-                        var end = {
-                            target: key.target, callback: callback,
-                            args: Array.prototype.slice.call(arguments, 2)
-                        };
-                        ended.push(end);
-                        end.id = timeout.call(window, function() { finish(end); }, 0);
-                        return end.id;
+                    if (key && key.eventPhase !== 0 && (delay === 0 || delay === undefined) && typeof callback === 'function') {
+                        var text = Function.prototype.toString.call(callback);
+                        if (!held &&
+                            ((key.type === 'keydown' && text.indexOf('_textareaChangeTimer') >= 0) ||
+                                (key.type === 'compositionupdate' && text.indexOf('_compositionPosition.end') >= 0))) {
+                            var pending = {
+                                target: key.target, callback: callback,
+                                args: Array.prototype.slice.call(arguments, 2),
+                                comp: key.type === 'compositionupdate'
+                            };
+                            held = pending;
+                            // A cancelled edit may produce no input; do not retain its timer indefinitely.
+                            pending.id = timeout.call(window, function() { finish(pending); }, 100);
+                            return pending.id;
+                        }
+                        if (key.type === 'compositionend' && text.indexOf('_isSendingComposition') >= 0) {
+                            // The composition's own send keeps its time but stays within reach of the next key.
+                            var end = {
+                                target: key.target, callback: callback,
+                                args: Array.prototype.slice.call(arguments, 2)
+                            };
+                            ended.push(end);
+                            end.id = timeout.call(window, function() { finish(end); }, 0);
+                            return end.id;
+                        }
                     }
                     return timeout.apply(this, arguments);
                 };
                 window.clearTimeout = function(id) {
                     if (held && held.id === id) held = null;
-                    ended = ended.filter(function(p) { return p.id !== id; });
+                    if (ended.length > 0) {
+                        ended = ended.filter(function(p) { return p.id !== id; });
+                    }
                     return cancel.apply(this, arguments);
                 };
             })();
@@ -7170,7 +7199,8 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                     // language mode and status), and the padding above makes each entry
                     // wider. One row that the script below scrolls by hand keeps them all
                     // reachable.
-                    '  .part.statusbar > .right-items { flex-wrap: nowrap !important; overflow-x: hidden !important; min-width: 0 !important; }',
+                    '  .part.statusbar > .right-items { flex-wrap: nowrap !important; overflow-x: auto !important; scrollbar-width: none !important; min-width: 0 !important; }',
+                    '  .part.statusbar > .right-items::-webkit-scrollbar { display: none !important; }',
                     '  .context-view .action-item { min-height: 40px !important; }',
                     '  .context-view .monaco-menu .action-menu-item { height: auto !important; min-height: 40px !important; }',
                     '  .context-view .action-label:not(.separator) { max-height: none !important; padding: 6px 12px 6px 2em !important; }',
@@ -7271,6 +7301,13 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                     // width on a phone than as alignment.
                     '  .monaco-dialog-box > .dialog-buttons-row > .dialog-buttons { flex-wrap: wrap !important; }',
                     '  .monaco-dialog-box:not(.align-vertical) > .dialog-buttons-row > .dialog-buttons { margin-left: 0 !important; }',
+                    // Narrow portrait walkthrough steps clip trailing shortcut keycaps (such as [T])
+                    // because .step-container lacks min-width: 0, .shortcut-message sets white-space: pre
+                    // on a non-wrapping flex row, and .monaco-button forces min-width: max-content.
+                    '  .gettingStartedSlideDetails .getting-started-step .step-container { min-width: 0 !important; }',
+                    '  .gettingStartedSlideDetails .getting-started-step .shortcut-message { flex-wrap: wrap !important; white-space: normal !important; row-gap: 4px !important; }',
+                    '  .gettingStartedSlideDetails .getting-started-step .shortcut-message .monaco-keybinding { flex-wrap: wrap !important; row-gap: 2px !important; }',
+                    '  .gettingStartedSlideDetails .getting-started-step .step-description-container .monaco-button { max-width: 100% !important; min-width: 0 !important; }',
                     '}'
                 ].join('\n');
                 document.head.appendChild(s);
@@ -7279,71 +7316,39 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 // layer, so the browser never scrolls the row itself: the touch events stop
                 // before the bubble phase and no pointercancel follows. The row is row-reverse,
                 // so scrollLeft runs from 0 at its right end down to minus the overflow.
-                // Any entry crossing either edge of `.right-items` is hidden whole so no item is
-                // sliced mid-word.
+                // Off-screen items stay visible in the accessibility tree and keyboard focus
+                // order, and focusing any item brings it into view.
                 var STRIP_SELECTOR = '.part.statusbar > .right-items';
-                function syncRightStrip() {
-                    if (typeof document.querySelector !== 'function') return;
-                    var row = document.querySelector(STRIP_SELECTOR);
-                    if (!row || typeof row.querySelectorAll !== 'function' ||
-                        typeof row.getBoundingClientRect !== 'function') return;
+                var focusedStrip = null;
+                function scrollItemIntoStrip(row, target) {
+                    if (!row || !target || typeof row.getBoundingClientRect !== 'function') return;
+                    var item = target.closest ? target.closest('.statusbar-item') : target;
+                    if (!item || typeof item.getBoundingClientRect !== 'function') return;
                     var sr = row.getBoundingClientRect();
                     if (!(sr.width > 0)) return;
-                    var items = row.querySelectorAll('.statusbar-item');
-                    var next = new Array(items.length);
-                    for (var i = 0; i < items.length; i++) {
-                        if (typeof items[i].getBoundingClientRect !== 'function' || !items[i].style) continue;
-                        var ir = items[i].getBoundingClientRect();
-                        if (ir.width <= 0) { next[i] = ''; continue; }
-                        next[i] = (ir.left < sr.left - 0.5 || ir.right > sr.right + 0.5) ? 'hidden' : '';
-                    }
-                    for (var j = 0; j < items.length; j++) {
-                        if (next[j] !== undefined && items[j].style.visibility !== next[j]) {
-                            items[j].style.visibility = next[j];
-                        }
+                    var ir = item.getBoundingClientRect();
+                    var overflow = Math.max(0, row.scrollWidth - row.clientWidth);
+                    if (ir.left < sr.left) {
+                        row.scrollLeft = Math.max(-overflow, Math.min(0, row.scrollLeft + (ir.left - sr.left)));
+                    } else if (ir.right > sr.right) {
+                        row.scrollLeft = Math.max(-overflow, Math.min(0, row.scrollLeft + (ir.right - sr.right)));
                     }
                 }
-                var syncQueued = false;
-                function scheduleSync() {
-                    if (typeof requestAnimationFrame !== 'function') { syncRightStrip(); return; }
-                    if (syncQueued) return;
-                    syncQueued = true;
-                    requestAnimationFrame(function() {
-                        syncQueued = false;
-                        attachStatusObservers();
-                    });
-                }
-                var observedStatusbar = null;
-                var observedStrip = null;
-                var observedMutBar = null;
-                var observedMutStrip = null;
-                var resizeObs = typeof ResizeObserver === 'function' ? new ResizeObserver(scheduleSync) : null;
-                var statusMutObs = typeof MutationObserver === 'function' ? new MutationObserver(scheduleSync) : null;
-                function attachStatusObservers() {
+                function attachStatusStrip() {
                     if (typeof document.querySelector !== 'function') return false;
-                    var bar = document.querySelector('.part.statusbar');
                     var row = document.querySelector(STRIP_SELECTOR);
-                    if (!bar && !row) return false;
-                    if (resizeObs) {
-                        if (row && row !== observedStrip) { resizeObs.observe(row); observedStrip = row; }
-                        if (bar && bar !== observedStatusbar) { resizeObs.observe(bar); observedStatusbar = bar; }
+                    if (!row) return false;
+                    if (row !== focusedStrip && typeof row.addEventListener === 'function') {
+                        focusedStrip = row;
+                        row.addEventListener('focusin', function(e) {
+                            scrollItemIntoStrip(row, e.target);
+                        });
                     }
-                    if (statusMutObs) {
-                        if (row && row !== observedMutStrip) {
-                            statusMutObs.observe(row, { childList: true, subtree: true, characterData: true });
-                            observedMutStrip = row;
-                        }
-                        if (bar && bar !== observedMutBar) {
-                            statusMutObs.observe(bar, { childList: true });
-                            observedMutBar = bar;
-                        }
-                    }
-                    syncRightStrip();
                     return true;
                 }
-                if (!attachStatusObservers() && typeof MutationObserver === 'function' && document.body) {
+                if (!attachStatusStrip() && typeof MutationObserver === 'function' && document.body) {
                     var bootObs = new MutationObserver(function() {
-                        if (attachStatusObservers()) bootObs.disconnect();
+                        if (attachStatusStrip()) bootObs.disconnect();
                     });
                     bootObs.observe(document.body, { childList: true, subtree: true });
                 }
@@ -7358,9 +7363,8 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                     if (e.touches.length !== 1) { strip = null; return; }
                     var overflow = strip.scrollWidth - strip.clientWidth;
                     strip.scrollLeft = Math.max(-overflow, Math.min(0, startLeft - (e.touches[0].clientX - startX)));
-                    syncRightStrip();
                 }, { capture: true, passive: true });
-                var endPan = function() { strip = null; syncRightStrip(); };
+                var endPan = function() { strip = null; };
                 window.addEventListener('touchend', endPan, { capture: true, passive: true });
                 window.addEventListener('touchcancel', endPan, { capture: true, passive: true });
             })();
@@ -7414,9 +7418,16 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                     // workbench has run beforeunload and stopped its extension
                     // host, which left the editor half dead; measured on an
                     // emulator.
-                    var root = window.location.origin + '/';
-                    if (url && url.slice(0, root.length).toLowerCase() === root.toLowerCase()) {
-                        var next = url.charAt(root.length);
+                    var origin = window.location.origin;
+                    var root = origin + '/';
+                    var lowerUrl = url ? url.toLowerCase() : '';
+                    var lowerOrigin = origin.toLowerCase();
+                    var isRoot = url && lowerUrl.slice(0, root.length) === lowerOrigin + '/';
+                    var isBare = url && (lowerUrl === lowerOrigin ||
+                        (lowerUrl.slice(0, lowerOrigin.length) === lowerOrigin &&
+                            (url.charAt(lowerOrigin.length) === '?' || url.charAt(lowerOrigin.length) === '#')));
+                    if (isRoot || isBare) {
+                        var next = isRoot ? url.charAt(root.length) : '';
                         if (next === '' || next === '?' || next === '#') {
                             window.location.href = url;
                         }
@@ -7752,13 +7763,16 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * bundled extension.** `product.json` carries no `webEndpointUrlTemplate`, and
      * without one the workbench starts the web extension host in a SAME-ORIGIN
      * iframe and says so (`console.warn("The web worker extension host is started
-     * in a same-origin iframe!")` in `out/vs/code/browser/workbench/workbench.js`). A
-     * `BroadcastChannel` is scoped by origin, so every web extension the user
-     * installs from Open VSX shares this one. The token read below is no barrier
-     * either: it is read out of `window.__vscodroid` by this script, on that same
-     * origin, so anything that can post can also read it. Answers are posted back
-     * onto the same channel, so every listener sees every reply, including replies
-     * to commands somebody else asked for.
+     * in a same-origin iframe!")` in `out/vs/code/browser/workbench/workbench.js`).
+     * Browser extensions run inside a Dedicated Web Worker (which has no `window`
+     * or DOM access and cannot directly read `window.__vscodroid.authToken` or call
+     * `AndroidBridge`), but because the worker shares the workbench origin, every
+     * web extension the user installs from Open VSX can open the `vscodroid-bridge`
+     * `BroadcastChannel`. The token read below is no barrier there because this
+     * page-side relay automatically attaches `window.__vscodroid.authToken` when
+     * forwarding messages from that channel. Answers are posted back onto the same
+     * channel, so every listener sees every reply, including replies to commands
+     * somebody else asked for.
      *
      * What that means for what may be dispatched here, worked out per command
      * rather than assumed:
@@ -8041,6 +8055,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * not open is replaced in place by a line naming it.
      */
     private fun showLicensesDialog() {
+        if (isFinishing || isDestroyed) return
         showWithReachableButtons(
             AlertDialog.Builder(this)
                 .setTitle(getString(R.string.licenses_title))
@@ -8053,6 +8068,36 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                     openInBrowser("https://github.com/rmyndharis/VSCodroid")
                 }
         )
+    }
+
+    /**
+     * Tracks a modal dialog on the main thread so [dismissActiveDialogs] can tear it
+     * down cleanly in [onDestroy] without leaving leaked windows behind.
+     */
+    private fun trackDialog(
+        dialog: AlertDialog,
+        preserveDismissListener: Boolean = false,
+        onDismiss: (() -> Unit)? = null,
+    ): AlertDialog {
+        val dialogs = activeDialogs ?: mutableSetOf<AlertDialog>().also { activeDialogs = it }
+        dialogs.removeAll { !it.isShowing }
+        dialogs.add(dialog)
+        if (!preserveDismissListener) {
+            dialog.setOnDismissListener {
+                activeDialogs?.remove(dialog)
+                onDismiss?.invoke()
+            }
+        }
+        return dialog
+    }
+
+    private fun dismissActiveDialogs() {
+        val dialogs = activeDialogs?.toList() ?: return
+        activeDialogs?.clear()
+        for (dialog in dialogs) {
+            dialog.setOnDismissListener(null)
+            dialog.takeIf { it.isShowing }?.dismiss()
+        }
     }
 
     /**
@@ -8071,7 +8116,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * limit. Answers the dialog it showed.
      */
     private fun showWithReachableButtons(builder: AlertDialog.Builder): AlertDialog {
-        val dialog = builder.show()
+        val dialog = trackDialog(builder.show())
         val contentPanel = dialog.findViewById<View>(androidx.appcompat.R.id.contentPanel)
         val customPanel = dialog.findViewById<View>(androidx.appcompat.R.id.customPanel)
         val buttonPanel = dialog.findViewById<View>(androidx.appcompat.R.id.buttonPanel)
@@ -8110,22 +8155,28 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * line naming it, on screen, where it cannot be mistaken for the licence.
      */
     private fun showLicenseTextsDialog() {
+        if (isFinishing || isDestroyed) return
         val names = Notices.LICENSE_TEXTS.keys.toTypedArray()
-        AlertDialog.Builder(this)
-            .setTitle(getString(R.string.licenses_full_texts))
-            .setItems(names) { _, which ->
-                val name = names[which]
-                AlertDialog.Builder(this)
-                    .setTitle(name)
-                    .setView(
-                        scrollableNotice(
-                            Notices.readOne(Notices.LICENSE_TEXTS.getValue(name)) { assets.open(it) }
-                        )
+        trackDialog(
+            AlertDialog.Builder(this)
+                .setTitle(getString(R.string.licenses_full_texts))
+                .setItems(names) { _, which ->
+                    if (isFinishing || isDestroyed) return@setItems
+                    val name = names[which]
+                    trackDialog(
+                        AlertDialog.Builder(this)
+                            .setTitle(name)
+                            .setView(
+                                scrollableNotice(
+                                    Notices.readOne(Notices.LICENSE_TEXTS.getValue(name)) { assets.open(it) }
+                                )
+                            )
+                            .setPositiveButton(getString(R.string.dialog_ok), null)
+                            .show()
                     )
-                    .setPositiveButton(getString(R.string.dialog_ok), null)
-                    .show()
-            }
-            .show()
+                }
+                .show()
+        )
     }
 
     /** A long document in a scroller, laid out the same way wherever it is shown. */
@@ -8163,6 +8214,8 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         // arrives, which is the right thing for a row with no page under it.
         extraKeyRow?.keyInjector = null
         (wv.webViewClient as? VSCodroidWebViewClient)?.disposeAuthPage()
+        androidBridge?.shutdown()
+        androidBridge = null
         wv.destroy()
 
         val newWebView = EditorWebView(this)
@@ -8484,7 +8537,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         if (!WebViewVersion.shouldWarn(version, workspacePrefs.getString(KEY_WEBVIEW_WARNED, null))) return
         // Remembered when the dialog is answered, not before it is shown: a screen that ends under it, or a
         // process that is killed, would otherwise leave a warning nobody saw marked as given.
-        AlertDialog.Builder(this)
+        val warning = AlertDialog.Builder(this)
             .setTitle(getString(R.string.webview_below_minimum_title))
             .setMessage(
                 getString(
@@ -8497,6 +8550,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
             .setNegativeButton(getString(R.string.crash_dismiss), null)
             .setOnDismissListener { workspacePrefs.edit { putString(KEY_WEBVIEW_WARNED, version) } }
             .show()
+        trackDialog(warning, preserveDismissListener = true)
     }
 
     /**
@@ -8700,7 +8754,7 @@ internal fun memoryPressureOf(level: Int): String = when (level) {
  * one works in a plain JVM test, and the decision here is about two strings.
  */
 internal fun isExtensionCallback(scheme: String?, host: String?): Boolean =
-    scheme == "vscodroid" && host == "callback"
+    scheme.equals("vscodroid", ignoreCase = true) && host.equals("callback", ignoreCase = true)
 
 /**
  * The workbench request id a callback payload names, or null if it names none.

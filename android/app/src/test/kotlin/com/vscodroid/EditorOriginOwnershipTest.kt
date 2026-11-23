@@ -61,7 +61,7 @@ class EditorOriginOwnershipTest {
         every { Logger.e(any(), any()) } just Runs
         mockkObject(VSCodroidWebViewClient.Companion)
         every {
-            VSCodroidWebViewClient.setupServiceWorkerInterception(any(), any(), any(), any(), any(), any())
+            VSCodroidWebViewClient.setupServiceWorkerInterception(any(), any(), any(), any(), any(), any(), any())
         } just Runs
         server = ServerSocket(0, 0, InetAddress.getByName("127.0.0.1"))
         address = "http://127.0.0.1:${server.localPort}/"

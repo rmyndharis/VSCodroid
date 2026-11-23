@@ -6,7 +6,7 @@
 // be named directly any more, because the CLI needs libseccomp-shim.so loaded
 // before its own code runs, and a setting holds a path rather than a loader
 // option. So this sits in between and execs the loader as
-// `libldmusl.so --preload=<shim> <cli> <args...>`.
+// `libldmusl.so --preload=<shim> -- <cli> <args...>`.
 //
 // On the loader's command line and never in LD_PRELOAD. The shim interposes
 // `sigaction` against musl's structure layout, which is not Bionic's, and an
@@ -31,6 +31,7 @@
 
 static const char kLoader[] = "libldmusl.so";
 static const char kShim[] = "libseccomp-shim.so";
+static char kEndOfOptions[] = "--";
 
 int main(int argc, char **argv) {
     if (argc < 2) {
@@ -86,17 +87,18 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    // loader, the preload option, then everything this was called with from
-    // argv[1] on, which is the CLI path followed by its own arguments.
-    char **next = calloc((size_t)argc + 2, sizeof(char *));
+    // loader, the preload option, `--` so musl's loader stops option parsing
+    // even if argv[1] begins with `-`, then argv[1] (the CLI path) and its args.
+    char **next = calloc((size_t)argc + 3, sizeof(char *));
     if (!next) {
         fprintf(stderr, "claude-launch: out of memory\n");
         return 1;
     }
     next[0] = loader;
     next[1] = preload;
-    for (int i = 1; i < argc; i++) next[i + 1] = argv[i];
-    next[argc + 1] = NULL;
+    next[2] = kEndOfOptions;
+    for (int i = 1; i < argc; i++) next[i + 2] = argv[i];
+    next[argc + 2] = NULL;
 
     execv(loader, next);
     fprintf(stderr, "claude-launch: cannot run %s: %s\n", loader, strerror(errno));

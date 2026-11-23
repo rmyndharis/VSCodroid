@@ -228,6 +228,23 @@ class ActivityTeardownTest {
                 "opened next is never watched and its saves never reach the device",
         )
     }
+
+    @Test
+    fun `onDestroy and recreateWebView shut down the AndroidBridge disk executor`() {
+        val destroy = code(body("override fun onDestroy()"))
+        val destroyShutdown = destroy.indexOfFirst { it.contains("androidBridge?.shutdown()") }
+        val destroyWebView = destroy.indexOfFirst { it.contains("webView?.destroy()") }
+        assertTrue(destroyShutdown in 0 until destroyWebView) {
+            "onDestroy must shut down androidBridge before destroying the WebView"
+        }
+
+        val recreate = code(body("private fun recreateWebView()"))
+        val recreateShutdown = recreate.indexOfFirst { it.contains("androidBridge?.shutdown()") }
+        val recreateWebView = recreate.indexOfFirst { it.contains("wv.destroy()") }
+        assertTrue(recreateShutdown in 0 until recreateWebView) {
+            "recreateWebView must shut down the old androidBridge before replacing the WebView"
+        }
+    }
 }
 
 /**

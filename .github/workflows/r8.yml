@@ -16,24 +16,15 @@ name: Shrinker
 # not a skipped one -- so a required check would sit forever at "Expected",
 # waiting for status to be reported, and block every unrelated PR.
 #
-# The two paths lists are deliberately not the same. Both name what CONFIGURES
-# the shrinkers; the push list also names the code they run over, because a tag
-# is cut from main and everything that reaches one passes through a push to main
-# first. So a change that only adds Kotlin gets a minified build within minutes
-# of landing rather than at the next cron, which is where the "up to a week from
-# its first minified build" this comment used to describe came from.
-#
-# What that trades: a pull request adding only Kotlin still does not trigger this,
-# so the first minified build of such a change is at merge rather than at review
-# time. Widening the pull_request list too would run a release compile on every
-# push of every branch under review, and the split exists to avoid that. On main
-# the same compile is one run per push, superseded by the concurrency group
-# below, and has taken 2 to 4 minutes including queue time on the runs so far.
+# Both triggers cover the same configuration files and Android source trees
+# (Kotlin, resources, and manifest) so R8, resource shrinking, and lintVital
+# catch regressions on pull requests as well as pushes to main. assets/ is read
+# by none of the three and is stubbed out below anyway.
 #
 # What it catches is these gates FAILING, not their being WRONG. A reflectively
 # reached member that no keep rule covers is removed silently, and this job is
 # green for it; only running a minified build on a device finds that, and no CI
-# here can -- see android/app/src/androidTest/README.md.
+# here can. See android/app/src/androidTest/README.md.
 
 on:
   schedule:
@@ -41,12 +32,10 @@ on:
     # is caught before anyone tags on it.
     - cron: "0 3 * * 1"
   workflow_dispatch:
-  # Most commits land straight on main rather than through a pull request, so a
-  # pull_request trigger alone leaves the configuration files below reaching a
-  # minified build only on the next cron, or first at tag time with the keystore
-  # already decoded. The configuration half of the list is spelled out under both
-  # triggers because GitHub Actions does not resolve YAML anchors in a workflow
-  # file; the source paths below it are on this trigger only.
+  # Most commits land straight on main rather than through a pull request, so
+  # both triggers watch the build configuration and the Android sources the
+  # shrinkers read. The path list is spelled out under both triggers because
+  # GitHub Actions does not resolve YAML anchors in a workflow file.
   push:
     branches: [main]
     paths:
@@ -57,11 +46,9 @@ on:
       - "android/gradle.properties"
       - "android/gradle/wrapper/gradle-wrapper.properties"
       - ".github/workflows/r8.yml"
-      # On main alone, the code the shrinkers run over as well. R8 reads the
-      # Kotlin, the resource shrinker and lintVital read res/ and the manifest;
-      # assets/ is read by none of the three, and the tree stubbed out below is
-      # what this job builds against anyway, so listing it would buy runner
-      # minutes and nothing else.
+      # The code and resources the shrinkers and lintVital run over. assets/ is
+      # read by none of the three, and the tree stubbed out below is what this
+      # job builds against anyway.
       - "android/app/src/main/kotlin/**"
       - "android/app/src/main/res/**"
       - "android/app/src/main/AndroidManifest.xml"
@@ -81,6 +68,9 @@ on:
       # for the first time at tag time.
       - "android/gradle/wrapper/gradle-wrapper.properties"
       - ".github/workflows/r8.yml"
+      - "android/app/src/main/kotlin/**"
+      - "android/app/src/main/res/**"
+      - "android/app/src/main/AndroidManifest.xml"
 
 concurrency:
   group: r8-${{ github.event_name }}-${{ github.ref }}
@@ -199,7 +189,7 @@ jobs:
       # checkPatchFingerprints or validateSigningRelease.
       - name: Run the release-only gates
         working-directory: android
-        run: ./gradlew :app:optimizeReleaseResources :app:lintVitalRelease
+        run: ./gradlew :app:optimizeReleaseResources :app:lintVitalRelease -Pvscodroid.stubAssets=true
 
       # R8's own record of what it kept and removed. Worth having on the failing
       # run, since the mapping is what turns a release-build stack trace back into

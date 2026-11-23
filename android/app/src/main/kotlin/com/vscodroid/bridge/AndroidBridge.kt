@@ -39,7 +39,11 @@ import java.nio.file.attribute.PosixFilePermissions
 import java.lang.ref.WeakReference
 import java.net.URLEncoder
 import java.util.concurrent.Executor
-import java.util.concurrent.Executors
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import androidx.core.net.toUri
 
 /**
@@ -535,6 +539,23 @@ object AuthTabWindow {
     fun armedReadings(): List<Long> = launches.values.filterNot { it.expired }.mapNotNull { it.at }
 }
 
+internal fun bridgeDiskExecutor(idleMs: Long = 30_000L): ExecutorService =
+    ThreadPoolExecutor(1, 1, idleMs, TimeUnit.MILLISECONDS, LinkedBlockingQueue()) { r ->
+        Thread(r, "bridge-disk").apply { isDaemon = true }
+    }.apply { allowCoreThreadTimeOut(true) }
+
+/**
+ * Strips the trailing comment field from an OpenSSH public key line, keeping only
+ * `<type> <base64-key>` so personal identifiers such as email or host comments are
+ * not broadcast over the same-origin `BroadcastChannel` relay.
+ */
+internal fun stripSshPublicKeyComment(raw: String): String {
+    val line = raw.trim().lineSequence().firstOrNull()?.trim().orEmpty()
+    if (line.isEmpty()) return ""
+    val parts = line.split(Regex("\\s+"), limit = 3)
+    return if (parts.size >= 2) "${parts[0]} ${parts[1]}" else parts[0]
+}
+
 /**
  * The `AndroidBridge` object the workbench sees, one `@JavascriptInterface` method
  * per call an extension may make.
@@ -606,14 +627,9 @@ class AndroidBridge(
     /**
      * The one thread every disk-walking command runs on.
      *
-     * Single, deliberately. These used to run on the WebView's JavaBridge
-     * thread, which serialises every bridge call, so one at a time is the
-     * ordering they already had and the one their callers were written against;
-     * a pool would let two removals of the same copy overlap. Daemon, so it
-     * never holds the process up. Nothing shuts it down, and the reason that is
-     * bounded rather than a leak is that a bridge is built once per WebView:
-     * only a renderer crash produces a second one, and what the first leaves
-     * behind is an idle thread with no work and no queue.
+     * Single, deliberately: disk commands stay serialized so two removals of the
+     * same copy cannot overlap. Core thread timeout lets an idle thread exit, and
+     * [shutdown] closes the executor when its Activity or WebView is torn down.
      *
      * A constructor argument rather than a private field so that a test can
      * watch it. `BridgeTokenUniformityTest` decides whether a method OBEYED the
@@ -622,12 +638,15 @@ class AndroidBridge(
      * thread, racing the verification. Here the hand-off itself is the signal,
      * and it is recorded on the caller's thread.
      */
-    private val diskWork: Executor = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "bridge-disk").apply { isDaemon = true }
-    },
+    private val diskWork: Executor = bridgeDiskExecutor(),
     private val onWorkspaceRoots: (Long, List<String>) -> Boolean = { _, _ -> false },
 ) {
     private val tag = "AndroidBridge"
+
+    /** Stops the background disk-work executor when this bridge is detached. */
+    fun shutdown() {
+        (diskWork as? ExecutorService)?.shutdown()
+    }
 
     /**
      * How many commands are queued on or running against [diskWork].
@@ -674,18 +693,24 @@ class AndroidBridge(
                 "queued on the one disk thread")
             return false
         }
-        diskWork.execute {
-            try {
-                val (ok, payload) = try {
-                    work()
-                } catch (e: Exception) {
-                    Logger.e(tag, "A bridge command failed off the caller's thread", e)
-                    false to (e.message ?: "unknown error")
+        try {
+            diskWork.execute {
+                try {
+                    val (ok, payload) = try {
+                        work()
+                    } catch (e: Exception) {
+                        Logger.e(tag, "A bridge command failed off the caller's thread", e)
+                        false to (e.message ?: "unknown error")
+                    }
+                    onAsyncAnswer(replyId, ok, payload)
+                } finally {
+                    queuedDiskWork.decrementAndGet()
                 }
-                onAsyncAnswer(replyId, ok, payload)
-            } finally {
-                queuedDiskWork.decrementAndGet()
             }
+        } catch (_: RejectedExecutionException) {
+            queuedDiskWork.decrementAndGet()
+            Logger.d(tag, "Refusing a storage command: the bridge disk executor is shut down")
+            return false
         }
         return true
     }
@@ -1707,15 +1732,16 @@ class AndroidBridge(
 
     /**
      * Reads the SSH public key (~/.ssh/id_ed25519.pub).
-     * Returns the key contents, or an empty string when there is no such file, it cannot be read,
-     * or it is not one [readPublicKeyFile] reads.
+     * Returns `<type> <key>` with any trailing comment stripped (matching [listSshKeys]),
+     * or an empty string when there is no such file, it cannot be read, or it is not
+     * one [readPublicKeyFile] reads.
      */
     @JavascriptInterface
     fun getSshPublicKey(authToken: String): String {
         if (!security.validateToken(authToken)) return ""
         val pubKeyFile = File("${context.filesDir}/home/.ssh/id_ed25519.pub")
         return try {
-            readPublicKeyFile(pubKeyFile)?.trim() ?: ""
+            readPublicKeyFile(pubKeyFile)?.let(::stripSshPublicKeyComment) ?: ""
         } catch (e: Exception) {
             Logger.d(tag, "Failed to read the SSH public key: ${e.javaClass.simpleName}")
             ""

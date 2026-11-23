@@ -123,7 +123,7 @@ class ExternalUrlNoticeThrottleTest {
         every { context.startActivity(any()) } throws ActivityNotFoundException("no handler")
 
         client = VSCodroidWebViewClient(
-            allowedPort = ALLOWED_PORT,
+            allowedPort = { ALLOWED_PORT },
             resourceRules = noResourceRules(),
             openFolder = { null },
             connectionToken = { null },

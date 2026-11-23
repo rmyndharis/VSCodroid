@@ -306,13 +306,17 @@ class ProcessManager internal constructor(
      * kept, as everywhere: it stays reserved for the life of the process. A listener
      * this start did not open is left.
      */
-    private fun releaseOriginOfRefusedStart(gateway: EditorGateway, listenersAtStart: Long) {
+    private fun releaseOriginOfRefusedStart(
+        gateway: EditorGateway,
+        listenersAtStart: Long,
+        reason: String = "A stop refused this start",
+    ) {
         if (gateway.listenersOpened == listenersAtStart) return
         val bound = gateway.boundPort ?: return
         if (bound == PortFinder.rememberedPort(context)) return
         if (gateway.release(bound)) {
             _port = 0
-            Logger.i(tag, "A stop refused this start; released the temporary origin $bound it had bound")
+            Logger.i(tag, "$reason; released the temporary origin $bound it had bound")
         }
     }
 
@@ -328,29 +332,34 @@ class ProcessManager internal constructor(
      * nothing holding home. If home is taken between the check and the bind, the
      * start stays on the port it had.
      */
-    private fun leaveUnadoptedSurvivorsPort(gateway: EditorGateway, home: Int): Boolean {
-        val away = _port
-        if (home <= 0 || away == home || !PortFinder.isPortAvailable(home) || !gateway.release(away)) return true
+    private fun leaveUnadoptedSurvivorsPort(gateway: EditorGateway, home: Int): Boolean =
+        rebindAfterUnadoptedSurvivor(gateway, home, _port) > 0
+
+    private fun rebindAfterUnadoptedSurvivor(gateway: EditorGateway, home: Int, away: Int): Int {
+        if (home <= 0 || away == home || !PortFinder.isPortAvailable(home) || !gateway.release(away)) return away
         _port = 0
+        var rebound = 0
         for (port in listOf(home, away)) {
             try {
-                _port = gateway.bind(port)
+                rebound = gateway.bind(port)
+                _port = rebound
                 break
             } catch (_: IOException) {
             }
         }
-        if (_port == 0) {
+        if (rebound == 0) {
             try {
-                _port = gateway.bind(PortFinder.getOrAllocatePort(context))
+                rebound = gateway.bind(PortFinder.getOrAllocatePort(context))
+                _port = rebound
             } catch (e: IOException) {
                 Logger.e(tag, "Could not reserve the editor origin again", e)
                 serverLog.append("Could not reserve the editor origin: ${e.javaClass.simpleName}: ${e.message}")
-                return false
+                return 0
             }
         }
-        gateway.noteAwayFromHome(if (_port != home) home else 0)
-        Logger.i(tag, "The editor recorded on $away was not adopted; starting on $_port")
-        return true
+        gateway.noteAwayFromHome(if (rebound != home) home else 0)
+        Logger.i(tag, "The editor recorded on $away was not adopted; starting on $rebound")
+        return rebound
     }
 
     /**
@@ -652,7 +661,7 @@ class ProcessManager internal constructor(
         val inheritedPort = gateway.boundPort
         val listenersAtStart = gateway.listenersOpened
         val home = PortFinder.rememberedPort(context)
-        _port = inheritedPort ?: _port.takeIf { it > 0 } ?: home
+        var candidatePort = inheritedPort ?: _port.takeIf { it > 0 } ?: home
         val recordedSocket = recorded?.let { recordedBackendSocket(it) }
         // An editor that outlived the application process is adopted on the port
         // it was recorded on. That is not home when its process found home busy,
@@ -661,18 +670,19 @@ class ProcessManager internal constructor(
         // next one without a survivor goes home.
         val recordedPort = recorded?.optInt("port", 0) ?: 0
         var followedSurvivor = false
-        if (inheritedPort == null && recordedSocket != null && recordedPort > 0 && recordedPort != _port) {
-            val candidate = _port
-            _port = recordedPort
-            if (portHeldByOurEditorServer(editorNote)) followedSurvivor = true else _port = candidate
+        if (inheritedPort == null && recordedSocket != null && recordedPort > 0 && recordedPort != candidatePort) {
+            if (portHeldByOurEditorServer(editorNote, recordedPort)) {
+                candidatePort = recordedPort
+                followedSurvivor = true
+            }
         }
-        if (_port == 0) _port = PortFinder.getOrAllocatePort(context)
+        if (candidatePort == 0) candidatePort = PortFinder.getOrAllocatePort(context)
 
         // A legacy child owns TCP itself. End it before reserving the same WebView origin.
         if (inheritedPort == null && recorded != null && recordedSocket == null &&
-            portHeldByOurEditorServer(editorNote)) {
-            if (reapRecordedEditorServer("moving the editor behind its private transport", editorNote)) {
-                portFreedByReap()
+            portHeldByOurEditorServer(editorNote, candidatePort)) {
+            if (reapRecordedEditorServer("moving the editor behind its private transport", editorNote, candidatePort)) {
+                portFreedByReap(candidatePort)
             }
         }
         // The origin this start bound, kept apart from _port: the release that follows the
@@ -682,7 +692,7 @@ class ProcessManager internal constructor(
         repeat(5) {
             if (origin > 0) return@repeat
             try {
-                origin = gateway.bind(_port)
+                origin = gateway.bind(candidatePort)
                 _port = origin
             } catch (e: IOException) {
                 if (inheritedPort != null || it == 4) {
@@ -691,9 +701,9 @@ class ProcessManager internal constructor(
                     return false
                 }
                 if (recordedSocket != null) {
-                    reapRecordedEditorServer("the public editor origin could not be retained", editorNote)
+                    reapRecordedEditorServer("the public editor origin could not be retained", editorNote, candidatePort)
                 }
-                _port = PortFinder.getOrAllocatePort(context)
+                candidatePort = PortFinder.getOrAllocatePort(context)
             }
         }
         if (origin == 0) return false
@@ -727,7 +737,7 @@ class ProcessManager internal constructor(
                 releaseOriginOfRefusedStart(gateway, listenersAtStart)
                 return false
             }
-            if (recordedServerIsServing(editorNote)) {
+            if (recordedServerIsServing(editorNote, origin)) {
                 synchronized(readinessLock) {
                     if (isShuttingDown || generation != stopGeneration || !canStart()) {
                         gateway.withdrawBackend(owner)
@@ -767,19 +777,22 @@ class ProcessManager internal constructor(
             StorageManager.deleteFile(recordedSocket, context.filesDir.parentFile)
         }
         // Not adopted: the adoption branch returned above when it adopted.
-        if (followedSurvivor && !leaveUnadoptedSurvivorsPort(gateway, home)) return false
+        if (followedSurvivor) {
+            origin = rebindAfterUnadoptedSurvivor(gateway, home, origin)
+            if (origin == 0) return false
+        }
         // A failed pid-note write leaves this owner only in memory. Retire it
         // before the next spawn replaces the identity Stop would need.
         if (editorNote == null) {
             val previousRunId = synchronized(readinessLock) { serverRunId }
-            reapOwnedEditor(previousRunId)
+            reapOwnedEditor(previousRunId, origin)
         }
         sweepOldRunSockets(backendSocket)
         unboundRefusalLogged = false
         // Below the adoption branch, which returned above: an adopted server holds
         // the token it started with in memory and must keep the file that names it.
         rotateConnectionToken()
-        Logger.i(tag, "Starting server on port $_port")
+        Logger.i(tag, "Starting server on port $origin")
 
         // Ensure TMPDIR is a usable directory: Android may clear cache between
         // launches.
@@ -806,7 +819,7 @@ class ProcessManager internal constructor(
 
         val nodePath = Environment.getNodePath(context)
         val serverScript = Environment.getServerScript(context)
-        val env = Environment.buildProcessEnvironment(context, _port)
+        val env = Environment.buildProcessEnvironment(context, origin)
 
         // The bootstrap receives the public origin and private backend transport separately.
         // It forwards extensions-dir, user-data-dir, server-data-dir and logsPath,
@@ -817,7 +830,7 @@ class ProcessManager internal constructor(
             "--max-old-space-size=$heapMb",
             serverScript,
             "--host=127.0.0.1",
-            "--port=$_port",
+            "--port=$origin",
             "--socket-path=${backendSocket.path}",
             "--extensions-dir=${Environment.getExtensionsDir(context)}",
             "--user-data-dir=${Environment.getUserDataDir(context)}",
@@ -833,11 +846,15 @@ class ProcessManager internal constructor(
                 redirectErrorStream(true)
                 directory(context.filesDir)
             }
+            if (synchronized(readinessLock) { isShuttingDown || generation != stopGeneration || !canStart() }) {
+                releaseOriginOfRefusedStart(gateway, listenersAtStart)
+                return false
+            }
             val spawned = processBuilder.start()
             try {
                 spawned.outputStream.close()
             } catch (failure: IOException) {
-                stopOwnedProcess(spawned, runId)
+                stopOwnedProcess(spawned, runId, origin)
                 throw failure
             }
             // A stop that landed while this was spawning has to take the process
@@ -870,7 +887,7 @@ class ProcessManager internal constructor(
             }
             if (!accepted) {
                 Logger.i(tag, "A stop landed while the server was spawning; ending it again")
-                stopOwnedProcess(spawned, runId)
+                stopOwnedProcess(spawned, runId, origin)
                 releaseOriginOfRefusedStart(gateway, listenersAtStart)
                 return false
             }
@@ -918,6 +935,7 @@ class ProcessManager internal constructor(
             // server: null", which names nothing and looks like a bug in this
             // line rather than a report about the one above it.
             serverLog.append("Failed to start server: ${e.javaClass.simpleName}: ${e.message}")
+            releaseOriginOfRefusedStart(gateway, listenersAtStart, "Failed to start server")
             false
         }
     }
@@ -1148,10 +1166,10 @@ class ProcessManager internal constructor(
     }
 
     /** Wait briefly for a terminated legacy TCP backend to release the remembered origin. */
-    private fun portFreedByReap(): Boolean {
+    private fun portFreedByReap(origin: Int = _port): Boolean {
         var waited = 0L
         while (true) {
-            if (PortFinder.isPortAvailable(_port)) return true
+            if (PortFinder.isPortAvailable(origin)) return true
             if (waited >= REAP_PORT_RELEASE_GRACE_MS) return false
             try {
                 Thread.sleep(REAP_PORT_POLL_MS)
@@ -1177,7 +1195,7 @@ class ProcessManager internal constructor(
      * and a live recorded process alone do not establish ownership of a socket.
      * Older servers without the proof route decline adoption and are restarted.
      */
-    private fun recordedServerIsServing(editorNote: String): Boolean {
+    private fun recordedServerIsServing(editorNote: String, origin: Int = _port): Boolean {
         // Answered first, because a build that cannot say what it is cannot
         // recognise itself on a port either. That is the fail-closed direction:
         // adoption is an optimisation, and declining it costs a spawn.
@@ -1186,16 +1204,16 @@ class ProcessManager internal constructor(
             Logger.w(
                 tag,
                 "The packaged server records no commit, so nothing answering on port " +
-                    "$_port can be identified as this build; spawning rather than adopting",
+                    "$origin can be identified as this build; spawning rather than adopting",
             )
             return false
         }
 
-        val served = probeVersion()
+        val served = probeVersion(origin)
         if (served == null) {
             Logger.w(
                 tag,
-                "An editor server of ours is recorded on port $_port but nothing is " +
+                "An editor server of ours is recorded on port $origin but nothing is " +
                     "answering there; spawning rather than adopting it",
             )
             return false
@@ -1203,12 +1221,12 @@ class ProcessManager internal constructor(
         if (served != expected) {
             Logger.w(
                 tag,
-                "Port $_port is held by something reporting \"$served\" rather than this " +
+                "Port $origin is held by something reporting \"$served\" rather than this " +
                     "build's $expected; spawning rather than adopting it",
             )
             return false
         }
-        return provesRecordedRun(editorNote)
+        return provesRecordedRun(editorNote, origin)
     }
 
     /**
@@ -1268,9 +1286,10 @@ class ProcessManager internal constructor(
      * Both headers and body share one monotonic deadline. A stranger holding the
      * port cannot extend a startup poll by sending a little before each timeout.
      */
-    private fun probeVersion(): String? = probeBody("/version")?.trim()
+    private fun probeVersion(origin: Int = _port): String? = probeBody("/version", origin)?.trim()
 
-    private fun probeBody(path: String): String? {
+    private fun probeBody(path: String, origin: Int = _port): String? {
+        if (origin <= 0) return null
         return try {
             val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(PROBE_TIMEOUT_MS)
             fun remainingMillis(): Int {
@@ -1279,10 +1298,10 @@ class ProcessManager internal constructor(
                 return ((remaining + 999_999) / 1_000_000).toInt()
             }
             Socket().use { socket ->
-                socket.connect(InetSocketAddress("127.0.0.1", _port), remainingMillis())
+                socket.connect(InetSocketAddress("127.0.0.1", origin), remainingMillis())
                 // HTTP/1.0 asks Node for a close-delimited response, avoiding chunk framing.
                 socket.getOutputStream().write(
-                    "GET $path HTTP/1.0\r\nHost: 127.0.0.1:$_port\r\nConnection: close\r\n\r\n"
+                    "GET $path HTTP/1.0\r\nHost: 127.0.0.1:$origin\r\nConnection: close\r\n\r\n"
                         .toByteArray(Charsets.US_ASCII),
                 )
                 val input = socket.getInputStream()
@@ -1335,17 +1354,17 @@ class ProcessManager internal constructor(
         return String(buffer, 0, filled)
     }
 
-    private fun provesRecordedRun(editorNote: String): Boolean = try {
-        provesRun(JSONObject(editorNote).optString("runId", ""))
+    private fun provesRecordedRun(editorNote: String, origin: Int = _port): Boolean = try {
+        provesRun(JSONObject(editorNote).optString("runId", ""), origin)
     } catch (_: Exception) {
         false
     }
 
-    private fun provesRun(runId: String): Boolean {
+    private fun provesRun(runId: String, origin: Int = _port): Boolean {
         return try {
             if (runId.length !in 1..128) false else {
                 val challenge = UUID.randomUUID().toString().replace("-", "")
-                val actual = probeBody("/vscodroid-server-proof/$challenge")?.trim() ?: return false
+                val actual = probeBody("/vscodroid-server-proof/$challenge", origin)?.trim() ?: return false
                 val mac = Mac.getInstance("HmacSHA256")
                 mac.init(SecretKeySpec(runId.toByteArray(Charsets.US_ASCII), "HmacSHA256"))
                 val expected = mac.doFinal(challenge.toByteArray(Charsets.US_ASCII))
@@ -1410,12 +1429,20 @@ class ProcessManager internal constructor(
      * A bootstrap already dead before Stop also needs the backstop: its wait can
      * succeed while its editor child is still alive.
      */
-    fun stopServer() {
+    /**
+     * Withdraws gateway routing and in-memory server ownership immediately so incoming
+     * connections receive HTTP 503 instead of a 0-byte EOF, while keeping the public origin
+     * bound so an in-place retry keeps the workbench's IndexedDB origin. Returns a blocking
+     * cleanup action to reap any lingering bootstrap or surviving editor off the calling
+     * thread, or null when nothing remains to reap.
+     */
+    fun withdrawForTerminalState(): (() -> Unit)? {
         val stoppingProcess: Process?
         val stoppingRunId: String?
         val stoppingWatchdog: Thread?
         val stoppingAdopted: Boolean
         val stoppingEditorNote: String?
+        val stoppingPort: Int
         synchronized(readinessLock) {
             stopGeneration++
             isShuttingDown = true
@@ -1425,6 +1452,57 @@ class ProcessManager internal constructor(
             stoppingWatchdog = watchdogThread
             stoppingAdopted = adopted
             stoppingEditorNote = serverEditorNote
+            stoppingPort = _port
+            serverProcess = null
+            serverRunId = null
+            watchdogThread = null
+            adopted = false
+            heapOverrideActive = false
+            heapOverrideSuspendedNow = false
+            clearReadiness()
+        }
+        stoppingWatchdog?.interrupt()
+        if (stoppingProcess == null && !stoppingAdopted && stoppingRunId == null) return null
+        return {
+            synchronized(startLock) {
+                // If Retry started before this cleanup ran and adopted the same run, leave it alone.
+                val adoptedByReplacement = stoppingRunId != null && synchronized(readinessLock) {
+                    adopted && serverRunId == stoppingRunId
+                }
+                if (adoptedByReplacement) return@synchronized
+                if (stoppingAdopted) {
+                    val reaped = stoppingEditorNote != null &&
+                        reapRecordedEditorServer("server entered terminal state", stoppingEditorNote, stoppingPort)
+                    if (!reaped) {
+                        reapOwnedEditor(stoppingRunId, stoppingPort)
+                    }
+                }
+                if (stoppingProcess != null) {
+                    stopOwnedProcess(stoppingProcess, stoppingRunId, stoppingPort)
+                } else if (!stoppingAdopted && stoppingRunId != null) {
+                    reapOwnedEditor(stoppingRunId, stoppingPort)
+                }
+            }
+        }
+    }
+
+    fun stopServer() {
+        val stoppingProcess: Process?
+        val stoppingRunId: String?
+        val stoppingWatchdog: Thread?
+        val stoppingAdopted: Boolean
+        val stoppingEditorNote: String?
+        val stoppingPort: Int
+        synchronized(readinessLock) {
+            stopGeneration++
+            isShuttingDown = true
+            stoppingProcess = serverProcess
+            stoppingRunId = serverRunId
+            stoppingRunId?.let { editorGateway.withdrawBackend(it) }
+            stoppingWatchdog = watchdogThread
+            stoppingAdopted = adopted
+            stoppingEditorNote = serverEditorNote
+            stoppingPort = _port
             adopted = false
             heapOverrideActive = false
             heapOverrideSuspendedNow = false
@@ -1450,17 +1528,19 @@ class ProcessManager internal constructor(
             // away: a note that has been consumed, a pid already recycled, or a kill the
             // kernel refuses all land here, and a silent return would leave the caller
             // believing the stop succeeded.
-            if (stoppingEditorNote == null || !reapRecordedEditorServer("service stopping", stoppingEditorNote)) {
+            if (stoppingEditorNote == null ||
+                !reapRecordedEditorServer("service stopping", stoppingEditorNote, stoppingPort)
+            ) {
                 Logger.w(
                     tag,
-                    "The server on port $_port was adopted, not started here, and could " +
+                    "The server on port $stoppingPort was adopted, not started here, and could " +
                         "not be ended from its recorded pid. It keeps running until the " +
                         "system reclaims it.",
                 )
             }
         }
         Logger.i(tag, "Stopping server...")
-        stoppingProcess?.let { stopOwnedProcess(it, stoppingRunId) }
+        stoppingProcess?.let { stopOwnedProcess(it, stoppingRunId, stoppingPort) }
         synchronized(readinessLock) {
             if (serverProcess === stoppingProcess && serverRunId == stoppingRunId) {
                 serverProcess = null
@@ -1471,7 +1551,7 @@ class ProcessManager internal constructor(
         stoppingWatchdog?.interrupt()
     }
 
-    private fun stopOwnedProcess(process: Process, runId: String?) {
+    private fun stopOwnedProcess(process: Process, runId: String?, origin: Int = _port) {
         try {
             process.destroy()
             val exited = process.waitFor(GRACEFUL_STOP_TIMEOUT_MS, TimeUnit.MILLISECONDS)
@@ -1489,16 +1569,18 @@ class ProcessManager internal constructor(
         // its child exited, and the reap finds nothing. One that left before its handler
         // ran (dead before Stop, or killed by the signal it had no handler for yet) left
         // the note and the child, and the reap ends that child by its run identity.
-        reapOwnedEditor(runId)
+        reapOwnedEditor(runId, origin)
     }
 
-    private fun reapOwnedEditor(runId: String?) {
+    private fun reapOwnedEditor(runId: String?, origin: Int = _port) {
         if (runId == null) return
         // The note may first appear while the bounded bootstrap wait is running.
         val capturedNote = recordedEditorNote()?.takeIf {
             runCatching { JSONObject(it).optString("runId", "") == runId }.getOrDefault(false)
         }
-        if (capturedNote != null && reapRecordedEditorServer("its bootstrap could not stop it", capturedNote)) return
+        if (capturedNote != null &&
+            reapRecordedEditorServer("its bootstrap could not stop it", capturedNote, origin)
+        ) return
         reapUnrecordedEditor(runId)
     }
 
@@ -1802,26 +1884,23 @@ class ProcessManager internal constructor(
 
     /** The pid of [process], or null where the runtime does not give it up. */
     private fun pidOf(process: Process): Long? {
-        return try {
-            // Prefer the public Java 9+ Process.pid() method when available.
-            val pidMethod = process.javaClass.methods.firstOrNull {
-                it.name == "pid" && it.parameterCount == 0
-            }
-            if (pidMethod != null) {
-                (pidMethod.invoke(process) as? Long)
-            } else {
-                // Fallback for runtimes that only expose an internal pid field.
-                // This is the branch Android takes up to API 36: its java.lang.Process
-                // has no pid() there. On a desktop JVM the method is found but
-                // belongs to the package-private ProcessImpl, so invoking it fails
-                // and this returns null; do not assert on it from a JVM unit test.
-                val pidField = process.javaClass.getDeclaredField("pid")
-                pidField.isAccessible = true
-                pidField.getInt(process).toLong()
-            }
-        } catch (e: Exception) {
-            null
-        }
+        // Invoke the public Process.pid() declared on java.lang.Process rather than on
+        // process.javaClass: real Process implementations (ProcessImpl / UNIXProcess) are
+        // package-private, so invoking the subclass method throws IllegalAccessException.
+        // Process.pid() is present on desktop JDK 9+ and Android API 37.2+.
+        val pidFromMethod = runCatching {
+            Process::class.java.getMethod("pid").invoke(process) as? Long
+        }.getOrNull()
+        if (pidFromMethod != null) return pidFromMethod
+
+        // Fallback for Android API 29 through 37.0 (where java.lang.Process has no pid()
+        // and UNIXProcess exposes an internal pid field) and Process subclasses whose
+        // default Process.pid() throws UnsupportedOperationException.
+        return runCatching {
+            val pidField = process.javaClass.getDeclaredField("pid")
+            pidField.isAccessible = true
+            (pidField.get(process) as? Number)?.toLong()
+        }.getOrNull()
     }
 
     /**

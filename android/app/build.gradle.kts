@@ -1092,21 +1092,26 @@ val verifyPackagedAlignment = tasks.register<Exec>("verifyPackagedAlignment") {
 //
 // 0.56s on the real 699 MB tree, no network: one walk for native binaries, plus
 // product.json and workbench.css.
+// Explicit opt-in for stub-asset CI invocations (such as r8.yml and the stub
+// androidTest compile in build.yml). Asset packaging gates fail loudly by
+// default unless -Pvscodroid.stubAssets=true is passed explicitly.
+val stubAssets = providers.gradleProperty("vscodroid.stubAssets")
+    .map { it.equals("true", ignoreCase = true) }
+    .orElse(false)
+
 val verifyServerTree = tasks.register<Exec>("verifyServerTree") {
     group = "verification"
     description = "Checks the server tree in assets/ is one this app can run."
 
     val serverTree = "android/app/src/main/assets/vscode-reh"
-    val entryPoint = file("src/main/assets/vscode-reh/out/server-main.js")
 
     workingDir = rootProject.projectDir.parentFile
     commandLine("python3", "scripts/verify-server-tree.py", serverTree)
 
-    // Absent is not stale, for the same reason as the task above: the lint and
-    // unit-test jobs create assets/vscode-reh/out as an empty stub purely so
-    // Gradle will configure, and a tree that was never downloaded has nothing to
-    // verify. Any tree that can produce a working APK has this file.
-    onlyIf { entryPoint.isFile }
+    // Fail loudly unless the caller explicitly asked for a stub-asset build.
+    // This also guarantees the xterm hook checks in verify-server-tree.py run
+    // on every real packaging build.
+    onlyIf { !stubAssets.get() }
 
     failOnExit(
         "The server tree in assets/ is not one this app can run.\n" +
@@ -1463,25 +1468,34 @@ val checkBundleSize = tasks.register<Exec>("checkBundleSize") {
  * `download-extensions.sh` rewrites the conditional; this is what stops a tree
  * assembled from an older extraction shipping without it.
  *
- * Armed by the directory rather than unconditionally: the lint and unit-test
- * jobs stub an empty extensions tree, and checking one would report a pass for
- * a question it never asked.
+ * Fails loudly when the extension tree is missing unless the caller explicitly
+ * passes `-Pvscodroid.stubAssets=true`.
  */
 val verifyPythonPlatform = tasks.register<Exec>("verifyPythonPlatform") {
     group = "verification"
     description = "Checks the bundled Python extension answers Linux on this platform."
 
     val extensions = File(projectDir, "src/main/assets/extensions")
-    val tree = extensions.listFiles()
-        ?.firstOrNull { it.name.startsWith("ms-python.python-") }
 
     workingDir = rootProject.projectDir.parentFile
-    commandLine(
-        "python3", "scripts/patch-python-platform.py", "--check",
-        tree?.let { "android/app/src/main/assets/extensions/${it.name}" } ?: "missing",
-    )
+    commandLine("python3", "scripts/patch-python-platform.py", "--check", "missing")
 
-    onlyIf { tree != null }
+    onlyIf { !stubAssets.get() }
+
+    doFirst {
+        val tree = extensions.listFiles()
+            ?.firstOrNull { it.name.startsWith("ms-python.python-") }
+            ?: throw GradleException(
+                "No bundled ms-python.python-* extension directory found under " +
+                    "android/app/src/main/assets/extensions.\n\n" +
+                    "Run scripts/download-extensions.sh before packaging, or pass " +
+                    "-Pvscodroid.stubAssets=true for a stub-asset build."
+            )
+        commandLine(
+            "python3", "scripts/patch-python-platform.py", "--check",
+            "android/app/src/main/assets/extensions/${tree.name}",
+        )
+    }
 
     failOnExit(
         "The bundled Python extension still answers OSType.Unknown on this\n" +
@@ -1507,26 +1521,37 @@ val verifyPythonPlatform = tasks.register<Exec>("verifyPythonPlatform") {
  * `download-python.sh` rewrites the value; this is what stops a tree assembled
  * from an older extraction shipping without it.
  *
- * Armed by the tree rather than unconditionally, like verifyPythonPlatform above
- * and for the same reason: the lint and unit-test jobs stub an empty assets
- * directory, and checking one would report a pass for a question it never asked.
+ * Fails loudly when the Python stdlib tree is missing unless the caller
+ * explicitly passes `-Pvscodroid.stubAssets=true`.
  */
 val verifyVenvHome = tasks.register<Exec>("verifyVenvHome") {
     group = "verification"
     description = "Checks the bundled venv records a home the interpreter can start from."
 
-    val stdlib = File(projectDir, "src/main/assets/usr/lib")
-        .listFiles()
-        ?.firstOrNull { it.name.startsWith("python3.") }
-    val venvModule = stdlib?.let { File(it, "venv/__init__.py") }
+    val usrLib = File(projectDir, "src/main/assets/usr/lib")
 
     workingDir = rootProject.projectDir.parentFile
-    commandLine(
-        "python3", "scripts/patch-venv-home.py", "--check",
-        stdlib?.let { "android/app/src/main/assets/usr/lib/${it.name}/venv/__init__.py" } ?: "missing",
-    )
+    commandLine("python3", "scripts/patch-venv-home.py", "--check", "missing")
 
-    onlyIf { venvModule?.isFile == true }
+    onlyIf { !stubAssets.get() }
+
+    doFirst {
+        val stdlib = usrLib.listFiles()
+            ?.firstOrNull { it.name.startsWith("python3.") }
+        val venvModule = stdlib?.let { File(it, "venv/__init__.py") }
+        if (venvModule?.isFile != true) {
+            throw GradleException(
+                "Bundled Python venv module (android/app/src/main/assets/usr/lib/python3.*/venv/__init__.py) " +
+                    "is missing.\n\n" +
+                    "Run scripts/download-python.sh before packaging, or pass " +
+                    "-Pvscodroid.stubAssets=true for a stub-asset build."
+            )
+        }
+        commandLine(
+            "python3", "scripts/patch-venv-home.py", "--check",
+            "android/app/src/main/assets/usr/lib/${stdlib.name}/venv/__init__.py",
+        )
+    }
 
     failOnExit(
         "The bundled Python still writes a venv home that can name a directory\n" +
@@ -1536,6 +1561,31 @@ val verifyVenvHome = tasks.register<Exec>("verifyVenvHome") {
             "\n" +
             "Re-run scripts/download-python.sh, which applies the rewrite after\n" +
             "unpacking the interpreter."
+    )
+}
+
+/**
+ * Refuses a build whose translated NLS bundles are missing, stale, or out of
+ * sync with the packaged server's `_VSCODE_NLS_MESSAGES` key count.
+ *
+ * Fails loudly unless the caller explicitly passes `-Pvscodroid.stubAssets=true`.
+ */
+val verifyNlsParity = tasks.register<Exec>("verifyNlsParity") {
+    group = "verification"
+    description = "Checks translated NLS bundles cover all supported locales and match the server key count."
+
+    workingDir = rootProject.projectDir.parentFile
+    commandLine("python3", "scripts/verify-nls-parity.py")
+
+    onlyIf { !stubAssets.get() }
+
+    failOnExit(
+        "The translated string bundles in android/app/src/main/assets/nls/ do not\n" +
+            "match the packaged server tree. The FAIL line above names which locale\n" +
+            "is missing, stale, or has a different message count than out/nls.keys.json.\n" +
+            "\n" +
+            "Re-run python3 scripts/build-nls-bundles.py after scripts/package-assets.sh,\n" +
+            "or pass -Pvscodroid.stubAssets=true for a stub-asset build."
     )
 }
 
@@ -1664,7 +1714,7 @@ val packagingGates = listOf(
     checkPatchFingerprints, verifyServerTree, verifyBundledBinaries,
     verifyRequiredBinaries, verifyBundledShellPaths, verifyRubyPackShellPaths,
     verifyCppPackShellPaths, verifyNativeAddons, verifyPackagedAlignment,
-    checkPackOverlap, verifyPythonPlatform, verifyVenvHome,
+    checkPackOverlap, verifyPythonPlatform, verifyVenvHome, verifyNlsParity,
 )
 
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }

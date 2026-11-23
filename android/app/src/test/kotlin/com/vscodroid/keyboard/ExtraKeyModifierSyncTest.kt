@@ -274,4 +274,17 @@ class ExtraKeyModifierSyncTest {
                 "with no push and no poll. It reads:\n$repack",
         )
     }
+
+    @Test
+    fun `detaching the row cancels pending modifier poll callbacks`() {
+        val source = SourceScan.withoutComments(
+            SourceScan.read("src/main/kotlin/com/vscodroid/keyboard/ExtraKeyRow.kt"),
+        )
+        val detached = SourceScan.body(source, "override fun onDetachedFromWindow()")
+        assertTrue(
+            detached.contains("removeCallbacks(modifierSyncRunnable)"),
+            "onDetachedFromWindow does not cancel modifierSyncRunnable, so a detached row " +
+                "keeps pending 200 ms poll callbacks queued. It reads:\n$detached",
+        )
+    }
 }

@@ -139,4 +139,43 @@ class MenuSeparatorFloorTest {
         assertTrue(chatRule != null && chatRule.contains("min-width: 36px"), "titlebar Chat toggle min-width < 36px")
         assertTrue(moreRule != null && moreRule.contains("width: 32px"), "titlebar More Actions width < 32px")
     }
+
+    @Test
+    fun `portrait welcome walkthrough wraps shortcut messages and constrains step buttons`() {
+        val narrowBlock = injected.substringAfter("@media (max-width: 533px) {", "")
+        assertTrue(narrowBlock.isNotEmpty(), "narrow viewport @media block missing in injectTouchTargetCSS")
+
+        val stepContainerRule = Regex("""\.gettingStartedSlideDetails \.getting-started-step \.step-container\s*\{[^}]+\}""")
+            .find(narrowBlock)?.value
+        val shortcutRule = Regex("""\.gettingStartedSlideDetails \.getting-started-step \.shortcut-message\s*\{[^}]+\}""")
+            .find(narrowBlock)?.value
+        val keybindingRule = Regex("""\.gettingStartedSlideDetails \.getting-started-step \.shortcut-message \.monaco-keybinding\s*\{[^}]+\}""")
+            .find(narrowBlock)?.value
+        val buttonRule = Regex("""\.gettingStartedSlideDetails \.getting-started-step \.step-description-container \.monaco-button\s*\{[^}]+\}""")
+            .find(narrowBlock)?.value
+
+        assertTrue(
+            stepContainerRule != null && stepContainerRule.contains("min-width: 0"),
+            "narrow viewport CSS must set min-width: 0 on .gettingStartedSlideDetails .getting-started-step .step-container",
+        )
+        assertTrue(
+            shortcutRule != null &&
+                shortcutRule.contains("flex-wrap: wrap") &&
+                shortcutRule.contains("white-space: normal") &&
+                shortcutRule.contains("row-gap: 4px"),
+            "narrow viewport CSS must wrap .shortcut-message with normal whitespace so keycaps do not clip",
+        )
+        assertTrue(
+            keybindingRule != null &&
+                keybindingRule.contains("flex-wrap: wrap") &&
+                keybindingRule.contains("row-gap: 2px"),
+            "narrow viewport CSS must wrap .shortcut-message .monaco-keybinding chords",
+        )
+        assertTrue(
+            buttonRule != null &&
+                buttonRule.contains("max-width: 100%") &&
+                buttonRule.contains("min-width: 0"),
+            "narrow viewport CSS must clamp .step-description-container .monaco-button within 100% width",
+        )
+    }
 }

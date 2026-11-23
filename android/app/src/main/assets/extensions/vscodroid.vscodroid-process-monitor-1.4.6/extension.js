@@ -244,10 +244,14 @@ function updateStatusBar(snapshot) {
             // which is what it read as while the divisor was binary.
             const availableMB = Math.round((stats.bavail * stats.bsize) / 1000000);
             const totalMB = Math.round((stats.blocks * stats.bsize) / 1000000);
-            const usedPercent = Math.round(((totalMB - availableMB) / totalMB) * 100);
-            storageInfo = `\nStorage: ${availableMB} MB free (${usedPercent}% used)`;
-            if (availableMB < 200) {
-                storageInfo += ' ⚠ LOW';
+            if (Number.isFinite(availableMB) && Number.isFinite(totalMB)) {
+                const usedPercent = totalMB > 0
+                    ? Math.max(0, Math.min(100, Math.round(((totalMB - availableMB) / totalMB) * 100)))
+                    : 0;
+                storageInfo = `\nStorage: ${availableMB} MB free (${usedPercent}% used)`;
+                if (availableMB < 200) {
+                    storageInfo += ' ⚠ LOW';
+                }
             }
         }
     } catch { /* ignore */ }

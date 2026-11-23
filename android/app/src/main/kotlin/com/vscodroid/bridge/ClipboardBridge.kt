@@ -85,6 +85,7 @@ class ClipboardBridge(private val context: Context) {
      */
     fun hasClipboardText(): Boolean {
         return try {
+            if (!clipboardManager.hasPrimaryClip()) return false
             val clip = clipboardManager.primaryClip ?: return false
             if (clip.itemCount == 0) return false
             val item = clip.getItemAt(0)

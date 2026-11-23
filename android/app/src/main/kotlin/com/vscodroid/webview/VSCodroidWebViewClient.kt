@@ -50,6 +50,7 @@ import java.nio.file.Files
 import java.nio.file.Paths
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import android.annotation.SuppressLint
 import androidx.core.net.toUri
 
@@ -82,23 +83,11 @@ import androidx.core.net.toUri
  * that must stay unreadable inside that root, which is then left out, and the warning names the
  * link, never where it points.
  */
-internal fun publishedResourceRoots(
+private fun filterPublishedRoots(
     context: Context,
-    sensitive: List<String> = sensitiveLocations(context),
-): List<String> = listOf(
-    // Built-in extensions ship inside the server tree, so this is what
-    // markdown preview, the notebook renderers and Simple Browser load their
-    // own assets from.
-    Environment.getServerDir(context),
-    // Installed and bundled extensions.
-    Environment.getExtensionsDir(context),
-    // The two places a workspace normally lives. Kept here as well as arriving
-    // through the open-folder supplier, because that supplier answers nothing
-    // until the first navigation completes, and resources requested during that
-    // first load would otherwise be refused.
-    Environment.getProjectsDir(context),
-    Environment.getSafMirrorsDir(context),
-).mapNotNull(::canonicalOrNull).filter { root ->
+    candidates: List<String>,
+    sensitive: List<String>,
+): List<String> = candidates.mapNotNull(::canonicalOrNull).filter { root ->
     val overlapping = sensitive.firstOrNull { overlaps(root, it) } ?: return@filter true
     // Named as the app knows it, `~/.npmrc` and not where that link points, which is the person's own path,
     // also when the overlap was found under the data directory's other name.
@@ -110,47 +99,125 @@ internal fun publishedResourceRoots(
 }
 
 /**
- * What [publishedResourceRoots] publishes and what [sensitiveLocations] refuses, as of
- * the last main-frame navigation. Both entry points of the interceptor read this one
- * holder, and [VSCodroidWebViewClient.onPageStarted] resolves it again.
+ * The app-owned directories (built-in server assets and installed extensions) that stay
+ * published to webviews even after the workbench reports the exact open workspace folders.
+ */
+internal fun staticResourceRoots(
+    context: Context,
+    sensitive: List<String> = sensitiveLocations(context),
+): List<String> = filterPublishedRoots(
+    context,
+    listOf(
+        // Built-in extensions ship inside the server tree, so this is what
+        // markdown preview, the notebook renderers and Simple Browser load their
+        // own assets from.
+        Environment.getServerDir(context),
+        // Installed and bundled extensions.
+        Environment.getExtensionsDir(context),
+    ),
+    sensitive,
+)
+
+internal fun publishedResourceRoots(
+    context: Context,
+    sensitive: List<String> = sensitiveLocations(context),
+): List<String> = filterPublishedRoots(
+    context,
+    listOf(
+        Environment.getServerDir(context),
+        Environment.getExtensionsDir(context),
+        // The two places a workspace normally lives. Used only as a fallback before the
+        // workbench publishes its active workspace folder list on initial load.
+        Environment.getProjectsDir(context),
+        Environment.getSafMirrorsDir(context),
+    ),
+    sensitive,
+)
+
+/**
+ * What [publishedResourceRoots] and [staticResourceRoots] publish and what
+ * [sensitiveLocations] refuses, as of the last main-frame navigation. Both entry
+ * points of the interceptor read this one holder, and
+ * [VSCodroidWebViewClient.onPageStarted] marks it stale via [refresh].
  *
  * Per navigation rather than once per screen, because both follow links a person can
- * make or remove at any time. Resolved once, a `~/.npmrc` linked into the projects
- * folder after the screen was built left that folder published, and the credential
- * with it, until the screen was destroyed; a link removed kept the folder unserved as
- * long. Not per request: resolving stats external storage and canonicalises some
- * thirty paths, and one preview makes hundreds of requests. A link made while a page is
- * open therefore counts from the next page load.
- *
- * A request racing a refresh can read the roots of one resolution and the sensitive set
- * of the other. That serves nothing neither of them allowed: the roots were filtered by
- * their own set, and the set only judges the open folder.
+ * make or remove at any time. Resolved lazily on the interceptor's off-main thread
+ * rather than on the main thread during Activity startup or `onPageStarted`, so
+ * filesystem stat and canonicalization calls never trigger main-thread disk I/O
+ * while still ensuring the first request of every navigation sees fresh rules.
  */
-class ResourceRules internal constructor(private val resolve: () -> Pair<List<String>, List<String>>) {
-    @Volatile
-    var roots: List<String> = emptyList()
-        private set
+class ResourceRules private constructor(
+    private val resolveSnapshot: () -> Snapshot,
+    @Suppress("UNUSED_PARAMETER") snapshotMarker: Unit,
+) {
+    internal data class Snapshot(
+        val roots: List<String>,
+        val staticRoots: List<String>,
+        val sensitive: List<String>,
+    )
+
+    internal constructor(resolve: () -> Pair<List<String>, List<String>>) : this(
+        {
+            val (published, refused) = resolve()
+            Snapshot(roots = published, staticRoots = published, sensitive = refused)
+        },
+        Unit,
+    )
+
+    private val generation = AtomicLong(1L)
+    private val resolveLock = Any()
 
     @Volatile
-    var sensitive: List<String> = emptyList()
-        private set
+    private var resolvedGeneration = 0L
 
-    init {
-        refresh()
+    @Volatile
+    private var cached = Snapshot(emptyList(), emptyList(), emptyList())
+
+    internal fun current(): Snapshot {
+        val target = generation.get()
+        if (resolvedGeneration >= target) return cached
+        synchronized(resolveLock) {
+            val latest = generation.get()
+            if (resolvedGeneration >= latest) return cached
+            val next = resolveSnapshot()
+            cached = next
+            resolvedGeneration = latest
+            return next
+        }
     }
 
+    val roots: List<String>
+        get() = current().roots
+
+    val staticRoots: List<String>
+        get() = current().staticRoots
+
+    val sensitive: List<String>
+        get() = current().sensitive
+
     fun refresh() {
-        val (published, refused) = resolve()
-        sensitive = refused
-        roots = published
+        generation.incrementAndGet()
     }
 
     companion object {
         /** The rules for [context]'s directories. */
-        fun of(context: Context) = ResourceRules {
-            val sensitive = sensitiveLocations(context)
-            publishedResourceRoots(context, sensitive) to sensitive
-        }
+        fun of(context: Context) = ResourceRules(
+            {
+                val sensitive = sensitiveLocations(context)
+                val staticRoots = staticResourceRoots(context, sensitive)
+                val workspaceDefaults = filterPublishedRoots(
+                    context,
+                    listOf(Environment.getProjectsDir(context), Environment.getSafMirrorsDir(context)),
+                    sensitive,
+                )
+                Snapshot(
+                    roots = staticRoots + workspaceDefaults,
+                    staticRoots = staticRoots,
+                    sensitive = sensitive,
+                )
+            },
+            Unit,
+        )
     }
 }
 
@@ -456,13 +523,20 @@ internal fun resourceRootsInForce(
     return published + listOfNotNull(workspace)
 }
 
-/** An acknowledged member set replaces the URL fallback, including an empty window. */
+/**
+ * An acknowledged member set replaces the URL fallback and broad project/mirror roots,
+ * including an empty window, keeping only [staticPublished] plus safe active members.
+ */
 internal fun workspaceResourceRootsInForce(
-    published: List<String>, sensitive: List<String>, workspaceRoot: String?, members: List<String>?,
+    published: List<String>,
+    sensitive: List<String>,
+    workspaceRoot: String?,
+    members: List<String>?,
+    staticPublished: List<String> = published,
 ): List<String> = if (members == null) {
     resourceRootsInForce(published, sensitive, workspaceRoot)
 } else {
-    (published + members.mapNotNull { workspaceRootOrNull(it, sensitive) }).distinct()
+    (staticPublished + members.mapNotNull { workspaceRootOrNull(it, sensitive) }).distinct()
 }
 
 /**
@@ -995,7 +1069,7 @@ internal enum class SecretKeyRequest { NOT_ONE, ANSWER, REFUSE }
 
 @SuppressLint("MissingOnRenderProcessGone")
 class VSCodroidWebViewClient(
-    private val allowedPort: Int,
+    private val allowedPort: () -> Int,
     /**
      * What the resource arm publishes and refuses, resolved again by [onPageStarted]
      * at every main-frame navigation. Shared with the service worker's entry point,
@@ -1115,8 +1189,10 @@ class VSCodroidWebViewClient(
     }
 
     private fun trustedAuthOrigin(address: String?): String? {
-        if (!EditorGateway.instance.isBound(allowedPort)) return null
-        if (!isWorkbenchUrl(address, allowedPort)) return null
+        val port = allowedPort()
+        if (port <= 0) return null
+        if (!EditorGateway.instance.isBound(port)) return null
+        if (!isWorkbenchUrl(address, port)) return null
         val parsed = runCatching { URI(address) }.getOrNull() ?: return null
         return if (parsed.scheme == "http") "http://${parsed.host}:${parsed.port}" else null
     }
@@ -1171,6 +1247,7 @@ class VSCodroidWebViewClient(
      */
     private fun declinesLoading(view: WebView, request: WebResourceRequest): Boolean {
         val url = request.url
+        val port = allowedPort()
         // The one URL here that is a control on our own page rather than an
         // address to hand away. Both conditions are load-bearing. The main-frame
         // gate is the same one AuthTabWindow.arm already takes below, and for the
@@ -1184,7 +1261,7 @@ class VSCodroidWebViewClient(
         // could otherwise replace a healthy editor with the starting page, and nothing replaces
         // that again while the server stays up. The error pages are `about:blank`, never an
         // editor address.
-        val editorIsPage = isWorkbenchUrl(view.url, allowedPort)
+        val editorIsPage = port > 0 && isWorkbenchUrl(view.url, port)
         if (request.isForMainFrame && url.toString() == RETRY_URL) {
             if (editorIsPage) {
                 Logger.d(tag, "Ignored the retry control: the editor is the page")
@@ -1221,12 +1298,17 @@ class VSCodroidWebViewClient(
         // even though the interception serves their bytes from this server, so
         // this test never matches them. Not logged with the path, which is the
         // page's to choose.
-        if (request.isForMainFrame && isLocalhost(url) && !isWorkbenchPath(url.path)) {
+        val localhost = isLocalhost(url, port)
+        if (request.isForMainFrame && localhost && !isWorkbenchPath(url.path)) {
             Logger.d(tag, "Refused to load a server path other than the workbench as the page")
             return true
         }
-        if (isLocalhost(url) || isCdnRedirect(url)) {
+        if (localhost || (!request.isForMainFrame && isCdnRedirect(url))) {
             return false
+        }
+        if (request.isForMainFrame && isCdnRedirect(url)) {
+            Logger.d(tag, "Refused to load a webview CDN host as the main frame")
+            return true
         }
         // Everything below the main frame, and the whole of this block is about
         // what happens IF such a navigation arrives here. Whether it does is the
@@ -1332,7 +1414,13 @@ class VSCodroidWebViewClient(
                 return true
             }
         }
-        openExternal(view, target, request.isForMainFrame, request.isForMainFrame || request.hasGesture())
+        openExternal(
+            view,
+            target,
+            request.isForMainFrame,
+            request.isForMainFrame || request.hasGesture(),
+            requireIssued = request.isForMainFrame && hasAuthMetadata,
+        )
         return true
     }
 
@@ -1375,17 +1463,18 @@ class VSCodroidWebViewClient(
      * Local path format: /{quality}-{commit}/static/{path}
      */
     override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+        val port = allowedPort()
         // Before the CDN arm, because this one answers an address on the app's
         // own origin and that arm refuses everything which is not
         // *.vscode-cdn.net. See [nlsBundleRequested] for the shape.
-        if (isLocalhost(request.url)) {
-            if (!EditorGateway.instance.isBound(allowedPort)) {
+        if (isLocalhost(request.url, port)) {
+            if (port <= 0 || !EditorGateway.instance.isBound(port)) {
                 return emptyResponse(503, "Service Unavailable")
             }
             val headers = request.requestHeaders
             val origin = headerValue(headers, "Origin")
             val fetchSite = headerValue(headers, "Sec-Fetch-Site")
-            when (secretKeyRequest(request.url.path, request.method, origin, fetchSite, allowedPort)) {
+            when (secretKeyRequest(request.url.path, request.method, origin, fetchSite, port)) {
                 SecretKeyRequest.ANSWER -> return secretKeyResponse()
                 SecretKeyRequest.REFUSE -> {
                     // At `d`, like the resource arm's refusals: the values are
@@ -1398,9 +1487,11 @@ class VSCodroidWebViewClient(
             val requested = nlsBundleRequested(request.url) ?: return null
             return interfaceBundleResponse(requested)
         }
+        val rules = resourceRules.current()
         return interceptCdnRequest(
-            request, allowedPort, tokenWhileBound(allowedPort, connectionToken), resourceRules.roots,
-            resourceRules.sensitive, openFolder, workspaceMembers = workspaceMembers,
+            request, port, tokenWhileBound(port, connectionToken), rules.roots,
+            rules.sensitive, openFolder, workspaceMembers = workspaceMembers,
+            staticResourceRoots = rules.staticRoots,
         )
     }
 
@@ -1666,9 +1757,10 @@ class VSCodroidWebViewClient(
         super.onUnhandledKeyEvent(view, event)
     }
 
-    private fun isLocalhost(uri: Uri): Boolean {
+    private fun isLocalhost(uri: Uri, port: Int): Boolean {
+        if (port <= 0) return false
         val host = uri.host ?: return false
-        return host == "127.0.0.1" && uri.port == allowedPort
+        return host == "127.0.0.1" && uri.port == port
     }
 
     private fun isCdnRedirect(uri: Uri): Boolean {
@@ -1798,34 +1890,50 @@ class VSCodroidWebViewClient(
          * rule and not two copies of one.
          */
         fun setupServiceWorkerInterception(
-            port: Int, resourceRoots: () -> List<String>?, sensitiveLocations: () -> List<String>?,
-            openFolder: () -> String?, connectionToken: () -> String?
-        ) = setupServiceWorkerInterception(port, resourceRoots, sensitiveLocations, openFolder, { null }, connectionToken)
+            allowedPort: () -> Int?,
+            resourceRoots: () -> List<String>?,
+            sensitiveLocations: () -> List<String>?,
+            openFolder: () -> String?,
+            connectionToken: () -> String?,
+        ) = setupServiceWorkerInterception(
+            allowedPort,
+            resourceRoots,
+            sensitiveLocations,
+            openFolder,
+            { null },
+            resourceRoots,
+            connectionToken,
+        )
 
         fun setupServiceWorkerInterception(
-            port: Int,
+            allowedPort: () -> Int?,
             resourceRoots: () -> List<String>?,
             sensitiveLocations: () -> List<String>?,
             openFolder: () -> String?,
             workspaceMembers: () -> List<String>?,
-            connectionToken: () -> String?
+            staticResourceRoots: () -> List<String>? = resourceRoots,
+            connectionToken: () -> String?,
         ) {
             try {
                 val swController = ServiceWorkerController.getInstance()
                 swController.setServiceWorkerClient(object : ServiceWorkerClient() {
                     override fun shouldInterceptRequest(request: WebResourceRequest): WebResourceResponse? {
+                        val port = allowedPort() ?: 0
                         // Null once the screen these are read through is gone. No set to judge a folder
                         // by publishes no folder, rather than every folder.
                         val sensitive = sensitiveLocations()
+                        val published = resourceRoots().orEmpty()
+                        val staticRoots = staticResourceRoots() ?: published
                         return interceptCdnRequest(
                             request, port, tokenWhileBound(port, connectionToken),
-                            resourceRoots().orEmpty(), sensitive.orEmpty(),
+                            published, sensitive.orEmpty(),
                             { if (sensitive == null) null else openFolder() },
                             workspaceMembers = { if (sensitive == null) null else workspaceMembers() },
+                            staticResourceRoots = staticRoots,
                         )
                     }
                 })
-                Logger.i(TAG, "ServiceWorkerClient registered for CDN interception on port $port")
+                Logger.i(TAG, "ServiceWorkerClient registered for CDN interception")
             } catch (e: Exception) {
                 Logger.w(TAG, "Failed to set up ServiceWorkerClient: ${e.message}")
             }
@@ -1852,11 +1960,20 @@ class VSCodroidWebViewClient(
             openFolder: () -> String?,
             tokenWaitMs: Long = TOKEN_WAIT_MS,
             workspaceMembers: () -> List<String>? = { null },
+            staticResourceRoots: List<String> = resourceRoots,
         ): WebResourceResponse? {
             val uri = request.url
             val host = uri.host ?: return null
 
             if (!host.endsWith(".vscode-cdn.net")) return null
+
+            if (port <= 0) {
+                Logger.d(TAG, "CDN request refused, no active server port: $host${uri.path}")
+                return WebResourceResponse(
+                    "text/plain", "utf-8", 503, "Service Unavailable",
+                    mapOf("Access-Control-Allow-Origin" to "*"), ByteArrayInputStream(ByteArray(0))
+                )
+            }
 
             // The one query parameter this app has to read before it proxies
             // anything, and it is what stops a rendered page from minting an
@@ -1923,7 +2040,13 @@ class VSCodroidWebViewClient(
                 val headers = request.requestHeaders
                 return interceptResourceRequest(
                     uri, host, port,
-                    workspaceResourceRootsInForce(resourceRoots, sensitiveLocations, openFolder(), workspaceMembers()),
+                    workspaceResourceRootsInForce(
+                        resourceRoots,
+                        sensitiveLocations,
+                        openFolder(),
+                        workspaceMembers(),
+                        staticPublished = staticResourceRoots,
+                    ),
                     headerValue(headers, "Origin"),
                     headerValue(headers, "Range"),
                     headerValue(headers, "Referer"),
@@ -1978,6 +2101,12 @@ class VSCodroidWebViewClient(
             // [awaitConnectionToken], is still refused, and its webview stays
             // blank until it is shown again or, if it keeps its content while
             // hidden, closed and reopened.
+            val method = request.method?.uppercase()
+            if (method != "GET" && method != "HEAD") {
+                Logger.d(TAG, "CDN request refused, unsupported method: $method ($host${uri.path})")
+                return methodNotAllowed()
+            }
+
             val token = awaitConnectionToken(connectionToken, tokenWaitMs)
             if (token == null) {
                 Logger.d(TAG, "CDN request not forwarded, the local server is not ready: $host${uri.path}")
@@ -1992,7 +2121,7 @@ class VSCodroidWebViewClient(
             // readiness: the connection is refused. The asset is lost
             // either way, so 404 costs nothing that null did not, and null would
             // send the page out to the real CDN for it.
-            return proxyToLocalhost(withToken(localUrl, token), request.method, "$host${uri.path}")
+            return proxyToLocalhost(withToken(localUrl, token), method, "$host${uri.path}")
                 ?: notFound("the local server did not answer")
         }
 
@@ -2045,7 +2174,7 @@ class VSCodroidWebViewClient(
          * secret key route).
          */
         internal fun tokenWhileBound(port: Int, token: () -> String?): () -> String? =
-            { if (EditorGateway.instance.isBound(port)) token() else null }
+            { if (port > 0 && EditorGateway.instance.isBound(port)) token() else null }
 
         /**
          * The connection token, waited for while there is none: null when none
@@ -2418,7 +2547,18 @@ class VSCodroidWebViewClient(
             return notFound("Unknown scheme: $scheme")
         }
 
+        private fun methodNotAllowed(): WebResourceResponse = WebResourceResponse(
+            "text/plain", "utf-8", 405, "Method Not Allowed",
+            mapOf("Allow" to "GET, HEAD", "Access-Control-Allow-Origin" to "*"),
+            ByteArrayInputStream(ByteArray(0)),
+        )
+
         private fun proxyToLocalhost(url: String, method: String, logTag: String): WebResourceResponse? {
+            val normalizedMethod = method.uppercase()
+            if (normalizedMethod != "GET" && normalizedMethod != "HEAD") {
+                Logger.d(TAG, "Proxy refused unsupported method $normalizedMethod for $logTag")
+                return methodNotAllowed()
+            }
             var connection: HttpURLConnection? = null
             return try {
                 // No proxy: this address is the app's own server on the phone's loopback, which a proxy cannot
@@ -2427,9 +2567,10 @@ class VSCodroidWebViewClient(
                 // bypass of loopback.
                 val conn = URL(url).openConnection(Proxy.NO_PROXY) as HttpURLConnection
                 connection = conn
+                conn.instanceFollowRedirects = false
                 conn.connectTimeout = 5000
                 conn.readTimeout = 10000
-                conn.requestMethod = method
+                conn.requestMethod = normalizedMethod
 
                 val responseCode = conn.responseCode
                 val contentType = conn.contentType ?: guessMimeType(url)
@@ -2485,14 +2626,12 @@ class VSCodroidWebViewClient(
                 //
                 // A blank reason phrase and a 3xx are both refused by the
                 // `WebResourceResponse` constructor with IllegalArgumentException,
-                // which the catch below would report as `Proxy failed` -- the same
-                // line a connection failure produces, so an unusual status was
-                // indistinguishable from the server not being there. The phrase is
-                // defaulted, and a redirect is answered on its own terms: the
-                // client already follows the ones it can, so what reaches here is
-                // one it would not, and the caller turns null into a 404.
+                // which the catch below would report as `Proxy failed`. Redirects are
+                // disabled explicitly above (`instanceFollowRedirects = false`), so
+                // any 3xx from localhost lands here without following a Location
+                // header, and the caller turns null into a 404.
                 if (responseCode in 300..399) {
-                    Logger.d(TAG, "Proxy will not follow a redirect for $logTag ($responseCode)")
+                    Logger.d(TAG, "Proxy refused redirect for $logTag ($responseCode)")
                     wrappedStream.close()
                     return null
                 }
@@ -2530,7 +2669,7 @@ class VSCodroidWebViewClient(
          * merely renders.
          */
         internal fun isWorkbenchOrigin(origin: String, port: Int): Boolean =
-            origin == "http://127.0.0.1:$port"
+            port > 0 && origin == "http://127.0.0.1:$port"
 
         /**
          * Whether [origin] is the workbench itself or one of its webview documents.

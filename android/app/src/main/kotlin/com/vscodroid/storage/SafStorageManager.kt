@@ -288,7 +288,10 @@ class SafStorageManager(context: Context) {
      * does for a folder pushed off the recent list and for one whose local copy the
      * user removes.
      */
-    fun persistPermission(uri: Uri) = synchronized(grantLifecycleLock) {
+    fun persistPermission(uri: Uri) = persistPermission(uri, queryDisplayName(uri))
+
+    @JvmName("persistPermission")
+    internal fun persistPermission(uri: Uri, displayName: String?) = synchronized(grantLifecycleLock) {
         try {
             val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
                     Intent.FLAG_GRANT_WRITE_URI_PERMISSION
@@ -297,7 +300,7 @@ class SafStorageManager(context: Context) {
             // read against: a reader whose snapshot of the grants was taken before this
             // line must not judge the row the next one writes.
             grantsTaken.incrementAndGet()
-            addToRecentFolders(uri)
+            addToRecentFolders(uri, displayName)
             Logger.i(tag, "Persisted permission for ${getMirrorDir(uri).name}")
         } catch (e: SecurityException) {
             // Neither the URI nor the throwable, and it takes both to be redaction at
@@ -700,18 +703,15 @@ class SafStorageManager(context: Context) {
             Logger.w(tag, "Could not finish removing ${discarded.name}; the next launch retries")
             return false
         }
-        syncEngine.clearUploadsUnder(discarded)
-        // The second clear is for entries set aside before the records learned to move
-        // with the directory: theirs are still filed under the name the mirror had, and
-        // nothing else will ever retire them. Guarded on the path being free, because
-        // that is exactly the case this cannot tell apart. If the folder has been
-        // re-granted, the records under that name may be the new mirror's, and the two
-        // mistakes are not equal: keeping a dead record makes the next sync write a
-        // mirror over a device copy that matches it anyway, while dropping a live one
-        // lets a truncated device document overwrite the only complete copy. So the
-        // ambiguous case keeps them, and the next removal of that mirror clears them
-        // under its own discarded name.
+        // Clear both the discarded prefix and any legacy records under the original mirror path
+        // inside grantLifecycleLock. Running the discarded clear under the same lock as
+        // reclaimMirror prevents a concurrent sweep from clearing before renameUploadsUnder
+        // moves the journal entries, and the existence checks keep both clears from touching a
+        // replacement mirror or a newer discard occupying either path.
         synchronized(grantLifecycleLock) {
+            if (!Files.exists(discarded.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                syncEngine.clearUploadsUnder(discarded)
+            }
             if (!Files.exists(originalPath.toPath(), LinkOption.NOFOLLOW_LINKS)) {
                 syncEngine.clearUploadsUnder(originalPath)
             }
@@ -1160,14 +1160,15 @@ class SafStorageManager(context: Context) {
 
     // -- Internal --
 
-    private fun addToRecentFolders(uri: Uri) {
-        // Resolved before the lock: it is a provider round trip, and a network or MTP
-        // provider can make it a long one. Nothing in the list is read to compute it.
+    private fun addToRecentFolders(uri: Uri, displayName: String?) {
+        // The caller resolves displayName before acquiring grantLifecycleLock and
+        // recentFoldersLock: querying a network or MTP provider can block, and nothing in
+        // the list is needed to read it.
         //
         // The provider's answer and not [getDisplayName]'s fallback, which is the tree's
         // document id: stored as the folder's name it was the label in Open Recent, and
         // [noteOpened] made a link from it, a second path for the same copy.
-        val answered = queryDisplayName(uri)?.takeIf { it.isNotBlank() }
+        val answered = displayName?.takeIf { it.isNotBlank() }
         val dropped = synchronized(recentFoldersLock) {
             val folders = getPersistedFolders().toMutableList()
 

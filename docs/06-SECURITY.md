@@ -253,11 +253,15 @@ Native responses on the workbench origin require `EditorGateway` to own the clie
   `parentOrigin` and pass untouched.
 - **The web extension host is same-origin with the workbench.** `product.json` carries no
   `webEndpointUrlTemplate`, and without one the workbench starts that host in a same-origin iframe
-  and says so in the console. The consequence is the `BroadcastChannel` relay that lets a web
-  extension reach `AndroidBridge`: the channel is scoped by origin, so every installed web extension
-  shares it, and the per-session token is no barrier there because it is read from
-  `window.__vscodroid` on that same origin. `MainActivity.injectBridgeRelay` carries the per-command
-  reasoning for what that makes acceptable, and which commands were narrowed because of it.
+  and says so in the console. Browser extensions themselves execute inside a Dedicated Web Worker
+  (which has no `window` or DOM access and cannot directly read `window.__vscodroid.authToken` or
+  call `AndroidBridge`), but because the worker shares the workbench origin it can open the
+  `vscodroid-bridge` `BroadcastChannel`. The page-side relay automatically attaches
+  `window.__vscodroid.authToken` when forwarding messages posted to that channel and broadcasts
+  replies back to every listener sharing the channel, so the per-session token does not separate
+  installed web extensions from one another. `MainActivity.injectBridgeRelay` carries the
+  per-command reasoning for what that makes acceptable, and which commands were narrowed because of
+  it.
 
 ---
 

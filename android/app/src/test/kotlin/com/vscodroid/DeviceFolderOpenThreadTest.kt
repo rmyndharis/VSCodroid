@@ -453,4 +453,23 @@ class DeviceFolderOpenThreadTest {
         assertFalse(adoptionIsStale(navigate = true, watchedMirror = "a1b2c3d4e5f6", openPath = "0f0f0f0f0f0f", adoptedPath = "a1b2c3d4e5f6", mirror = "a1b2c3d4e5f6"))
         assertFalse(adoptionIsStale(navigate = true, watchedMirror = null, openPath = null, adoptedPath = "a1b2c3d4e5f6", mirror = "a1b2c3d4e5f6"))
     }
+
+    @Test
+    fun `openSafFolder reuses the queried display name when persisting permission`() {
+        val queryIdx = opened.indexOfFirst { it.contains("safManager.queryDisplayName(uri)") }
+        val persistIdx = opened.indexOfFirst { it.contains("safManager.persistPermission(") }
+        assertTrue(queryIdx >= 0 && persistIdx > queryIdx) {
+            "openSafFolder must query the display name before calling persistPermission so the provider is queried once"
+        }
+        val queryMatch = Regex("""val\s+(\w+)\s*=\s*safManager\.queryDisplayName\(uri\)""")
+            .find(opened[queryIdx])
+        assertTrue(queryMatch != null) {
+            "expected openSafFolder to store the queried display name in a local: ${opened[queryIdx].trim()}"
+        }
+        val local = queryMatch!!.groupValues[1]
+        assertTrue(
+            Regex("""safManager\.persistPermission\(\s*uri\s*,\s*$local\s*\)""").containsMatchIn(opened[persistIdx]),
+            "openSafFolder must pass $local into safManager.persistPermission(uri, $local) instead of querying a second time: ${opened[persistIdx].trim()}",
+        )
+    }
 }

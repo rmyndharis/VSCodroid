@@ -266,12 +266,12 @@ class ExtraKeyPressStateTest {
                 "It reads:\n$dispatch",
         )
         assertTrue(
-            count.contains("MotionEvent.ACTION_CANCEL -> Unit") &&
+            count.contains("MotionEvent.ACTION_CANCEL -> fingersDown = 0") &&
                 count.contains("MotionEvent.ACTION_POINTER_UP -> fingersDown = ev.pointerCount - 1") &&
                 count.contains("else -> fingersDown = ev.pointerCount"),
-            "the row counts a finger in its own lift, or counts the pointers of a cancel, which " +
-                "up to API 35 arrives unsplit and can carry a finger on another view. " +
-                "It reads:\n$count",
+            "the row counts a finger in its own lift, reads pointers from a cancel, or fails " +
+                "to reset fingersDown on ACTION_CANCEL, leaving a stale count after a cancelled " +
+                "multi-finger gesture. It reads:\n$count",
         )
     }
 

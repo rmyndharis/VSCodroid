@@ -117,4 +117,43 @@ class SecretStorageKeyTest {
             unmockkObject(Logger)
         }
     }
+
+    @Test
+    fun `staged key file is created atomically with owner-only permissions`() {
+        val staged = File(tmp, "${SecretStorageKey.FILE_NAME}.tmp")
+        var atomicCreateUsed = false
+        io.mockk.mockkStatic(Files::class)
+        try {
+            every {
+                Files.newByteChannel(
+                    eq(staged.toPath()),
+                    any<Set<java.nio.file.OpenOption>>(),
+                    *anyVararg<java.nio.file.attribute.FileAttribute<*>>(),
+                )
+            } answers {
+                val options = secondArg<Set<java.nio.file.OpenOption>>()
+                val attrs = thirdArg<Array<java.nio.file.attribute.FileAttribute<*>>>()
+                assertTrue(java.nio.file.StandardOpenOption.CREATE_NEW in options, "must use CREATE_NEW")
+                assertTrue(
+                    attrs.any { attr ->
+                        val perms = attr.value() as? Set<*>
+                        perms != null && PosixFilePermissions.toString(
+                            perms.filterIsInstance<java.nio.file.attribute.PosixFilePermission>().toSet()
+                        ) == "rw-------"
+                    },
+                    "staged file must be created with rw------- attribute",
+                )
+                atomicCreateUsed = true
+                callOriginal()
+            }
+
+            val created = SecretStorageKey(file).bytes()
+
+            assertTrue(atomicCreateUsed, "SecretStorageKey did not create its staged file atomically via Files.newByteChannel")
+            assertEquals(SecretStorageKey.KEY_BYTES, created.size)
+            assertEquals("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(file.toPath())))
+        } finally {
+            io.mockk.unmockkStatic(Files::class)
+        }
+    }
 }

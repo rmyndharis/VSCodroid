@@ -1009,15 +1009,15 @@ class KeyInjector(
                         if (!e.text || !lent || lent.empty !== empty) return;
                         if (e.text.length !== 1) {
                             var own = lent.own;
-                            var start = own.selectionStart;
-                            var end = own.selectionEnd;
-                            var nextStart = start + e.selectionStart;
-                            var nextEnd = start + e.selectionEnd;
+                            var lo = Math.min(own.selectionStart, own.selectionEnd);
+                            var hi = Math.max(own.selectionStart, own.selectionEnd);
                             // A synthetic beforeinput has no insertion default.
-                            own.updateText(start, end, e.text);
+                            own.updateText(lo, hi, e.text);
+                            var nextStart = Math.max(0, Math.min(own.text.length, lo + e.selectionStart));
+                            var nextEnd = Math.max(0, Math.min(own.text.length, lo + e.selectionEnd));
                             own.updateSelection(nextStart, nextEnd);
                             own.dispatchEvent(new TextUpdateEvent('textupdate', {
-                                text: e.text, updateRangeStart: start, updateRangeEnd: end,
+                                text: e.text, updateRangeStart: lo, updateRangeEnd: hi,
                                 selectionStart: nextStart, selectionEnd: nextEnd
                             }));
                             var mod = window.__vscodroid;

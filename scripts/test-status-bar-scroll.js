@@ -148,9 +148,14 @@ check('the stylesheet keeps the entries on one row, inside the coarse-pointer bl
     }
     assert.ok(rule < end, 'the rule is outside the coarse-pointer block');
     const declarations = css.slice(rule, css.indexOf('}', rule));
-    for (const d of ['flex-wrap: nowrap', 'overflow-x: hidden', 'min-width: 0']) {
+    for (const d of ['flex-wrap: nowrap', 'overflow-x: auto', 'scrollbar-width: none', 'min-width: 0']) {
         assert.ok(declarations.includes(d), `the rule lost ${d}`);
     }
+    assert.ok(!declarations.includes('overflow-x: hidden'), 'overflow-x must allow scrolling rather than hidden');
+    assert.ok(
+        css.includes(STRIP_SELECTOR + '::-webkit-scrollbar') && css.includes('display: none'),
+        'webkit scrollbar must stay hidden on the status strip',
+    );
 });
 
 check('four listeners on the window, in the capture phase and passive', () => {
@@ -264,24 +269,33 @@ check('running the script again installs nothing twice', () => {
     assert.strictEqual(page.listeners.length, 4);
 });
 
-function makeStatusPage({ stripRect = { left: 134, right: 407, width: 273 }, items, deferRaf = false } = {}) {
+function makeStatusPage({ stripRect = { left: 134, right: 407, width: 273 }, items } = {}) {
     const listeners = [];
+    const stripListeners = [];
     const appended = [];
-    const observers = { resize: [], mutation: [] };
-    const rafQueue = [];
     let scrollLeft = 0;
-    const itemEls = items.map((spec) => ({
-        id: spec.id,
-        style: { visibility: '' },
-        getBoundingClientRect: () => ({
-            left: spec.left - scrollLeft,
-            right: spec.right - scrollLeft,
-            width: spec.right - spec.left,
-        }),
-        closest(selector) {
-            return selector === STRIP_SELECTOR ? strip : null;
-        },
-    }));
+    const itemEls = items.map((spec) => {
+        const el = {
+            id: spec.id,
+            style: { visibility: '' },
+            getBoundingClientRect: () => ({
+                left: spec.left - scrollLeft,
+                right: spec.right - scrollLeft,
+                width: spec.right - spec.left,
+            }),
+            closest(selector) {
+                if (selector === '.statusbar-item') return el;
+                return selector === STRIP_SELECTOR ? strip : null;
+            },
+        };
+        el.child = {
+            closest(selector) {
+                if (selector === '.statusbar-item') return el;
+                return selector === STRIP_SELECTOR ? strip : null;
+            },
+        };
+        return el;
+    });
     const statusbarEl = {
         getBoundingClientRect: () => ({ left: 0, right: 407, width: 407 }),
         querySelector: (selector) => (selector === '.right-items' ? strip : null),
@@ -293,6 +307,7 @@ function makeStatusPage({ stripRect = { left: 134, right: 407, width: 273 }, ite
         set scrollLeft(v) { scrollLeft = v; },
         getBoundingClientRect: () => ({ ...stripRect }),
         querySelectorAll: (selector) => (selector === '.statusbar-item' ? itemEls : []),
+        addEventListener: (type, fn, options) => stripListeners.push({ type, fn, options }),
     };
     const document = {
         getElementById: (id) => appended.find((e) => e.id === id) || null,
@@ -308,38 +323,21 @@ function makeStatusPage({ stripRect = { left: 134, right: 407, width: 273 }, ite
     const window = {
         addEventListener: (type, fn, options) => listeners.push({ type, fn, options }),
     };
-    class ResizeObserver {
-        constructor(fn) { this.fn = fn; this.targets = []; observers.resize.push(this); }
-        observe(el) { this.targets.push(el); }
-    }
-    class MutationObserver {
-        constructor(fn) { this.fn = fn; this.targets = []; observers.mutation.push(this); }
-        observe(el, opts) { this.targets.push({ el, opts }); }
-        disconnect() {}
-    }
-    const context = vm.createContext({
-        window,
-        document,
-        ResizeObserver,
-        MutationObserver,
-        requestAnimationFrame: (fn) => (deferRaf ? rafQueue.push(fn) : fn()),
-    });
+    const context = vm.createContext({ window, document });
     return {
-        strip, statusbarEl, itemEls, stripRect, listeners, observers, rafQueue,
+        strip, statusbarEl, itemEls, stripRect, listeners, stripListeners,
         entry: itemEls[0],
         run: () => vm.runInContext(SCRIPT, context),
-        flushFrame() {
-            const batch = rafQueue.splice(0, rafQueue.length);
-            for (const fn of batch) fn();
-            return batch.length;
-        },
         fire(type, event) {
             for (const l of listeners.filter((x) => x.type === type)) l.fn(event);
+        },
+        fireStrip(type, event) {
+            for (const l of stripListeners.filter((x) => x.type === type)) l.fn(event);
         },
     };
 }
 
-check('right-side status items crossing either strip edge are hidden instead of clipped mid-word', () => {
+check('off-screen right-side status items remain visible in the accessibility tree and keyboard focus order', () => {
     const page = makeStatusPage({
         items: [
             { id: 'status.notifications', left: 363, right: 407 },
@@ -348,91 +346,61 @@ check('right-side status items crossing either strip edge are hidden instead of 
         ],
     });
     page.run();
-    assert.strictEqual(page.itemEls[0].style.visibility, '');
-    assert.strictEqual(page.itemEls[1].style.visibility, 'hidden', 'partially clipped left item must be hidden');
-    assert.strictEqual(page.itemEls[2].style.visibility, 'hidden', 'offscreen left item must be hidden');
+    for (const el of page.itemEls) {
+        assert.strictEqual(el.style.visibility, '', `${el.id} must not be set to visibility: hidden`);
+    }
+    drag(page, page.entry, 200, 320);
+    assert.strictEqual(page.strip.scrollLeft, -120);
+    for (const el of page.itemEls) {
+        assert.strictEqual(el.style.visibility, '', `${el.id} must stay accessible after panning`);
+    }
 });
 
-check('panning reveals newly in-bounds items whole and hides items pushed past the right edge', () => {
+check('focusin on an off-screen left status item scrolls it cleanly into view', () => {
     const page = makeStatusPage({
         items: [
             { id: 'status.notifications', left: 363, right: 407 },
             { id: 'status.workbench.keyboardLayout', left: 119, right: 210 },
+            { id: 'status.editor.mode', left: 35, right: 119 },
+        ],
+    });
+    page.run();
+    assert.ok(
+        page.stripListeners.some((l) => l.type === 'focusin'),
+        'expected focusin listener on .part.statusbar > .right-items',
+    );
+    page.fireStrip('focusin', { target: page.itemEls[2].child });
+    const rect = page.itemEls[2].getBoundingClientRect();
+    assert.ok(rect.left >= page.stripRect.left, `focused left item stayed clipped on left: ${rect.left} < ${page.stripRect.left}`);
+    assert.ok(rect.right <= page.stripRect.right, `focused left item overflowed right: ${rect.right} > ${page.stripRect.right}`);
+});
+
+check('focusin on an off-screen right item after panning scrolls it back into view', () => {
+    const page = makeStatusPage({
+        items: [
+            { id: 'status.notifications', left: 363, right: 407 },
             { id: 'status.editor.mode', left: 35, right: 119 },
         ],
     });
     page.run();
     drag(page, page.entry, 200, 320);
     assert.strictEqual(page.strip.scrollLeft, -120);
-    assert.strictEqual(page.itemEls[0].style.visibility, 'hidden', 'item clipped on right edge must hide');
-    assert.strictEqual(page.itemEls[1].style.visibility, '', 'whole item inside strip must appear');
-    assert.strictEqual(page.itemEls[2].style.visibility, '', 'whole item brought into view must appear');
+    page.fireStrip('focusin', { target: page.itemEls[0] });
+    const rect = page.itemEls[0].getBoundingClientRect();
+    assert.ok(rect.left >= page.stripRect.left, `focused right item clipped on left: ${rect.left}`);
+    assert.ok(rect.right <= page.stripRect.right, `focused right item stayed clipped on right: ${rect.right}`);
 });
 
-check('resize and status bar mutations refresh visibility without adding window listeners', () => {
-    const specs = [
-        { id: 'status.notifications', left: 363, right: 407 },
-        { id: 'status.workbench.keyboardLayout', left: 210, right: 300 },
-    ];
-    const page = makeStatusPage({ items: specs });
+check('focusin on an already-visible item leaves scrollLeft unchanged', () => {
+    const page = makeStatusPage({
+        items: [
+            { id: 'status.notifications', left: 363, right: 407 },
+            { id: 'status.editor.selection', left: 210, right: 300 },
+        ],
+    });
     page.run();
-    assert.deepStrictEqual(
-        page.listeners.map((l) => l.type).sort(),
-        ['touchcancel', 'touchend', 'touchmove', 'touchstart'],
-    );
-    assert.strictEqual(page.itemEls[1].style.visibility, '');
-    page.stripRect.left = 250;
-    assert.ok(page.observers.resize.length > 0, 'expected ResizeObserver on status strip');
-    page.observers.resize.forEach((o) => o.fn());
-    assert.strictEqual(page.itemEls[1].style.visibility, 'hidden');
-    page.stripRect.left = 134;
-    assert.ok(page.observers.mutation.length > 0, 'expected MutationObserver on statusbar');
-    page.observers.mutation.forEach((o) => o.fn());
-    assert.strictEqual(page.itemEls[1].style.visibility, '');
-});
-
-check('bursts of resize and status mutations coalesce into at most one pass per animation frame', () => {
-    const specs = [
-        { id: 'status.notifications', left: 363, right: 407 },
-        { id: 'status.editor.selection', left: 210, right: 300 },
-    ];
-    let itemRectReads = 0;
-    const page = makeStatusPage({ items: specs, deferRaf: true });
-    const origRect = page.itemEls[1].getBoundingClientRect;
-    page.itemEls[1].getBoundingClientRect = () => { itemRectReads++; return origRect(); };
-    page.run();
-    const initialReads = itemRectReads;
-    assert.strictEqual(initialReads, 1);
-    assert.strictEqual(page.rafQueue.length, 0);
-
-    // Only `.right-items` gets subtree/characterData observation (`.left-items` noise does not trigger it).
-    const mutTargets = page.observers.mutation[0].targets;
-    const stripTarget = mutTargets.find((t) => t.el === page.strip);
-    const barTarget = mutTargets.find((t) => t.el === page.statusbarEl);
-    assert.ok(stripTarget && stripTarget.opts.subtree === true && !stripTarget.opts.attributes);
-    assert.ok(barTarget && barTarget.opts.childList === true && !barTarget.opts.subtree);
-
-    // Simulate repeated caret-move updates and strip resizes inside one frame.
-    page.stripRect.left = 250;
-    for (let i = 0; i < 5; i++) {
-        page.observers.mutation.forEach((o) => o.fn());
-        page.observers.resize.forEach((o) => o.fn());
-    }
-    assert.strictEqual(page.rafQueue.length, 1, 'multiple notifications in one frame must schedule at most one pass');
-    assert.strictEqual(itemRectReads, initialReads, 'queued update must wait for requestAnimationFrame');
-
-    assert.strictEqual(page.flushFrame(), 1);
-    assert.strictEqual(itemRectReads, initialReads + 1, 'flushing the frame runs syncRightStrip once');
-    assert.strictEqual(page.itemEls[1].style.visibility, 'hidden');
-
-    // Flushing clears syncQueued so subsequent frames schedule cleanly again.
-    page.stripRect.left = 134;
-    page.observers.mutation.forEach((o) => o.fn());
-    page.observers.mutation.forEach((o) => o.fn());
-    assert.strictEqual(page.rafQueue.length, 1, 'the next frame must schedule one new pass after flush');
-    assert.strictEqual(page.flushFrame(), 1);
-    assert.strictEqual(itemRectReads, initialReads + 2);
-    assert.strictEqual(page.itemEls[1].style.visibility, '');
+    page.fireStrip('focusin', { target: page.itemEls[1] });
+    assert.strictEqual(page.strip.scrollLeft, 0);
 });
 
 let failed = 0;

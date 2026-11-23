@@ -57,7 +57,7 @@
   two rules that differ are two rules to reason about every time one changes.
 -->
 <data-extraction-rules>
-    <cloud-backup>
+    <cloud-backup disableIfNoEncryptionCapabilities="true">
         <include domain="file" path="home/.vscodroid/data/Machine" />
     </cloud-backup>
     <device-transfer>

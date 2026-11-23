@@ -36,9 +36,15 @@ import java.security.DigestInputStream
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.UUID
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.LockSupport
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.thread
@@ -169,11 +175,48 @@ class SafSyncEngine(private val context: Context) {
         }
 
     /**
+     * Maximum queued live observer callbacks per [WatchSession] before new callbacks escalate
+     * to overflow reconciliation instead of growing unboundedly. Replaceable in JVM tests.
+     */
+    internal var observerQueueCapacity: Int = DEFAULT_OBSERVER_QUEUE_CAPACITY
+
+    /**
+     * How long [stopWatching] waits for already-observed callbacks on the closing session's
+     * observer dispatcher to finish enqueueing write-back jobs before force-closing it.
+     */
+    internal var observerDrainGraceMs: Long = OBSERVER_DRAIN_GRACE_MS
+
+    private fun dispatchObserverEvent(
+        owner: WatchSession,
+        rootDir: File,
+        safTreeUri: Uri,
+        task: () -> Unit,
+    ) {
+        if (shutDown) return
+        val accepted = owner.dispatchObserverEvent(observerQueueCapacity, task)
+        if (!accepted && !shutDown && isWatching && owner === session) {
+            handleOverflow(rootDir, safTreeUri, owner, reason = "observer dispatch queue saturated")
+        }
+    }
+
+    /**
+     * Monotonic millisecond clock used for rename-pair windows and recent-drop expiry so
+     * wall-clock adjustments cannot break pairing or expiration.
+     */
+    internal var monotonicClock: () -> Long = ::defaultMonotonicMillis
+
+    private fun defaultMonotonicMillis(): Long = try {
+        SystemClock.elapsedRealtime()
+    } catch (_: RuntimeException) {
+        TimeUnit.NANOSECONDS.toMillis(System.nanoTime())
+    }
+
+    /**
      * When an open's watch saw an event, read as the event comes: the replay pairs a folder's departure and arrival
      * by these times, the way the watcher pairs them by its own clock ([RENAME_PAIR_WINDOW_MS]). The same clock as
      * that one, since a pair can straddle the handover. A `var` so a JVM test can space two events apart.
      */
-    internal var openEventClock: () -> Long = System::currentTimeMillis
+    internal var openEventClock: () -> Long = { monotonicClock() }
 
     /**
      * Cache: relativePath → document ID. Built during [initialSync] and used for
@@ -2519,6 +2562,7 @@ class SafSyncEngine(private val context: Context) {
                     SyncType.MODIFY, path, held.docUri, null, null, Long.MIN_VALUE,
                     mirrorRoot = session.root,
                     generation = access.generation,
+                    seq = Long.MIN_VALUE,
                 ),
             )
             return true
@@ -3747,14 +3791,15 @@ class SafSyncEngine(private val context: Context) {
                 watchers.clear()
                 watchedDirectoryKeys.clear()
             }
+            val closing = session
+            // Stop accepting new observer callbacks for this session and wait briefly for any
+            // already-observed callbacks to finish queueing into closing.queue before switching
+            // sessions or stopping the write-back worker. handleMirrorEvent/watchTree/unwatchTree
+            // never acquire lifecycleLock, so awaiting after watchersLock is released cannot
+            // deadlock; if a provider call stalls, force-shutdown detaches it from future sessions.
+            closing.drainObserverDispatcher(observerDrainGraceMs)
             dropChangesDuringOpen()
             dropPausedChanges()
-            // The folder being closed keeps the queue its jobs are in, and the folder opened
-            // next gets an empty one, whether or not the drain below finishes in time.
-            //
-            // Abandoned from birth: only [startWatching] starts a worker and it always
-            // installs a session of its own first.
-            val closing = session
             // Kept until a start of this folder takes it, before the drain below, whose wait a program in the folder
             // goes on writing through.
             recording?.let { pausedChanges = closing.root!!.absolutePath to it }
@@ -4006,8 +4051,11 @@ class SafSyncEngine(private val context: Context) {
             DocumentsContract.Document.COLUMN_LAST_MODIFIED
         )
 
+        val entries = ArrayList<DocumentInfo>()
+        val repeatedNames = LinkedHashSet<String>()
+
         try {
-            context.contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+            val listed = context.contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
                 val idIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
                 val nameIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
                 val mimeIndex = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
@@ -4037,7 +4085,6 @@ class SafSyncEngine(private val context: Context) {
                 // newer than the older document uploaded one document's bytes over the
                 // other's with no copy kept.
                 val seenNames = HashSet<String>()
-                val repeatedNames = LinkedHashSet<String>()
 
                 while (cursor.moveToNext()) {
                     val docId = cursor.getString(idIndex)
@@ -4076,7 +4123,7 @@ class SafSyncEngine(private val context: Context) {
                         // 2 and never reaches an `unfetched.add`; the DELETE guard
                         // then proves "the device holds the only copy" from a set
                         // that cannot contain it, answers false, and lets
-                        // deleteDocument take the whole directory on the device --
+                        // deleteDocument take the whole directory on the device,
                         // including the `.git` or `node_modules` that being skipped
                         // is the reason the mirror never held. The MOVED_FROM hold
                         // already refuses to lose this exact content; this is what
@@ -4090,49 +4137,11 @@ class SafSyncEngine(private val context: Context) {
                         continue
                     }
 
-                    // Cache the docId so write-back resolves this path without
-                    // walking the tree again
-                    cacheDocId(treeUri, relativePath, docId)
-
-                    result.add(DocumentInfo(docUri, docId, relativePath, isDir, size, lastModified))
-
-                    if (isDir && !walkTree(treeUri, docId, relativePath, result, skipped, branch)) {
-                        complete = false
-                        // Recorded for the same reason a skipped directory is, and it
-                        // is the same loss: the children could not be enumerated, so
-                        // none of them becomes a DocumentInfo, none reaches phase 2,
-                        // and none reaches an `unfetched.add`. Without this the DELETE
-                        // guard proves "the device holds the only copy" from a set that
-                        // cannot contain them and lets deleteDocument take the whole
-                        // directory on the device, including documents the mirror never
-                        // held. Unlike a skipped name, nothing filters this one out
-                        // earlier: [shouldWriteBack] drops SKIP_DIRECTORIES by name,
-                        // and a directory whose enumeration merely failed has an
-                        // ordinary one.
-                        skipped.add(relativePath)
-                    }
+                    entries.add(DocumentInfo(docUri, docId, relativePath, isDir, size, lastModified))
                 }
-
-                // Taken back out, the first row and whatever was listed under it included, and
-                // recorded the way an unlistable directory is: nothing at that path is fetched,
-                // written, created or deleted on the word of one of two documents, and the open
-                // reports it as not copied. The listing as a whole is incomplete, so the deletion
-                // pass leaves the mirror alone.
-                for (name in repeatedNames) {
-                    val path = if (parentRelPath.isEmpty()) name else "$parentRelPath/$name"
-                    result.removeAll { it.relativePath == path || it.relativePath.startsWith("$path/") }
-                    skipped.add(path)
-                    complete = false
-                }
-                if (repeatedNames.isNotEmpty()) {
-                    Logger.w(
-                        tag,
-                        "Left ${repeatedNames.size} names alone in " +
-                            (if (parentRelPath.isEmpty()) "the folder root" else parentRelPath) +
-                            ": the provider lists two documents under each",
-                    )
-                }
-            } ?: run {
+                true
+            }
+            if (listed == null) {
                 skipped.add(parentRelPath)
                 return false
             }
@@ -4148,6 +4157,49 @@ class SafSyncEngine(private val context: Context) {
                     ": ${e.javaClass.simpleName}",
             )
             return false
+        }
+
+        // Cursor is closed before caching or descending so at most one CursorWindow is held open
+        // at any depth, and duplicated names are filtered out before populating docIdCache.
+        val repeatedPaths = if (repeatedNames.isNotEmpty()) {
+            complete = false
+            repeatedNames.mapTo(HashSet()) { name ->
+                val path = if (parentRelPath.isEmpty()) name else "$parentRelPath/$name"
+                skipped.add(path)
+                forgetCachedSubtree(treeUri, path)
+                path
+            }.also {
+                Logger.w(
+                    tag,
+                    "Left ${repeatedNames.size} names alone in " +
+                        (if (parentRelPath.isEmpty()) "the folder root" else parentRelPath) +
+                        ": the provider lists two documents under each",
+                )
+            }
+        } else {
+            emptySet()
+        }
+
+        for (entry in entries) {
+            if (entry.relativePath in repeatedPaths) continue
+            // Cache the docId so write-back resolves this path without walking the tree again.
+            cacheDocId(treeUri, entry.relativePath, entry.docId)
+            result.add(entry)
+            if (entry.isDirectory && !walkTree(treeUri, entry.docId, entry.relativePath, result, skipped, branch)) {
+                complete = false
+                // Recorded for the same reason a skipped directory is, and it
+                // is the same loss: the children could not be enumerated, so
+                // none of them becomes a DocumentInfo, none reaches phase 2,
+                // and none reaches an `unfetched.add`. Without this the DELETE
+                // guard proves "the device holds the only copy" from a set that
+                // cannot contain them and lets deleteDocument take the whole
+                // directory on the device, including documents the mirror never
+                // held. Unlike a skipped name, nothing filters this one out
+                // earlier: [shouldWriteBack] drops SKIP_DIRECTORIES by name,
+                // and a directory whose enumeration merely failed has an
+                // ordinary one.
+                skipped.add(entry.relativePath)
+            }
         }
         return complete
     }
@@ -5170,7 +5222,17 @@ class SafSyncEngine(private val context: Context) {
             // A write cut short has no digest because its prefix is unknown.
             if (providerAttempted) {
                 val stamp = deviceStamp(safDocUri)
-                deviceSeen[localFile.absolutePath] = DeviceState(stamp, written, writtenLength)
+                if (outputOpened) {
+                    deviceSeen[localFile.absolutePath] = DeviceState(stamp, written, writtenLength)
+                } else {
+                    val seen = deviceSeen[localFile.absolutePath]
+                    val stampMoved = stamp != null && seen?.stamp != null && stamp != seen.stamp
+                    if (seen == null || stampMoved) {
+                        deviceSeen[localFile.absolutePath] = DeviceState(stamp, null, 0L)
+                    } else if (stamp == null && seen.stamp != null) {
+                        deviceSeen.replace(localFile.absolutePath, seen, DeviceState(null, seen.sha256, seen.length))
+                    }
+                }
             }
         }
     }
@@ -5588,6 +5650,31 @@ class SafSyncEngine(private val context: Context) {
                     rewriteJournal(if (standing) lines else lines + absolutePath, unwritten - absolutePath)
                 }
                 !standing || absolutePath in unwritten
+            } catch (e: Exception) {
+                Logger.w(tag, "Could not record the upload in flight: ${e.message}")
+                null
+            }
+        }
+
+    /**
+     * Ensures [absolutePath] has a recovery entry without modifying an already standing entry
+     * or its unwritten mark.
+     *
+     * Returns null on journal failure, true when this call inserted a new entry (which the
+     * caller owns cleaning up if the paired rename fails), and false when an entry was already
+     * standing before this call.
+     */
+    private fun recordUploadIntentIfAbsent(absolutePath: String): Boolean? =
+        synchronized(uploadJournalLock) {
+            try {
+                val journal = uploadJournal()
+                val (lines, unwritten) = if (journal.isFile) journalEntries(journal) else emptyList<String>() to emptySet()
+                if (absolutePath in lines) {
+                    false
+                } else {
+                    rewriteJournal(lines + absolutePath, unwritten)
+                    true
+                }
             } catch (e: Exception) {
                 Logger.w(tag, "Could not record the upload in flight: ${e.message}")
                 null
@@ -6132,7 +6219,11 @@ class SafSyncEngine(private val context: Context) {
             // obvious repairs are each worse. Only for a document this call created: one
             // that was already there was found BY the mirror's name, so the two agree.
             file =
-                if (existingDocId == null) mirrorNamedAsStored(docUri, localFile) else localFile
+                if (existingDocId == null) {
+                    mirrorNamedAsStored(docUri, localFile, storedDocumentName(docUri), mirrorRoot)
+                } else {
+                    localFile
+                }
 
             var delivered = false
             if (file.isFile) {
@@ -6293,30 +6384,82 @@ class SafSyncEngine(private val context: Context) {
     private fun mirrorNamedAsStored(
         docUri: Uri,
         localFile: File,
+        stored: String?,
+    ): File = mirrorNamedAsStored(docUri, localFile, stored, mirrorRoot = null)
+
+    private fun mirrorNamedAsStored(
+        docUri: Uri,
+        localFile: File,
         stored: String? = storedDocumentName(docUri),
+        mirrorRoot: File? = null,
     ): File {
-        if (!localFile.isFile && !localFile.isDirectory) return localFile
+        val sourceAttrs = runCatching {
+            Files.readAttributes(localFile.toPath(), BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+        }.getOrNull() ?: return localFile
+        if (!sourceAttrs.isRegularFile && !sourceAttrs.isDirectory) return localFile
         if (stored == null || stored == localFile.name) return localFile
 
+        val isDir = sourceAttrs.isDirectory
         val renamed = if (isSafeSegment(stored)) File(localFile.parentFile, stored) else null
-        val owner = session
+        val owner = writeBackSession.get()
         var followed = false
-        if (renamed != null && !renamed.exists() &&
-            (localFile.isDirectory || recordUploadIntent(renamed.absolutePath) != null)
-        ) {
-            val identity = if (localFile.isDirectory) runCatching {
-                Files.readAttributes(localFile.toPath(), BasicFileAttributes::class.java,
-                    LinkOption.NOFOLLOW_LINKS).fileKey()
-            }.getOrNull() else null
-            val expected = identity?.let { localFile.absolutePath to it }
-            if (expected != null && owner.normalizedDirectories.size < MAX_WATCHED_DIRECTORIES) {
-                owner.normalizedDirectories[renamed.absolutePath] = expected
+        var insertedIntent = false
+        if (renamed != null) {
+            val expected = if (isDir) sourceAttrs.fileKey()?.let { localFile.absolutePath to it } else null
+            followed = runCatching {
+                if (mirrorRoot != null) {
+                    openOutboundPath(localFile, mirrorRoot).use { dest ->
+                        val leafAttrs = inboundAttributes(dest, dest.leaf)
+                        val expectedKind = if (isDir) leafAttrs?.isDirectory == true else leafAttrs?.isRegularFile == true
+                        val to = dest.sibling(stored)
+                        if (!expectedKind || inboundAttributes(dest, to) != null || !parentIsCurrent(dest, localFile, mirrorRoot)) {
+                            false
+                        } else if (!isDir && recordUploadIntentIfAbsent(renamed.absolutePath).also { insertedIntent = it == true } == null) {
+                            false
+                        } else {
+                            if (owner != null && expected != null && owner.normalizedDirectories.size < MAX_WATCHED_DIRECTORIES) {
+                                owner.normalizedDirectories[renamed.absolutePath] = expected
+                            }
+                            moveToFreeName(dest, localFile, dest.leaf, to)
+                        }
+                    }
+                } else {
+                    val parent = localFile.parentFile
+                    val parentKey = parent?.let {
+                        Files.readAttributes(it.toPath(), BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+                    }?.takeIf { it.isDirectory && !it.isSymbolicLink }?.fileKey()
+                    if (parent == null || parentKey == null || Files.exists(renamed.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                        false
+                    } else if (!isDir && recordUploadIntentIfAbsent(renamed.absolutePath).also { insertedIntent = it == true } == null) {
+                        false
+                    } else {
+                        if (owner != null && expected != null && owner.normalizedDirectories.size < MAX_WATCHED_DIRECTORIES) {
+                            owner.normalizedDirectories[renamed.absolutePath] = expected
+                        }
+                        when (exclusiveMove(parent, parentKey, localFile.name, stored)) {
+                            ExclusiveMove.Outcome.MOVED -> true
+                            ExclusiveMove.Outcome.TAKEN -> false
+                            ExclusiveMove.Outcome.UNKNOWN ->
+                                !Files.exists(localFile.toPath(), LinkOption.NOFOLLOW_LINKS) &&
+                                    Files.exists(renamed.toPath(), LinkOption.NOFOLLOW_LINKS)
+                            ExclusiveMove.Outcome.UNAVAILABLE -> {
+                                val currentKey = Files.readAttributes(
+                                    parent.toPath(), BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS,
+                                ).takeIf { it.isDirectory && !it.isSymbolicLink }?.fileKey()
+                                currentKey == parentKey &&
+                                    !Files.exists(renamed.toPath(), LinkOption.NOFOLLOW_LINKS) &&
+                                    localFile.renameTo(renamed)
+                            }
+                        }
+                    }
+                }
+            }.getOrDefault(false)
+            if (!followed && owner != null && expected != null) {
+                owner.normalizedDirectories.remove(renamed.absolutePath, expected)
             }
-            followed = localFile.renameTo(renamed)
-            if (!followed && expected != null) owner.normalizedDirectories.remove(renamed.absolutePath, expected)
         }
         if (!followed) {
-            if (renamed != null && !renamed.exists()) consumeStaleUploadRecord(renamed.absolutePath)
+            if (insertedIntent && renamed != null) consumeStaleUploadRecord(renamed.absolutePath)
             Logger.w(
                 tag,
                 "The device folder stored ${localFile.name} as $stored and the mirror could " +
@@ -6324,8 +6467,8 @@ class SafSyncEngine(private val context: Context) {
             )
             return localFile
         }
-        if (renamed!!.isDirectory) {
-            renameUploadsUnder(localFile, renamed)
+        if (isDir) {
+            renameUploadsUnder(localFile, renamed!!)
             renameDeviceMemoryUnder(localFile, renamed)
         } else consumeStaleUploadRecord(localFile.absolutePath)
         Logger.i(
@@ -6333,7 +6476,7 @@ class SafSyncEngine(private val context: Context) {
             "The device folder stored ${localFile.name} as $stored; the mirror copy now " +
                 "carries that name too",
         )
-        return renamed
+        return renamed!!
     }
 
     /**
@@ -6645,7 +6788,9 @@ class SafSyncEngine(private val context: Context) {
         if (queued.type == SyncType.CREATE || queued.type == SyncType.MODIFY) session.gaveWay.remove(queued.localPath)
         val pending = session.queue.toList()
         if (pending.withIndex().any { (index, later) ->
-                later.localPath == queued.localPath && later.timestamp > queued.timestamp &&
+                later.localPath == queued.localPath &&
+                    (queued.safTreeUri == null || later.safTreeUri == null || later.safTreeUri == queued.safTreeUri) &&
+                    later.seq > queued.seq &&
                     supersededByLaterJob(queued, later) &&
                     !(queued.type == SyncType.RENAME && pending.subList(0, index).any { renamesAway(it, queued.localPath) })
             }
@@ -6952,7 +7097,7 @@ class SafSyncEngine(private val context: Context) {
                                 val storedName = storedDocumentName(storedUri)
                                 if (storedName != null && isSafeSegment(storedName)) {
                                     val actualFile = File(localFile.parentFile, storedName)
-                                    val actualMirror = mirrorNamedAsStored(storedUri, localFile, storedName)
+                                    val actualMirror = mirrorNamedAsStored(storedUri, localFile, storedName, mirrorRoot)
                                     job.previousPath?.let {
                                         renameDeviceMemoryUnder(File(it), actualFile)
                                     }
@@ -7235,6 +7380,12 @@ class SafSyncEngine(private val context: Context) {
         private val events = LinkedHashMap<Long, Recorded>()
         private val lastWrite = HashMap<String, Long>()
         private var next = 0L
+        @Volatile var overflowed: Boolean = false
+            private set
+
+        fun markOverflow() {
+            overflowed = true
+        }
         private val removedPaths = ConcurrentHashMap.newKeySet<String>()
         private val removedDirectories = ConcurrentHashMap.newKeySet<String>()
         private val placedPaths = ConcurrentHashMap.newKeySet<String>()
@@ -7423,6 +7574,11 @@ class SafSyncEngine(private val context: Context) {
             for (dir in watchableDirectories(mirrorDir, MAX_WATCHED_DIRECTORIES)) {
                 val identity = directoryKeyOf(dir) ?: continue
                 val watch = directoryWatchFactory(dir) { event, name ->
+                    if ((event and IN_Q_OVERFLOW) != 0) {
+                        changes.markOverflow()
+                        Logger.w(tag, "File watcher event queue overflowed while opening ${mirrorDir.name}")
+                        return@directoryWatchFactory
+                    }
                     if (name != null) changes.record(event, identity, name, openEventClock())
                 }
                 changes.watch(dir, identity, watch)
@@ -7516,7 +7672,7 @@ class SafSyncEngine(private val context: Context) {
     private fun replayRecorded(changes: ChangesDuringOpen, mirrorDir: File, safUri: Uri, owner: WatchSession): Boolean {
         changes.close()
         val events = changes.recorded()
-        if (events.isEmpty()) return true
+        if (events.isEmpty()) return !changes.overflowed
         // The rows with a digest, which every copy the open put in place, kept with its bytes
         // read, or sent itself carries; a row without one only names a file the open could
         // not place. Null where the record cannot be read: then nothing tells the open's own
@@ -7664,7 +7820,7 @@ class SafSyncEngine(private val context: Context) {
                 file.isFile && !isLink(file) && cachedDocId(safUri, file.toRelativeString(mirrorDir)) == null
         }.map { File(it).toRelativeString(mirrorDir) }.distinct().sorted()
         if (unsent.isNotEmpty()) onFilesKeptInApp(mirrorDir, unsent.size, unsent.first())
-        return !unasked
+        return !unasked && !changes.overflowed
     }
 
     // -- FileObserver --
@@ -7684,13 +7840,24 @@ class SafSyncEngine(private val context: Context) {
         private val owner: WatchSession,
     ) {
         /** Where what the directory reports goes instead of the watcher, once a switch records it ([recordInto]). */
-        @Volatile private var recording: ((Int, String) -> Unit)? = null
+        @Volatile private var recording: ((Int, String?) -> Unit)? = null
 
         private val watch = directoryWatchFactory(dir) { event, path ->
+            if ((event and IN_Q_OVERFLOW) != 0) {
+                val into = recording
+                if (into != null) into(event, null)
+                else if (isWatching) handleOverflow(rootDir, safTreeUri, owner)
+                return@directoryWatchFactory
+            }
             if (path != null) {
                 val into = recording
                 if (into != null) into(event, path)
-                else if (isWatching) handleMirrorEvent(event, File(dir, path), rootDir, safTreeUri, owner)
+                else if (isWatching) {
+                    val localFile = File(dir, path)
+                    dispatchObserverEvent(owner, rootDir, safTreeUri) {
+                        handleMirrorEvent(event, localFile, rootDir, safTreeUri, owner)
+                    }
+                }
             }
         }
 
@@ -7712,7 +7879,14 @@ class SafSyncEngine(private val context: Context) {
                 override fun start() = Unit
                 override fun stop() = stopWatching()
             })
-            recording = { event, name -> changes.record(event, identity, name, openEventClock()) }
+            recording = { event, name ->
+                if ((event and IN_Q_OVERFLOW) != 0) {
+                    changes.markOverflow()
+                    Logger.w(tag, "File watcher event queue overflowed while switching from ${rootDir.name}")
+                } else if (name != null) {
+                    changes.record(event, identity, name, openEventClock())
+                }
+            }
         }
 
         fun startWatching() = watch.start()
@@ -7721,6 +7895,68 @@ class SafSyncEngine(private val context: Context) {
             watch.stop()
             adopted?.let { runCatching { it.stop() } }
             adopted = null
+        }
+    }
+
+    private fun handleOverflow(
+        rootDir: File,
+        safTreeUri: Uri,
+        owner: WatchSession,
+        reason: String = "inotify queue overflow",
+    ) {
+        owner.overflowed = true
+        if (!owner.overflowPending.compareAndSet(false, true)) return
+        Logger.w(tag, "File watcher event queue overflowed for ${rootDir.name} ($reason); rescanning watched directories")
+        owner.scheduleObserverOverflow(observerQueueCapacity) {
+            reconcileAfterOverflow(rootDir, safTreeUri, owner)
+        }
+    }
+
+    private fun pruneStaleWatchers(owner: WatchSession) {
+        val current = synchronized(watchersLock) {
+            if (owner !== session) return
+            watchers.keys.toList()
+        }
+        val stale = current.filter { !it.isDirectory || directoryKeyOf(it) == null }
+        if (stale.isEmpty()) return
+        synchronized(watchersLock) {
+            if (owner !== session) return
+            for (dir in stale) {
+                if (!dir.isDirectory || directoryKeyOf(dir) == null) {
+                    watchers.remove(dir)?.stopWatching()
+                    watchedDirectoryKeys.remove(dir.absolutePath)
+                }
+            }
+        }
+    }
+
+    private fun reconcileAfterOverflow(rootDir: File, safTreeUri: Uri, owner: WatchSession) {
+        owner.overflowPending.set(false)
+        if (shutDown || !isWatching || owner !== session) return
+        pruneStaleWatchers(owner)
+        watchTree(rootDir, rootDir, safTreeUri, owner)
+        val lines = readSyncedRecord(File(rootDir.path + SYNCED_RECORD_SUFFIX))
+        if (lines?.firstOrNull() != RECORD_HEADER) return
+        val known = lines.drop(1).mapTo(HashSet()) { splitRecordLine(it).first }
+        val knownFolders = HashSet<String>()
+        for (row in known) {
+            var folder = parentPathOf(unescapeRecordPath(row.substringBefore('\t')))
+            while (folder.isNotEmpty() && knownFolders.add(folder)) folder = parentPathOf(folder)
+        }
+        val createdDirs = ArrayList<String>()
+        for (entry in uploadPlan(rootDir, MAX_UPLOAD_ENTRIES).entries) {
+            if (shutDown || !isWatching || owner !== session) return
+            val path = entry.absolutePath
+            if (createdDirs.any { path.startsWith(it) }) continue
+            val relative = entry.toRelativeString(rootDir)
+            if (entry.isDirectory) {
+                if (relative !in knownFolders && cachedDocId(safTreeUri, relative) == null) {
+                    createdDirs += path + File.separator
+                    handleMirrorEvent(FileObserver.CREATE or IN_ISDIR, entry, rootDir, safTreeUri, owner)
+                }
+            } else if (identityLine(relative, entry) !in known) {
+                handleMirrorEvent(FileObserver.MODIFY, entry, rootDir, safTreeUri, owner)
+            }
         }
     }
 
@@ -7885,7 +8121,7 @@ class SafSyncEngine(private val context: Context) {
             return
         }
 
-        val now = System.currentTimeMillis()
+        val now = monotonicClock()
 
         // A directory that moved away is one half of a rename, and the device holds the
         // only complete copy of it. Android does not expose inotify's cookie, so the
@@ -8367,7 +8603,7 @@ class SafSyncEngine(private val context: Context) {
      * move has landed and has not been reported yet.
      */
     private fun rememberDroppedSave(session: WatchSession, absolutePath: String) {
-        val now = System.currentTimeMillis()
+        val now = monotonicClock()
         synchronized(vanishedLock) {
             var noted = false
             for (entry in vanishedDirectories) {
@@ -8515,6 +8751,12 @@ class SafSyncEngine(private val context: Context) {
 
         /** How long [stopWatching] waits for queued writes to reach the device. */
         private const val DRAIN_GRACE_MS = 2000L
+
+        /** Default bound on queued live observer callbacks per session before escalating to overflow. */
+        internal const val DEFAULT_OBSERVER_QUEUE_CAPACITY = 1024
+
+        /** Default wait in [stopWatching] for already-observed callbacks to enqueue their write-back jobs. */
+        internal const val OBSERVER_DRAIN_GRACE_MS = 1000L
 
         /**
          * How long a save [keepsDeviceEdit], [writeLocalToSaf], or an open arm holds back
@@ -8965,6 +9207,14 @@ class SafSyncEngine(private val context: Context) {
          * to read the event type at all.
          */
         private const val IN_ISDIR = 0x40000000
+
+        /**
+         * inotify's flag for "the kernel event queue overflowed and one or more events were dropped".
+         *
+         * Delivered with a null path and outside [FileObserver.ALL_EVENTS], so observers must check
+         * for it before filtering on the path or masking the event type.
+         */
+        internal const val IN_Q_OVERFLOW = 0x4000
 
         /**
          * How long a directory that left the mirror stays claimable as a rename source.
@@ -9759,6 +10009,12 @@ internal data class SyncJob(
      * all, under another name. Set for a DELETE and for a RENAME's source; see [SafSyncEngine.resolvedAtRun].
      */
     val resolveAtRun: Boolean = false,
+    /**
+     * Strictly increasing enqueue order within a [WatchSession], assigned when the job enters
+     * [WatchSession.queue]. Used when checking whether a later job supersedes an earlier one,
+     * avoiding same-millisecond timestamp ties.
+     */
+    val seq: Long = 0L,
 )
 
 internal enum class SyncType {
@@ -10070,6 +10326,8 @@ internal class WatchSession(
 ) {
     val queue = ConcurrentLinkedQueue<SyncJob>()
 
+    private val nextSeq = AtomicLong(0L)
+
     /**
      * The live watcher's jobs while what the open recorded is being replayed, which then go into [queue] behind the
      * replay's own; null while none is ([SafSyncEngine.replayChangesDuringOpen]). The watcher starts before the replay
@@ -10081,7 +10339,7 @@ internal class WatchSession(
     fun holdLiveJobs() = synchronized(queue) { if (heldForReplay == null) heldForReplay = ArrayList() }
 
     fun releaseLiveJobs() = synchronized(queue) {
-        heldForReplay?.forEach { queue.offer(it) }
+        heldForReplay?.forEach { queue.offer(it.copy(seq = nextSeq.incrementAndGet())) }
         heldForReplay = null
     }
 
@@ -10089,7 +10347,7 @@ internal class WatchSession(
     fun offer(job: SyncJob, live: Boolean) {
         synchronized(queue) {
             val held = heldForReplay
-            if (live && held != null) held += job else queue.offer(job)
+            if (live && held != null) held += job else queue.offer(job.copy(seq = nextSeq.incrementAndGet()))
         }
     }
 
@@ -10179,4 +10437,96 @@ internal class WatchSession(
 
     /** The thread draining [queue], or null before one is started and once it is joined. */
     @Volatile var worker: Thread? = null
+
+    /** Whether an inotify queue overflow occurred during this watch session. */
+    @Volatile var overflowed = false
+
+    /** Ensures at most one asynchronous overflow reconciliation is queued or running per burst. */
+    val overflowPending = AtomicBoolean(false)
+
+    private val observerDispatchLock = Any()
+    private var observerDispatcher: ThreadPoolExecutor? = null
+    private var observerDispatchClosed = false
+    private val pendingOverflowAction = AtomicReference<(() -> Unit)?>(null)
+
+    private fun getOrCreateObserverDispatcher(capacity: Int): ThreadPoolExecutor? =
+        synchronized(observerDispatchLock) {
+            if (observerDispatchClosed) return null
+            observerDispatcher ?: ThreadPoolExecutor(
+                1,
+                1,
+                0L,
+                TimeUnit.MILLISECONDS,
+                ArrayBlockingQueue(capacity.coerceAtLeast(1)),
+            ) { runnable ->
+                Thread(runnable, "saf-observer-dispatch").apply { isDaemon = true }
+            }.also { observerDispatcher = it }
+        }
+
+    private fun drainPendingOverflow() {
+        if (synchronized(observerDispatchLock) { observerDispatchClosed }) return
+        pendingOverflowAction.getAndSet(null)?.invoke()
+    }
+
+    /**
+     * Submits a live observer callback onto this session's bounded single-thread executor.
+     *
+     * Returns true when accepted or when this session is already closing, and false only when
+     * the bounded queue is full so the caller can trigger overflow reconciliation.
+     */
+    fun dispatchObserverEvent(capacity: Int, task: () -> Unit): Boolean {
+        val executor = getOrCreateObserverDispatcher(capacity) ?: return true
+        return try {
+            executor.execute {
+                try {
+                    task()
+                } finally {
+                    if (executor.queue.isEmpty()) drainPendingOverflow()
+                }
+            }
+            true
+        } catch (_: RejectedExecutionException) {
+            synchronized(observerDispatchLock) { observerDispatchClosed }
+        }
+    }
+
+    /**
+     * Schedules overflow reconciliation on this session's single-thread executor.
+     *
+     * Stores [action] before submitting so even if the bounded queue is full and submission is
+     * rejected, the last queued task drains [pendingOverflowAction] once the queue empties.
+     */
+    fun scheduleObserverOverflow(capacity: Int, action: () -> Unit) {
+        val executor = getOrCreateObserverDispatcher(capacity) ?: return
+        pendingOverflowAction.set(action)
+        try {
+            executor.execute { drainPendingOverflow() }
+        } catch (_: RejectedExecutionException) {
+            // Queue is either full (the tail task drains pendingOverflowAction) or closing.
+        }
+    }
+
+    /**
+     * Stops accepting new observer callbacks for this session and waits up to [graceMs] for
+     * already queued callbacks to finish. Forces shutdown and detaches if stalled past [graceMs].
+     */
+    fun drainObserverDispatcher(graceMs: Long) {
+        val executor = synchronized(observerDispatchLock) {
+            observerDispatchClosed = true
+            pendingOverflowAction.set(null)
+            observerDispatcher?.also { it.shutdown() }
+        } ?: return
+        val drained = try {
+            executor.awaitTermination(graceMs, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
+        if (!drained) {
+            executor.shutdownNow()
+        }
+        synchronized(observerDispatchLock) {
+            if (observerDispatcher === executor) observerDispatcher = null
+        }
+    }
 }

@@ -18,17 +18,47 @@ def function(path, start, end):
     return source[offset:source.index(end, offset)]
 
 
-def compile_and_run(source, flags=(), args=()):
+def compile_and_run(source, flags=(), args=(), sanitizer="undefined", capture=False):
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         file = root / "case.c"
         binary = root / "case"
         file.write_text(source)
+        san_flags = [f"-fsanitize={sanitizer}"]
+        if sanitizer == "undefined":
+            san_flags.append("-fno-sanitize-recover=all")
         subprocess.run([
-            "cc", "-Wall", "-Wextra", "-Werror", "-fsanitize=undefined",
-            "-fno-sanitize-recover=all", str(file), "-o", str(binary), *flags,
+            "cc", "-Wall", "-Wextra", "-Werror", *san_flags,
+            str(file), "-o", str(binary), *flags,
         ], check=True, timeout=30)
-        subprocess.run([str(binary), *args], cwd=root, check=True, timeout=10)
+        return subprocess.run(
+            [str(binary), *args], cwd=root, check=True, timeout=10,
+            capture_output=capture, text=capture,
+        )
+
+
+def tsan_supported():
+    """Return True when the host compiler and runtime execute a minimal TSan binary cleanly."""
+    try:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            probe = root / "probe.c"
+            binary = root / "probe"
+            probe.write_text("#include <pthread.h>\nint main(void) { return 0; }\n")
+            comp = subprocess.run(
+                ["cc", "-fsanitize=thread", "-pthread", str(probe), "-o", str(binary)],
+                capture_output=True, text=True, timeout=30,
+            )
+            if comp.returncode != 0:
+                return False
+            run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10)
+            return run.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def sanitizers_for_concurrency():
+    return ("undefined", "thread") if tsan_supported() else ("undefined",)
 
 
 def strerror_fixture():
@@ -44,6 +74,7 @@ def strerror_fixture():
 #include <assert.h>
 #include <errno.h>
 #include <limits.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
@@ -78,9 +109,9 @@ static char *gnu_strerror(int code, char *buf, size_t len) {
     return buf;
 }
 static void untouched(void) {}
-static void *shim_libc = (void *)1;
-static void *shim_libdl;
-static void *shim_self;
+static _Atomic(void *) shim_libc = (void *)1;
+static _Atomic(void *) shim_libdl;
+static _Atomic(void *) shim_self;
 static void shim_open_handles(void) {}
 static void dlopen(void) {}
 static void dlclose(void) {}
@@ -207,6 +238,7 @@ def statx_fixture():
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -214,7 +246,7 @@ def statx_fixture():
 #include <sys/sysmacros.h>
 #include <unistd.h>
 
-static void *shim_libc;
+static _Atomic(void *) shim_libc;
 static void shim_open_handles(void) {}
 BODY
 
@@ -311,6 +343,7 @@ def unwind_fixture():
 #include <assert.h>
 #include <dlfcn.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -320,11 +353,11 @@ static int __android_log_print(int priority, const char *tag, const char *format
     (void)priority; (void)tag; (void)format;
     return 0;
 }
-static void *shim_libc;
+static _Atomic(void *) shim_libc;
 static int with_unwinder;
 /* A libc that has an unwinder stands for Android 11 and later; none stands for Android 10. */
 static void shim_open_handles(void) {
-    if (with_unwinder) shim_libc = dlopen("libgcc_s.so.1", RTLD_NOW);
+    if (with_unwinder) atomic_store_explicit(&shim_libc, dlopen("libgcc_s.so.1", RTLD_NOW), memory_order_release);
 }
 /* The shim's definitions, renamed so the program can also use the real unwinder. */
 RENAMES
@@ -959,6 +992,433 @@ int main(int argc, char **argv) {
         source = unwind_fixture()
         compile_and_run(source, flags=["-ldl", "-pthread"])
         compile_and_run(source, flags=["-ldl", "-pthread"], args=["forward"])
+
+    def test_lazy_dlsym_wrappers_are_race_free_under_concurrent_first_calls(self):
+        source_text = (ROOT / "scripts/glibc-shim.c").read_text()
+        self.assertNotIn("static int looked_up;", source_text,
+                         "glibc-shim.c still uses non-atomic looked_up lazy dlsym caches")
+
+        addchdir = function("scripts/glibc-shim.c", "int posix_spawn_file_actions_addchdir(", "\n}\n") + "\n}\n"
+        copy_range = function("scripts/glibc-shim.c", "ssize_t copy_file_range(", "\n}\n") + "\n}\n"
+        statx_fn = function("scripts/glibc-shim.c", "int statx(", "\n}\n") + "\n}\n"
+        unwind_offset = source_text.index("#define SHIM_URC_END_OF_STACK ")
+        unwind_block = source_text[unwind_offset:source_text.index("\n/*\n * A stack-protector canary", unwind_offset)]
+
+        fixture = r'''
+#define _GNU_SOURCE
+#include <assert.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#ifndef __APPLE__
+#include <sys/sysmacros.h>
+#endif
+#include <sys/types.h>
+#include <unistd.h>
+
+#define ANDROID_LOG_FATAL 7
+static int __android_log_print(int priority, const char *tag, const char *format, ...) {
+    (void)priority; (void)tag; (void)format;
+    return 0;
+}
+
+typedef int mock_spawn_actions_t;
+typedef int64_t mock_off64_t;
+struct mock_statx {
+    uint32_t stx_mask;
+    uint32_t stx_blksize;
+    uint32_t stx_nlink;
+    uint32_t stx_uid;
+    uint32_t stx_gid;
+    uint16_t stx_mode;
+    uint64_t stx_ino;
+    uint64_t stx_size;
+    uint64_t stx_blocks;
+    struct { int64_t tv_sec; uint32_t tv_nsec; } stx_atime, stx_mtime, stx_ctime;
+    uint32_t stx_rdev_major, stx_rdev_minor, stx_dev_major, stx_dev_minor;
+};
+#ifndef AT_STATX_SYNC_TYPE
+#define AT_STATX_SYNC_TYPE 0x6000
+#endif
+#ifndef STATX_BASIC_STATS
+#define STATX_BASIC_STATS 0x07ffU
+#endif
+#ifdef __APPLE__
+#define st_atim st_atimespec
+#define st_mtim st_mtimespec
+#define st_ctim st_ctimespec
+#endif
+
+static _Atomic(void *) shim_libc = (void *)1;
+static void shim_open_handles(void) {}
+static int provide_symbols;
+
+static int fake_addchdir(mock_spawn_actions_t *acts, const char *path) {
+    (void)acts; (void)path;
+    return 42;
+}
+static ssize_t fake_copy_file_range(int fi, mock_off64_t *oi, int fo, mock_off64_t *oo, size_t len, unsigned fl) {
+    (void)fi; (void)oi; (void)fo; (void)oo; (void)fl;
+    return (ssize_t)len;
+}
+static int fake_statx(int dirfd, const char *path, int flags, unsigned mask, struct mock_statx *out) {
+    (void)dirfd; (void)path; (void)flags; (void)mask;
+    if (out) out->stx_mask = 0x1234;
+    return 0;
+}
+static uintptr_t fake_unwind_backtrace(uintptr_t a, uintptr_t b, uintptr_t c) {
+    (void)a; (void)b; (void)c;
+    return 99;
+}
+static uintptr_t fake_unwind_enclosing(uintptr_t a, uintptr_t b, uintptr_t c) {
+    (void)a; (void)b; (void)c;
+    return 77;
+}
+static ssize_t copy_file_range_fallback(int fi, mock_off64_t *oi, int fo, mock_off64_t *oo, size_t len, unsigned fl) {
+    (void)fi; (void)oi; (void)fo; (void)oo; (void)len; (void)fl;
+    return 11;
+}
+static void *mock_dlsym(void *handle, const char *name) {
+    (void)handle;
+    if (!provide_symbols) return NULL;
+    if (!strcmp(name, "posix_spawn_file_actions_addchdir_np")) return (void *)&fake_addchdir;
+    if (!strcmp(name, "copy_file_range")) return (void *)&fake_copy_file_range;
+    if (!strcmp(name, "statx")) return (void *)&fake_statx;
+    if (!strcmp(name, "_Unwind_Backtrace")) return (void *)&fake_unwind_backtrace;
+    if (!strcmp(name, "_Unwind_FindEnclosingFunction")) return (void *)&fake_unwind_enclosing;
+    return NULL;
+}
+#define dlsym mock_dlsym
+#define posix_spawn_file_actions_t mock_spawn_actions_t
+#define off64_t mock_off64_t
+#define statx mock_statx
+#define posix_spawn_file_actions_addchdir shim_addchdir
+#define copy_file_range shim_copy_file_range
+#define _Unwind_Backtrace shim_Unwind_Backtrace
+#define _Unwind_FindEnclosingFunction shim_Unwind_FindEnclosingFunction
+#define _Unwind_GetCFA shim_Unwind_GetCFA
+#define _Unwind_GetDataRelBase shim_Unwind_GetDataRelBase
+#define _Unwind_GetIP shim_Unwind_GetIP
+#define _Unwind_GetIPInfo shim_Unwind_GetIPInfo
+#define _Unwind_GetLanguageSpecificData shim_Unwind_GetLanguageSpecificData
+#define _Unwind_GetRegionStart shim_Unwind_GetRegionStart
+#define _Unwind_GetTextRelBase shim_Unwind_GetTextRelBase
+#define _Unwind_Resume shim_Unwind_Resume
+#define _Unwind_SetGR shim_Unwind_SetGR
+#define _Unwind_SetIP shim_Unwind_SetIP
+
+ADDCHDIR
+COPY_RANGE
+STATX_FN
+UNWIND_BLOCK
+
+static pthread_mutex_t start_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t start_cond = PTHREAD_COND_INITIALIZER;
+static int ready_count;
+static int go_flag;
+#define THREADS 8
+
+static void *worker(void *arg) {
+    (void)arg;
+    pthread_mutex_lock(&start_lock);
+    ready_count++;
+    if (ready_count == THREADS) {
+        go_flag = 1;
+        pthread_cond_broadcast(&start_cond);
+    } else {
+        while (!go_flag) pthread_cond_wait(&start_cond, &start_lock);
+    }
+    pthread_mutex_unlock(&start_lock);
+
+    for (int i = 0; i < 64; i++) {
+        mock_spawn_actions_t acts = 0;
+        int rc = shim_addchdir(&acts, "/tmp");
+        assert(rc == (provide_symbols ? 42 : ENOSYS));
+        ssize_t n = shim_copy_file_range(0, NULL, 0, NULL, 7, 0);
+        assert(n == (provide_symbols ? 7 : 11));
+        struct mock_statx st;
+        memset(&st, 0, sizeof(st));
+        assert(mock_statx(AT_FDCWD, ".", 0, STATX_BASIC_STATS, &st) == 0);
+        if (provide_symbols) assert(st.stx_mask == 0x1234);
+        else assert((st.stx_mask & STATX_BASIC_STATS) == STATX_BASIC_STATS);
+        assert(shim_Unwind_Backtrace(0, 0, 0) == (provide_symbols ? 99 : SHIM_URC_END_OF_STACK));
+        assert(shim_Unwind_FindEnclosingFunction(0, 0, 0) == (provide_symbols ? 77 : 0));
+    }
+    return NULL;
+}
+
+int main(int argc, char **argv) {
+    (void)argv;
+    provide_symbols = argc > 1;
+    pthread_t threads[THREADS];
+    for (int i = 0; i < THREADS; i++) assert(pthread_create(&threads[i], NULL, worker, NULL) == 0);
+    for (int i = 0; i < THREADS; i++) assert(pthread_join(threads[i], NULL) == 0);
+    return 0;
+}
+'''.replace("ADDCHDIR", addchdir).replace("COPY_RANGE", copy_range).replace("STATX_FN", statx_fn).replace("UNWIND_BLOCK", unwind_block)
+
+        for sanitizer in sanitizers_for_concurrency():
+            for args in ((), ("present",)):
+                compile_and_run(fixture, flags=["-pthread"], args=args, sanitizer=sanitizer)
+
+    def test_stack_guard_is_thread_consistent_nul_terminated_and_randomized(self):
+        source_text = (ROOT / "scripts/glibc-shim.c").read_text()
+        guard_body = source_text[source_text.index("unsigned long __shim_stack_guard(void) {"):]
+        self.assertNotIn("fopen", guard_body, "__shim_stack_guard must not open /dev/urandom via stdio fopen")
+
+        fixture = r'''
+#define _GNU_SOURCE
+#include <assert.h>
+#include <errno.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#if !defined(__ANDROID__) && !defined(__APPLE__) && !defined(__FreeBSD__) && !defined(__OpenBSD__) && !defined(__NetBSD__)
+#include <sys/random.h>
+#endif
+
+GUARD_BODY
+
+#define THREADS 8
+static pthread_mutex_t start_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t start_cond = PTHREAD_COND_INITIALIZER;
+static int ready_count;
+static int go_flag;
+static unsigned long observed[THREADS];
+
+static void *worker(void *arg) {
+    int idx = *(int *)arg;
+    pthread_mutex_lock(&start_lock);
+    ready_count++;
+    if (ready_count == THREADS) {
+        go_flag = 1;
+        pthread_cond_broadcast(&start_cond);
+    } else {
+        while (!go_flag) pthread_cond_wait(&start_cond, &start_lock);
+    }
+    pthread_mutex_unlock(&start_lock);
+
+    unsigned long first = __shim_stack_guard();
+    assert(first != 0);
+    assert((first & 0xFFUL) == 0);
+    for (int i = 0; i < 64; i++) {
+        assert(__shim_stack_guard() == first);
+    }
+    observed[idx] = first;
+    return NULL;
+}
+
+int main(void) {
+    pthread_t threads[THREADS];
+    int ids[THREADS];
+    for (int i = 0; i < THREADS; i++) {
+        ids[i] = i;
+        assert(pthread_create(&threads[i], NULL, worker, &ids[i]) == 0);
+    }
+    for (int i = 0; i < THREADS; i++) assert(pthread_join(threads[i], NULL) == 0);
+    for (int i = 1; i < THREADS; i++) assert(observed[i] == observed[0]);
+    printf("%lx\n", observed[0]);
+    return 0;
+}
+'''.replace("GUARD_BODY", guard_body)
+
+        for sanitizer in sanitizers_for_concurrency():
+            first = compile_and_run(fixture, flags=["-pthread"], sanitizer=sanitizer, capture=True).stdout.strip()
+            second = compile_and_run(fixture, flags=["-pthread"], sanitizer=sanitizer, capture=True).stdout.strip()
+            self.assertNotEqual(first, second, "stack guard canary did not vary across separate process runs")
+            self.assertTrue(first.endswith("00"), f"low byte of canary {first} is not 0x00")
+            self.assertTrue(second.endswith("00"), f"low byte of canary {second} is not 0x00")
+
+    def test_copy_file_range_fallback_stops_on_zero_write_and_preserves_errno(self):
+        body = function("scripts/glibc-shim.c", "static ssize_t copy_file_range_fallback(",
+                        "\nssize_t copy_file_range(")
+        compile_and_run(r'''
+#define _GNU_SOURCE
+#include <assert.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#ifdef __APPLE__
+typedef off_t off64_t;
+#endif
+
+static int write_mode;
+static int write_calls;
+static int fail_rollback_lseek;
+static int lseek_calls;
+
+static ssize_t mock_write(int fd, const void *buf, size_t count) {
+    (void)fd; (void)buf;
+    write_calls++;
+    assert(write_calls <= 3);
+    if (write_mode == 1) return 0;
+    if (write_mode == 2) return write_calls == 1 ? (count >= 4 ? 4 : (ssize_t)count) : 0;
+    if (write_mode == 3) { errno = ENOSPC; return -1; }
+    return (ssize_t)count;
+}
+static ssize_t mock_pwrite(int fd, const void *buf, size_t count, off_t offset) {
+    (void)offset;
+    return mock_write(fd, buf, count);
+}
+static off_t mock_lseek(int fd, off_t offset, int whence) {
+    lseek_calls++;
+    if (fail_rollback_lseek) {
+        errno = ESPIPE;
+        return (off_t)-1;
+    }
+    return lseek(fd, offset, whence);
+}
+
+#define write mock_write
+#define pwrite mock_pwrite
+#define lseek mock_lseek
+BODY
+#undef write
+#undef pwrite
+#undef lseek
+
+static int make_file(const char *name, const char *data) {
+    int fd = open(name, O_RDWR | O_CREAT | O_TRUNC, 0600);
+    assert(fd >= 0);
+    size_t len = strlen(data);
+    if (len) assert(write(fd, data, len) == (ssize_t)len);
+    assert(lseek(fd, 0, SEEK_SET) == 0);
+    return fd;
+}
+
+int main(void) {
+    int in = make_file("in", "0123456789abcdef");
+    int out = make_file("out", "");
+
+    /* Zero write on first attempt must not spin, must set EIO, and must keep EIO if lseek fails. */
+    write_mode = 1; write_calls = 0; fail_rollback_lseek = 1; lseek_calls = 0;
+    errno = 0;
+    assert(copy_file_range_fallback(in, NULL, out, NULL, 16, 0) == -1);
+    assert(errno == EIO && write_calls == 1 && lseek_calls == 1);
+
+    /* Explicit offset pwrite returning zero on first attempt must also stop with EIO. */
+    off64_t off_in = 0, off_out = 0;
+    write_mode = 1; write_calls = 0; fail_rollback_lseek = 0; lseek_calls = 0;
+    errno = 0;
+    assert(copy_file_range_fallback(in, &off_in, out, &off_out, 16, 0) == -1);
+    assert(errno == EIO && write_calls == 1 && off_in == 0 && off_out == 0);
+
+    /* Partial write followed by zero write must return partial progress without spinning. */
+    assert(lseek(in, 0, SEEK_SET) == 0);
+    write_mode = 2; write_calls = 0; fail_rollback_lseek = 0; lseek_calls = 0;
+    assert(copy_file_range_fallback(in, NULL, out, NULL, 16, 0) == 4);
+    assert(write_calls == 2 && lseek(in, 0, SEEK_CUR) == 4);
+
+    /* Failing write followed by failing rollback lseek must preserve the write errno. */
+    assert(lseek(in, 0, SEEK_SET) == 0);
+    write_mode = 3; write_calls = 0; fail_rollback_lseek = 1; lseek_calls = 0;
+    errno = 0;
+    assert(copy_file_range_fallback(in, NULL, out, NULL, 16, 0) == -1);
+    assert(errno == ENOSPC && write_calls == 1 && lseek_calls == 1);
+
+    close(in); close(out);
+    return 0;
+}
+'''.replace("BODY", body))
+
+    def test_claude_launch_inserts_option_terminator_before_target_argv(self):
+        launcher_source = (ROOT / "scripts/claude-launch.c").read_text()
+        fixture = r'''
+#include <assert.h>
+#include <errno.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+static char captured_path[PATH_MAX];
+static char captured_argv[16][PATH_MAX];
+static int captured_argc;
+
+static ssize_t fake_readlink(const char *path, char *buf, size_t size) {
+    assert(strcmp(path, "/proc/self/exe") == 0);
+    const char *self = "/app/lib/arm64/libclaude-launch.so";
+    size_t n = strlen(self);
+    assert(n < size);
+    memcpy(buf, self, n);
+    return (ssize_t)n;
+}
+
+static int capture_execv(const char *path, char *const argv[]) {
+    snprintf(captured_path, sizeof(captured_path), "%s", path);
+    captured_argc = 0;
+    while (argv[captured_argc] != NULL) {
+        assert(captured_argc < 16);
+        snprintf(captured_argv[captured_argc], sizeof(captured_argv[captured_argc]), "%s", argv[captured_argc]);
+        captured_argc++;
+    }
+    errno = ECHILD;
+    return -1;
+}
+
+#define readlink fake_readlink
+#define execv capture_execv
+#define main claude_launch_main
+LAUNCHER_SOURCE
+#undef main
+#undef execv
+#undef readlink
+
+int main(void) {
+    char *case1[] = {"libclaude-launch.so", "--preload=/tmp/x.so", "--version", NULL};
+    assert(claude_launch_main(3, case1) == 1);
+    assert(strcmp(captured_path, "/app/lib/arm64/libldmusl.so") == 0);
+    assert(captured_argc == 5);
+    assert(strcmp(captured_argv[0], "/app/lib/arm64/libldmusl.so") == 0);
+    assert(strcmp(captured_argv[1], "--preload=/app/lib/arm64/libseccomp-shim.so") == 0);
+    assert(strcmp(captured_argv[2], "--") == 0);
+    assert(strcmp(captured_argv[3], "--preload=/tmp/x.so") == 0);
+    assert(strcmp(captured_argv[4], "--version") == 0);
+
+    char *case2[] = {"libclaude-launch.so", "/data/bin/claude", NULL};
+    assert(claude_launch_main(2, case2) == 1);
+    assert(captured_argc == 4);
+    assert(strcmp(captured_argv[2], "--") == 0);
+    assert(strcmp(captured_argv[3], "/data/bin/claude") == 0);
+    return 0;
+}
+'''.replace("LAUNCHER_SOURCE", launcher_source)
+        compile_and_run(fixture)
+
+        if sys.platform.startswith("linux"):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                launcher = root / "libclaude-launch.so"
+                loader = root / "libldmusl.so"
+                loader.write_text("#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done\n")
+                loader.chmod(0o755)
+                subprocess.run([
+                    "cc", "-Wall", "-Wextra", "-Werror",
+                    str(ROOT / "scripts/claude-launch.c"), "-o", str(launcher),
+                ], check=True, timeout=30)
+                result = subprocess.run(
+                    [str(launcher), "--preload=/tmp/x.so", "--flag"],
+                    capture_output=True, text=True, check=True, timeout=10,
+                )
+                self.assertEqual([
+                    f"--preload={root / 'libseccomp-shim.so'}",
+                    "--",
+                    "--preload=/tmp/x.so",
+                    "--flag",
+                ], result.stdout.splitlines())
 
 
 if __name__ == "__main__":
