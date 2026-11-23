@@ -600,10 +600,28 @@ class SafProviderClaimWaitTest {
      */
     @Test
     fun `only the paths a user repeats wait, and a save is still held back`() {
-        val source = File("src/main/kotlin/com/vscodroid/storage/SafSyncEngine.kt").readLines()
+        val engineFiles = listOf(
+            "SafSyncEngine.kt",
+            "SafSyncModels.kt",
+            "SafSyncRecordStore.kt",
+            "SafUploadJournal.kt",
+            "SafDocumentClient.kt",
+            "SafInboundCopier.kt",
+            "SafOutboundWriter.kt",
+            "SafMirrorWatcher.kt",
+        ).map { File("src/main/kotlin/com/vscodroid/storage/$it") }
+        val source = engineFiles.flatMap { it.readLines() }
             .filterNot { it.trimStart().startsWith("//") || it.trimStart().startsWith("*") || it.trimStart().startsWith("/*") }
-        val waiting = source.count { it.contains("claimProviderMutationWithin(") && !it.contains("private fun") }
-        val trying = source.count { it.contains("claimProviderMutation(") && !it.contains("private fun") }
+        val waiting = source.count {
+            it.contains("claimProviderMutationWithin(") &&
+                !it.contains("private fun") &&
+                !it.contains("internal fun")
+        }
+        val trying = source.count {
+            it.contains("claimProviderMutation(") &&
+                !it.contains("private fun") &&
+                !it.contains("internal fun")
+        }
 
         assertEquals(3, waiting, "a delete, a create and a rename take the claim with a wait")
         assertEquals(3, trying, "the two open-time repairs and the save still take it without waiting")
