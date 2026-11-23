@@ -6,6 +6,7 @@ import com.vscodroid.BuildConfig
 import com.vscodroid.util.Logger
 import com.vscodroid.util.StorageManager
 import java.io.BufferedInputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -16,8 +17,9 @@ import java.nio.file.Files
 /**
  * HTTP fallback downloader for sideloaded and debug installs without Play Asset Delivery.
  *
- * Coordinates release pinning, digest manifest verification, resumable ZIP download,
- * extraction, and abandoned staging directory cleanup on [ToolchainManager.ioExecutor].
+ * Coordinates release pinning, digest manifest and ECDSA P-256 signature verification,
+ * resumable ZIP download, extraction, and abandoned staging directory cleanup on
+ * [ToolchainManager.ioExecutor].
  */
 internal class ToolchainHttpDownloader(private val manager: ToolchainManager) {
 
@@ -25,6 +27,11 @@ internal class ToolchainHttpDownloader(private val manager: ToolchainManager) {
      * A request the release cannot answer, now or on a third attempt.
      */
     private class MissingFromRelease(message: String) : IOException(message)
+
+    /**
+     * A manifest signature that is missing, oversized, malformed, or fails ECDSA P-256 verification.
+     */
+    private class ManifestSignatureInvalid(message: String) : IOException(message)
 
     /**
      * A `Range` the origin will not serve: HTTP 416.
@@ -36,11 +43,6 @@ internal class ToolchainHttpDownloader(private val manager: ToolchainManager) {
         private const val MAX_RETRIES = 2
         private const val DOWNLOAD_BUFFER_SIZE = 8192
         private const val MAX_REDIRECTS = 5
-
-        /**
-         * Ceiling on the digest manifest read into memory.
-         */
-        private const val MANIFEST_MAX_CHARS = 64 * 1024
     }
 
     /** Disconnects an active HTTP request off the calling thread so UI cancel stays non-blocking. */
@@ -242,6 +244,9 @@ internal class ToolchainHttpDownloader(private val manager: ToolchainManager) {
                 }
 
                 manager.installFromStaging(packName, extractDir, download.transferId)
+            } catch (e: ManifestSignatureInvalid) {
+                Logger.e(manager.tag, "Digest manifest signature check failed for $packName", e)
+                manager.failState(packName, ToolchainFailure.DIGEST, download.transferId)
             } catch (e: MissingFromRelease) {
                 Logger.e(manager.tag, "Not published in the release: $packName", e)
                 manager.failState(packName, ToolchainFailure.NOT_PUBLISHED, download.transferId)
@@ -285,6 +290,8 @@ internal class ToolchainHttpDownloader(private val manager: ToolchainManager) {
                     if (download.cancelled) throw IOException("Download cancelled")
                 }
                 return attempt()
+            } catch (e: ManifestSignatureInvalid) {
+                throw e
             } catch (e: MissingFromRelease) {
                 throw e
             } catch (e: IOException) {
@@ -377,21 +384,74 @@ internal class ToolchainHttpDownloader(private val manager: ToolchainManager) {
     }
 
     @Throws(IOException::class)
-    private fun fetchManifest(url: String, download: ToolchainManager.HttpDownload): String =
-        withRedirects(url, "digest manifest", download = download) { conn ->
-            val buffer = CharArray(MANIFEST_MAX_CHARS)
-            conn.inputStream.bufferedReader().use { reader ->
-                var total = 0
-                while (total < buffer.size) {
-                    if (download.cancelled) throw IOException("Download cancelled")
-                    val n = reader.read(buffer, total, buffer.size - total)
-                    if (n < 0) break
-                    total += n
-                }
-                if (download.cancelled) throw IOException("Download cancelled")
-                String(buffer, 0, total)
-            }
+    private fun fetchManifestBytes(
+        url: String,
+        download: ToolchainManager.HttpDownload,
+        enforceExactLimit: Boolean,
+    ): ByteArray = withRedirects(url, "digest manifest", download = download) { conn ->
+        val limit = ToolchainManifestVerifier.MAX_MANIFEST_BYTES
+        val declared = conn.contentLengthLong
+        if (enforceExactLimit && declared > limit) {
+            throw ManifestSignatureInvalid("Digest manifest exceeds $limit bytes ($declared declared)")
         }
+        val out = ByteArrayOutputStream()
+        val buf = ByteArray(4096)
+        conn.inputStream.use { input ->
+            while (true) {
+                if (download.cancelled) throw IOException("Download cancelled")
+                val remaining = (limit + 1) - out.size()
+                if (remaining <= 0) break
+                val n = input.read(buf, 0, minOf(buf.size, remaining))
+                if (n < 0) break
+                out.write(buf, 0, n)
+            }
+            if (download.cancelled) throw IOException("Download cancelled")
+        }
+        val bytes = out.toByteArray()
+        if (bytes.size > limit) {
+            if (enforceExactLimit) {
+                throw ManifestSignatureInvalid("Digest manifest exceeds $limit bytes")
+            }
+            return@withRedirects bytes.copyOf(limit)
+        }
+        if (enforceExactLimit && !isCompleteTransfer(declared, bytes.size.toLong())) {
+            throw IOException("Incomplete digest manifest: received ${bytes.size} bytes of $declared declared")
+        }
+        bytes
+    }
+
+    @Throws(IOException::class)
+    private fun fetchManifestSignatureBytes(
+        url: String,
+        download: ToolchainManager.HttpDownload,
+    ): ByteArray = withRedirects(url, "digest manifest signature", download = download) { conn ->
+        val limit = ToolchainManifestVerifier.MAX_SIGNATURE_BYTES
+        val declared = conn.contentLengthLong
+        if (declared > limit) {
+            throw ManifestSignatureInvalid("Digest manifest signature exceeds $limit bytes ($declared declared)")
+        }
+        val out = ByteArrayOutputStream()
+        val buf = ByteArray(limit + 1)
+        conn.inputStream.use { input ->
+            while (true) {
+                if (download.cancelled) throw IOException("Download cancelled")
+                val remaining = (limit + 1) - out.size()
+                if (remaining <= 0) break
+                val n = input.read(buf, 0, remaining)
+                if (n < 0) break
+                out.write(buf, 0, n)
+            }
+            if (download.cancelled) throw IOException("Download cancelled")
+        }
+        val bytes = out.toByteArray()
+        if (bytes.size > limit) {
+            throw ManifestSignatureInvalid("Digest manifest signature exceeds $limit bytes")
+        }
+        if (!isCompleteTransfer(declared, bytes.size.toLong())) {
+            throw IOException("Incomplete digest manifest signature: received ${bytes.size} bytes of $declared declared")
+        }
+        bytes
+    }
 
     /**
      * [zipUrl] pointed at a concrete release, or [zipUrl] unchanged when none
@@ -476,13 +536,48 @@ internal class ToolchainHttpDownloader(private val manager: ToolchainManager) {
 
     /**
      * The digest the release publishes for [zipUrl], or a refusal.
+     *
+     * Fetches the raw wire bytes of `toolchains.sha256` and, whenever a verification key is
+     * configured or [ToolchainManifestVerifier.requireSignedManifest] is enabled, fetches
+     * `toolchains.sha256.sig` and verifies the ECDSA P-256 signature over those exact bytes
+     * before decoding or parsing the manifest.
      */
     @Throws(IOException::class)
     private fun publishedDigestFor(zipUrl: String, download: ToolchainManager.HttpDownload): String {
         val zipName = zipUrl.substringAfterLast('/')
-        val manifest = retrying("$zipName digest manifest", download) {
-            fetchManifest(manifestUrlFor(zipUrl), download)
+        val publicKeySpki = ToolchainManifestVerifier.manifestPublicKeySpki
+        val mustVerify = publicKeySpki != null || ToolchainManifestVerifier.requireSignedManifest
+        val manifestBytes = retrying("$zipName digest manifest", download) {
+            fetchManifestBytes(manifestUrlFor(zipUrl), download, enforceExactLimit = mustVerify)
         }
+        if (mustVerify) {
+            if (publicKeySpki == null) {
+                throw ManifestSignatureInvalid(
+                    "Signed digest manifest required for $zipName, but no valid verification key is configured"
+                )
+            }
+            val sigBytes = try {
+                retrying("$zipName digest manifest signature", download) {
+                    fetchManifestSignatureBytes(manifestSignatureUrlFor(zipUrl), download)
+                }
+            } catch (e: MissingFromRelease) {
+                throw ManifestSignatureInvalid(
+                    "Digest manifest signature missing for $zipName: ${e.message}"
+                )
+            }
+            if (!ToolchainManifestVerifier.verify(manifestBytes, sigBytes, publicKeySpki)) {
+                throw ManifestSignatureInvalid(
+                    "ECDSA P-256 signature verification failed for $zipName digest manifest"
+                )
+            }
+            Logger.i(manager.tag, "Verified ECDSA P-256 signature for $zipName digest manifest")
+        } else {
+            Logger.w(
+                manager.tag,
+                "No manifest signing public key configured; relying on HTTPS-pinned SHA-256 verification",
+            )
+        }
+        val manifest = manifestBytes.toString(Charsets.UTF_8)
         return digestFromManifest(manifest, zipName)
             ?: throw MissingFromRelease(
                 "The release's digest manifest does not name $zipName; refusing to install a " +

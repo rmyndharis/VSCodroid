@@ -627,6 +627,9 @@ internal fun toolchainFailureFor(errorCode: Int): ToolchainFailure = when (error
 /** The digest manifest's filename, as `release.yml` writes it beside the ZIPs. */
 private const val MANIFEST_NAME = "toolchains.sha256"
 
+/** The detached ECDSA P-256 signature for [MANIFEST_NAME], written beside it in `release.yml`. */
+private const val MANIFEST_SIGNATURE_NAME = "toolchains.sha256.sig"
+
 /**
  * Where to find the digest manifest for a toolchain ZIP: beside it.
  *
@@ -635,6 +638,12 @@ private const val MANIFEST_NAME = "toolchains.sha256"
  */
 internal fun manifestUrlFor(zipUrl: String): String =
     zipUrl.substringBeforeLast('/') + "/" + MANIFEST_NAME
+
+/**
+ * Where to find the detached ECDSA P-256 signature for a toolchain digest manifest: beside it.
+ */
+internal fun manifestSignatureUrlFor(zipUrl: String): String =
+    zipUrl.substringBeforeLast('/') + "/" + MANIFEST_SIGNATURE_NAME
 
 /**
  * The release-level `latest` URL an asset URL resolves through, or null when

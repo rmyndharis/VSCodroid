@@ -1165,6 +1165,69 @@ jobs:
             fi
           done
 
+      - name: Sign toolchain digest manifest
+        env:
+          TOOLCHAIN_SIGNING_KEY_PEM: ${{ secrets.TOOLCHAIN_SIGNING_KEY_PEM }}
+        run: |
+          verifier=android/app/src/main/kotlin/com/vscodroid/setup/ToolchainManifestVerifier.kt
+          embedded_spki="$(python3 - "$verifier" <<'PY'
+          import pathlib, re, sys
+          src = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+          code = re.sub(
+              r'"(?:\\.|[^"\\])*"|/\*.*?\*/|//[^\n]*',
+              lambda m: m.group(0) if m.group(0).startswith('"') else ' ',
+              src,
+              flags=re.S,
+          )
+          matches = re.findall(
+              r'\bconst\s+val\s+TOOLCHAIN_MANIFEST_PUBLIC_KEY_SPKI_BASE64(?:\s*:\s*String)?\s*=\s*"([^"]*)"',
+              code,
+          )
+          if len(matches) != 1:
+              sys.exit(f"::error::Expected exactly 1 TOOLCHAIN_MANIFEST_PUBLIC_KEY_SPKI_BASE64 declaration in {sys.argv[1]}, found {len(matches)}")
+          print("".join(matches[0].split()))
+          PY
+          )"
+          if [ -n "${TOOLCHAIN_SIGNING_KEY_PEM:-}" ]; then
+            sig_tmp="$(mktemp -d)"
+            trap 'rm -rf "$sig_tmp"' EXIT
+            (
+              umask 077
+              printf '%s\n' "$TOOLCHAIN_SIGNING_KEY_PEM" > "$sig_tmp/key.pem"
+            )
+            openssl pkey -in "$sig_tmp/key.pem" -pubout -outform DER -out "$sig_tmp/pub.der"
+            actual_spki="$(python3 - "$sig_tmp/pub.der" <<'PY'
+          import base64, pathlib, sys
+          der = pathlib.Path(sys.argv[1]).read_bytes()
+          prefix = bytes.fromhex("3059301306072a8648ce3d020106082a8648ce3d03010703420004")
+          if len(der) != 91 or not der.startswith(prefix):
+              sys.exit("::error::TOOLCHAIN_SIGNING_KEY_PEM is not an uncompressed NIST P-256 (prime256v1) key.")
+          print(base64.b64encode(der).decode("ascii"))
+          PY
+          )"
+            openssl dgst -sha256 -sign "$sig_tmp/key.pem" \
+              -out toolchain-zips/toolchains.sha256.sig \
+              toolchain-zips/toolchains.sha256
+            openssl pkey -pubin -inform DER -in "$sig_tmp/pub.der" -out "$sig_tmp/pub.pem"
+            openssl dgst -sha256 -verify "$sig_tmp/pub.pem" \
+              -signature toolchain-zips/toolchains.sha256.sig \
+              toolchain-zips/toolchains.sha256
+            if [ -z "$embedded_spki" ]; then
+              echo "::error::TOOLCHAIN_SIGNING_KEY_PEM is configured, but TOOLCHAIN_MANIFEST_PUBLIC_KEY_SPKI_BASE64 in $verifier is empty."
+              exit 1
+            fi
+            if [ "$embedded_spki" != "$actual_spki" ]; then
+              echo "::error::Embedded SPKI in $verifier does not match TOOLCHAIN_SIGNING_KEY_PEM."
+              exit 1
+            fi
+            echo "Signed and self-verified toolchain-zips/toolchains.sha256.sig against embedded P-256 key"
+          elif [ -n "$embedded_spki" ]; then
+            echo "::error::$verifier embeds a manifest signing public key, but TOOLCHAIN_SIGNING_KEY_PEM secret is not configured."
+            exit 1
+          else
+            echo "::notice::TOOLCHAIN_SIGNING_KEY_PEM is not configured; skipping toolchains.sha256.sig generation."
+          fi
+
       # Reporting the sizes was all this did, and `ls a b c | awk` reports awk's
       # exit status, so a path that stopped matching printed one row fewer and
       # passed. Nothing further down disagreed: the upload below only warned, the
@@ -1196,6 +1259,30 @@ jobs:
               missing=1
             fi
           done
+          embedded_spki="$(python3 - android/app/src/main/kotlin/com/vscodroid/setup/ToolchainManifestVerifier.kt <<'PY'
+          import pathlib, re, sys
+          src = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+          code = re.sub(
+              r'"(?:\\.|[^"\\])*"|/\*.*?\*/|//[^\n]*',
+              lambda m: m.group(0) if m.group(0).startswith('"') else ' ',
+              src,
+              flags=re.S,
+          )
+          matches = re.findall(
+              r'\bconst\s+val\s+TOOLCHAIN_MANIFEST_PUBLIC_KEY_SPKI_BASE64(?:\s*:\s*String)?\s*=\s*"([^"]*)"',
+              code,
+          )
+          if len(matches) != 1:
+              sys.exit(f"::error::Expected exactly 1 TOOLCHAIN_MANIFEST_PUBLIC_KEY_SPKI_BASE64 declaration in {sys.argv[1]}, found {len(matches)}")
+          print("".join(matches[0].split()))
+          PY
+          )"
+          if [ -f toolchain-zips/toolchains.sha256.sig ]; then
+            wc -c < toolchain-zips/toolchains.sha256.sig | awk '{ printf "  %8.1f MiB  %s\n", $1/1048576, "toolchain-zips/toolchains.sha256.sig" }'
+          elif [ -n "$embedded_spki" ]; then
+            echo "::error::toolchain-zips/toolchains.sha256.sig was not produced even though a manifest signing public key is embedded."
+            missing=1
+          fi
           [ "$missing" -eq 0 ]
 
       # mapping.txt is in that list because R8 runs on this build type and on no
@@ -1235,6 +1322,7 @@ jobs:
             android/app/build/outputs/mapping/release/mapping.txt
             toolchain-zips/*.zip
             toolchain-zips/toolchains.sha256
+            toolchain-zips/toolchains.sha256.sig
             android/app/build/outputs/bundle/release/app-release-symbols.zip
             build-manifest.txt
 
@@ -1325,6 +1413,28 @@ jobs:
           # published without the record and nothing would say so.
           ls -la
           test -f build-manifest.txt
+          test -f toolchain-zips/toolchains.sha256
+          embedded_spki="$(python3 - ../android/app/src/main/kotlin/com/vscodroid/setup/ToolchainManifestVerifier.kt <<'PY'
+          import pathlib, re, sys
+          src = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+          code = re.sub(
+              r'"(?:\\.|[^"\\])*"|/\*.*?\*/|//[^\n]*',
+              lambda m: m.group(0) if m.group(0).startswith('"') else ' ',
+              src,
+              flags=re.S,
+          )
+          matches = re.findall(
+              r'\bconst\s+val\s+TOOLCHAIN_MANIFEST_PUBLIC_KEY_SPKI_BASE64(?:\s*:\s*String)?\s*=\s*"([^"]*)"',
+              code,
+          )
+          if len(matches) != 1:
+              sys.exit(f"::error::Expected exactly 1 TOOLCHAIN_MANIFEST_PUBLIC_KEY_SPKI_BASE64 declaration in {sys.argv[1]}, found {len(matches)}")
+          print("".join(matches[0].split()))
+          PY
+          )"
+          if [ -n "$embedded_spki" ]; then
+            test -f toolchain-zips/toolchains.sha256.sig
+          fi
 
       - name: Check whether release notes already exist
         id: release-notes
@@ -1377,7 +1487,7 @@ jobs:
             artifacts/**/*.apk
             artifacts/**/*.aab
             artifacts/**/toolchain_*.zip
-            artifacts/**/toolchains.sha256
+            artifacts/**/toolchains.sha256*
             artifacts/**/mapping.txt
             artifacts/**/app-release-symbols.zip
             artifacts/checksums.sha256

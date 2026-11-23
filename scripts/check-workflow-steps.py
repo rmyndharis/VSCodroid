@@ -269,6 +269,7 @@ REQUIRED_STEPS = {
         "Hold the user guide's tool versions to what this build resolved",
         "Check the shipped permissions against the privacy policy",
         "Refuse an asset path that is both a file and a folder",
+        "Sign toolchain digest manifest",
         "Require every artifact, and report its size",
         "Generate checksums",
     ),
