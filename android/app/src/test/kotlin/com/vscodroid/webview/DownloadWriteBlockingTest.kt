@@ -775,4 +775,112 @@ class DownloadWriteBlockingTest {
                 "was never given back and every later download queues behind it",
         )
     }
+
+    @Test
+    fun `a failing completion arriving during a blocked write discards the file, reports once and advances the queue`() {
+        val target = destination()
+        val id = startAndChoose(target)
+        coordinator.onDownloadNamed("blob:queued", "next.txt")
+        coordinator.onDownloadStart("blob:queued", null)
+        blockWrites = true
+
+        val writer = startWorker { coordinator.onBytes(id, encode("partial")) }
+        awaitInsideProvider()
+
+        coordinator.onComplete(id, "reader failed")
+
+        release.countDown()
+        writer.join(5_000)
+        awaitProviderIdle()
+
+        assertEquals(listOf(DownloadOutcome.FAILED to "report.pdf"), reported)
+        assertEquals(listOf(target), discarded)
+        assertEquals(listOf("report.pdf", "next.txt"), asked)
+    }
+
+    @Test
+    fun `a concurrent error completion while finishing a direct save produces strictly one outcome`() {
+        val target = destination()
+        val id = startAndChoose(target)
+        coordinator.onBytes(id, encode("whole"))
+        coordinator.onDownloadNamed("blob:queued", "next.txt")
+        coordinator.onDownloadStart("blob:queued", null)
+        blockCloses = true
+
+        val finisher = startWorker { coordinator.onComplete(id, null) }
+        awaitInsideProvider()
+
+        coordinator.onComplete(id, "late abort")
+
+        release.countDown()
+        finisher.join(5_000)
+        awaitProviderIdle()
+
+        assertEquals(1, reported.size, "concurrent onComplete during finish emitted multiple outcomes: $reported")
+        assertEquals(DownloadOutcome.SAVED to "report.pdf", reported.single())
+        assertEquals(emptyList<Uri>(), discarded)
+        assertEquals(listOf("report.pdf", "next.txt"), asked)
+    }
+
+    @Test
+    fun `a concurrent error completion while finishing a staged overwrite produces strictly one outcome`() {
+        val existingDoc = destination()
+        val stagedContent = ByteArrayOutputStream()
+        val copyEntered = CountDownLatch(1)
+        val copyRelease = CountDownLatch(1)
+        val stagedReported = mutableListOf<Pair<DownloadOutcome, String>>()
+        val stagedAsked = mutableListOf<String>()
+        val stagedPickerIds = mutableListOf<String>()
+        val stagedReads = mutableListOf<String>()
+        val stagedHost = object : DownloadHost {
+            override fun askDestination(requestId: String, fileName: String) {
+                synchronized(stagedAsked) { stagedAsked += fileName; stagedPickerIds += requestId }
+            }
+            override fun measureDestination(destination: Uri) = DocumentMeasure(length = 12L)
+            override fun openDestination(destination: Uri, mode: String): OpenDocument {
+                return OpenDocument(object : OutputStream() {
+                    override fun write(b: Int) = write(byteArrayOf(b.toByte()), 0, 1)
+                    override fun write(b: ByteArray, off: Int, len: Int) {
+                        copyEntered.countDown()
+                        copyRelease.await(5, TimeUnit.SECONDS)
+                        stagedContent.write(b, off, len)
+                    }
+                })
+            }
+            override fun discardDestination(destination: Uri) = Unit
+            override fun requestBytes(requestId: String, url: String) { stagedReads += requestId }
+            override fun releaseBytes(url: String) = Unit
+            override fun report(outcome: DownloadOutcome, fileName: String, detail: String?) {
+                synchronized(stagedReported) { stagedReported += outcome to fileName }
+            }
+        }
+        val stagedCoordinator = DownloadCoordinator(
+            stagedHost,
+            providerWork = providerWork,
+            mainThread = Executor { it.run() },
+        )
+        stagedCoordinator.onDownloadNamed("blob:overwrite", "existing.txt")
+        stagedCoordinator.onDownloadStart("blob:overwrite", null)
+        stagedCoordinator.onDestinationChosen(stagedPickerIds.last(), existingDoc)
+        awaitProviderIdle()
+        val id = stagedReads.last()
+        stagedCoordinator.onDownloadNamed("blob:after", "after.txt")
+        stagedCoordinator.onDownloadStart("blob:after", null)
+        assertTrue(stagedCoordinator.onBytes(id, encode("replacement")))
+
+        stagedCoordinator.onComplete(id, null)
+        assertTrue(copyEntered.await(5, TimeUnit.SECONDS), "staged copy never started on providerWork")
+
+        stagedCoordinator.onComplete(id, "late error")
+        copyRelease.countDown()
+        awaitProviderIdle()
+
+        assertEquals(
+            listOf(DownloadOutcome.SAVED to "existing.txt"),
+            stagedReported,
+            "concurrent onComplete during staged finish must emit one terminal outcome: $stagedReported",
+        )
+        assertEquals("replacement", stagedContent.toString())
+        assertEquals(listOf("existing.txt", "after.txt"), stagedAsked)
+    }
 }

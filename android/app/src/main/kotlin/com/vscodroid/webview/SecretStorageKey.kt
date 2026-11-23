@@ -3,10 +3,12 @@ package com.vscodroid.webview
 import android.content.Context
 import com.vscodroid.util.Logger
 import java.io.File
-import java.io.FileOutputStream
 import java.io.IOException
+import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
+import java.nio.file.Files
 import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.PosixFilePermissions
 import java.security.SecureRandom
 
 /**
@@ -51,15 +53,32 @@ class SecretStorageKey internal constructor(
         val dir = file.parentFile ?: throw IOException("no directory for ${file.name}")
         if (!dir.isDirectory && !dir.mkdirs()) throw IOException("could not create $dir")
         val staged = File(dir, "${file.name}.tmp")
-        FileOutputStream(staged).use { out ->
-            out.write(key)
-            out.fd.sync()
+        val stagedPath = staged.toPath()
+        Files.deleteIfExists(stagedPath)
+        val ownerOnly = PosixFilePermissions.asFileAttribute(
+            PosixFilePermissions.fromString("rw-------"),
+        )
+        var written = false
+        try {
+            Files.newByteChannel(
+                stagedPath,
+                setOf(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE),
+                ownerOnly,
+            ).use { channel ->
+                val buffer = ByteBuffer.wrap(key)
+                while (buffer.hasRemaining()) {
+                    channel.write(buffer)
+                }
+                (channel as? FileChannel)?.force(true)
+                written = true
+            }
+        } finally {
+            if (!written) Files.deleteIfExists(stagedPath)
         }
-        staged.setReadable(false, false)
-        staged.setWritable(false, false)
-        staged.setReadable(true, true)
-        staged.setWritable(true, true)
-        if (!staged.renameTo(file)) throw IOException("could not move ${staged.name} into place")
+        if (!staged.renameTo(file)) {
+            Files.deleteIfExists(stagedPath)
+            throw IOException("could not move ${staged.name} into place")
+        }
         try {
             syncDirectory(dir)
         } catch (e: Exception) {
