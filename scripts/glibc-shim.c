@@ -28,10 +28,14 @@
 #include <pthread.h>
 #include <signal.h>
 #include <spawn.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if !defined(__ANDROID__) && !defined(__APPLE__) && !defined(__FreeBSD__) && !defined(__OpenBSD__) && !defined(__NetBSD__)
+#include <sys/random.h>
+#endif
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
 #include <sys/types.h>
@@ -244,18 +248,22 @@ int malloc_trim(size_t pad) { (void)pad; return mallopt(M_PURGE, 0); }
 #include <dlfcn.h>
 #include <link.h>
 
-static void *shim_libc;
-static void *shim_libdl;
-static void *shim_self;
+static _Atomic(void *) shim_libc;
+static _Atomic(void *) shim_libdl;
+static _Atomic(void *) shim_self;
 
 __attribute__((constructor(101))) static void shim_open_handles(void) {
-    shim_libc = dlopen("libc.so", RTLD_LAZY | RTLD_NOLOAD);
-    shim_libdl = dlopen("libdl.so", RTLD_LAZY | RTLD_NOLOAD);
-    shim_self = dlopen("libglibc-shim.so", RTLD_LAZY | RTLD_NOLOAD);
+    atomic_store_explicit(&shim_libc, dlopen("libc.so", RTLD_LAZY | RTLD_NOLOAD), memory_order_release);
+    atomic_store_explicit(&shim_libdl, dlopen("libdl.so", RTLD_LAZY | RTLD_NOLOAD), memory_order_release);
+    atomic_store_explicit(&shim_self, dlopen("libglibc-shim.so", RTLD_LAZY | RTLD_NOLOAD), memory_order_release);
 }
 
 void *__shim_resolve(const char *name) {
-    if (!shim_libc) shim_open_handles();
+    void *libc_handle = atomic_load_explicit(&shim_libc, memory_order_acquire);
+    if (!libc_handle) {
+        shim_open_handles();
+        libc_handle = atomic_load_explicit(&shim_libc, memory_order_acquire);
+    }
 
     /* The linker owns these; dlsym does not find them by name. */
     if (!__builtin_strcmp(name, "dlopen")) return (void *)&dlopen;
@@ -267,20 +275,22 @@ void *__shim_resolve(const char *name) {
 
     if (!__builtin_strcmp(name, "strerror_r")) return (void *)&__shim_strerror_r;
 
-    void *p = shim_libc ? dlsym(shim_libc, name) : 0;
-    if (!p && shim_libdl) p = dlsym(shim_libdl, name);
+    void *p = libc_handle ? dlsym(libc_handle, name) : 0;
+    void *libdl_handle = atomic_load_explicit(&shim_libdl, memory_order_acquire);
+    if (!p && libdl_handle) p = dlsym(libdl_handle, name);
     /* This library's own definitions, and they have to be asked for by handle.
      * RTLD_NEXT begins after the caller, and the caller is this file, so the
-     * twelve symbols that exist only here -- __errno_location, __ctype_b_loc,
-     * the __xstat family, bcmp, fcntl64 and the rest -- resolved to nothing and
+     * twelve symbols that exist only here (__errno_location, __ctype_b_loc,
+     * the __xstat family, bcmp, fcntl64 and the rest) resolved to nothing and
      * left their trampolines null. Measured, not deduced: instrumenting this
      * function showed every one of them taking the NONE branch while the addon
      * ran correctly anyway, because the addon binds to this library directly and
      * never reaches the trampoline. That made the null a landmine rather than a
-     * failure -- it fires the moment anything does reach the trampoline. Asking
+     * failure: it fires the moment anything does reach the trampoline. Asking
      * ourselves last of the three keeps Bionic's implementation preferred
      * wherever one exists. */
-    if (!p && shim_self) p = dlsym(shim_self, name);
+    void *self_handle = atomic_load_explicit(&shim_self, memory_order_acquire);
+    if (!p && self_handle) p = dlsym(self_handle, name);
     if (!p) p = dlsym(RTLD_NEXT, name);
     return p;
 }
@@ -288,9 +298,13 @@ void *__shim_resolve(const char *name) {
 /* glibc's XPG entry returns error numbers; older Bionic uses -1 and errno. */
 int __xpg_strerror_r(int code, char *buf, size_t len) {
     int saved_errno = errno;
-    if (!shim_libc) shim_open_handles();
-    int (*posix_strerror)(int, char *, size_t) = shim_libc
-        ? (int (*)(int, char *, size_t))dlsym(shim_libc, "strerror_r") : 0;
+    void *libc_handle = atomic_load_explicit(&shim_libc, memory_order_acquire);
+    if (!libc_handle) {
+        shim_open_handles();
+        libc_handle = atomic_load_explicit(&shim_libc, memory_order_acquire);
+    }
+    int (*posix_strerror)(int, char *, size_t) = libc_handle
+        ? (int (*)(int, char *, size_t))dlsym(libc_handle, "strerror_r") : 0;
     int result = posix_strerror ? posix_strerror(code, buf, len) : ENOSYS;
     if (posix_strerror && !glibc_errno_known(code)) result = EINVAL;
     else if (result < 0) result = errno;
@@ -429,21 +443,24 @@ int pidfd_spawnp(int *pidfd, const char *file, const void *facts,
  */
 int posix_spawn_file_actions_addchdir(posix_spawn_file_actions_t *acts,
                                       const char *path) {
-    static int (*real)(posix_spawn_file_actions_t *, const char *);
-    static int looked_up;
+    typedef int (*addchdir_fn)(posix_spawn_file_actions_t *, const char *);
+    /* 0 = unresolved, 1 = absent in Bionic, otherwise the resolved function address. */
+    static _Atomic(uintptr_t) cached = 0;
 
-    /* Published as copy_file_range's flag is: a thread must not see the flag ahead
-     * of the pointer and answer ENOSYS where the real call exists. */
-    if (!__atomic_load_n(&looked_up, __ATOMIC_ACQUIRE)) {
-        if (!shim_libc) shim_open_handles();
-        if (shim_libc) {
-            *(void **)&real = dlsym(shim_libc, "posix_spawn_file_actions_addchdir_np");
+    uintptr_t addr = atomic_load_explicit(&cached, memory_order_acquire);
+    if (addr == 0) {
+        void *libc_handle = atomic_load_explicit(&shim_libc, memory_order_acquire);
+        if (!libc_handle) {
+            shim_open_handles();
+            libc_handle = atomic_load_explicit(&shim_libc, memory_order_acquire);
         }
-        __atomic_store_n(&looked_up, 1, __ATOMIC_RELEASE);
+        void *sym = libc_handle ? dlsym(libc_handle, "posix_spawn_file_actions_addchdir_np") : 0;
+        addr = sym ? (uintptr_t)sym : (uintptr_t)1;
+        atomic_store_explicit(&cached, addr, memory_order_release);
     }
 
-    if (!real) return ENOSYS;
-    return real(acts, path);
+    if (addr == (uintptr_t)1) return ENOSYS;
+    return ((addchdir_fn)addr)(acts, path);
 }
 
 /*
@@ -513,7 +530,11 @@ static ssize_t copy_file_range_fallback(int fd_in, off64_t *off_in, int fd_out,
                 ? pwrite(fd_out, buf + put, (size_t)(got - put),
                          *off_out + (off64_t)(total + (size_t)put))
                 : write(fd_out, buf + put, (size_t)(got - put));
-            if (n < 0) { failed = 1; break; }
+            if (n <= 0) {
+                if (n == 0) errno = EIO;
+                failed = 1;
+                break;
+            }
             put += n;
         }
         total += (size_t)put;
@@ -522,12 +543,17 @@ static ssize_t copy_file_range_fallback(int fd_in, off64_t *off_in, int fd_out,
              * only `put` were copied, so fd_in now points past the data still
              * owed. The real call leaves it advanced by exactly what it copied,
              * and this function's own contract tells callers to loop on a short
-             * count -- so without the rewind that loop resumes past the gap and
+             * count, so without the rewind that loop resumes past the gap and
              * the difference is data silently dropped. Measured against the
              * kernel with a write ceiling: it left fd_in at 20000, this left it
              * at 32768. Only the read() path needs it; pread() never moved the
-             * descriptor. */
-            if (!off_in) lseek(fd_in, -(off_t)(got - put), SEEK_CUR);
+             * descriptor. Save and restore errno so a failing rewind cannot
+             * mask the write error that stopped the copy. */
+            if (!off_in) {
+                int saved_errno = errno;
+                (void)lseek(fd_in, -(off_t)(got - put), SEEK_CUR);
+                errno = saved_errno;
+            }
             break;
         }
         if (failed) break;
@@ -541,21 +567,23 @@ static ssize_t copy_file_range_fallback(int fd_in, off64_t *off_in, int fd_out,
 
 ssize_t copy_file_range(int fd_in, off64_t *off_in, int fd_out, off64_t *off_out,
                         size_t len, unsigned flags) {
-    static ssize_t (*real)(int, off64_t *, int, off64_t *, size_t, unsigned);
-    static int looked_up;
+    typedef ssize_t (*copy_file_range_fn)(int, off64_t *, int, off64_t *, size_t, unsigned);
+    /* 0 = unresolved, 1 = absent in Bionic, otherwise the resolved function address. */
+    static _Atomic(uintptr_t) cached = 0;
 
-    /* The flag is published after the pointer, with release and acquire, so a
-     * second thread that sees the flag sees the pointer: arm64 does not order two
-     * plain stores, and a thread reading NULL here takes the emulation below. */
-    if (!__atomic_load_n(&looked_up, __ATOMIC_ACQUIRE)) {
-        if (!shim_libc) shim_open_handles();
-        if (shim_libc) {
-            *(void **)&real = dlsym(shim_libc, "copy_file_range");
+    uintptr_t addr = atomic_load_explicit(&cached, memory_order_acquire);
+    if (addr == 0) {
+        void *libc_handle = atomic_load_explicit(&shim_libc, memory_order_acquire);
+        if (!libc_handle) {
+            shim_open_handles();
+            libc_handle = atomic_load_explicit(&shim_libc, memory_order_acquire);
         }
-        __atomic_store_n(&looked_up, 1, __ATOMIC_RELEASE);
+        void *sym = libc_handle ? dlsym(libc_handle, "copy_file_range") : 0;
+        addr = sym ? (uintptr_t)sym : (uintptr_t)1;
+        atomic_store_explicit(&cached, addr, memory_order_release);
     }
 
-    if (real) return real(fd_in, off_in, fd_out, off_out, len, flags);
+    if (addr != (uintptr_t)1) return ((copy_file_range_fn)addr)(fd_in, off_in, fd_out, off_out, len, flags);
     return copy_file_range_fallback(fd_in, off_in, fd_out, off_out, len, flags);
 }
 
@@ -576,19 +604,22 @@ ssize_t copy_file_range(int fd_in, off64_t *off_in, int fd_out, off64_t *off_out
  * naming the basic set only; callers are required to read the mask.
  */
 int statx(int dirfd, const char *path, int flags, unsigned mask, struct statx *out) {
-    static int (*real)(int, const char *, int, unsigned, struct statx *);
-    static int looked_up;
+    typedef int (*statx_fn)(int, const char *, int, unsigned, struct statx *);
+    /* 0 = unresolved, 1 = absent in Bionic, otherwise the resolved function address. */
+    static _Atomic(uintptr_t) cached = 0;
 
-    /* Published as copy_file_range's flag is, so Android 11 and later never take
-     * the fstatat answer below on the strength of a flag read ahead of its pointer. */
-    if (!__atomic_load_n(&looked_up, __ATOMIC_ACQUIRE)) {
-        if (!shim_libc) shim_open_handles();
-        if (shim_libc) {
-            *(void **)&real = dlsym(shim_libc, "statx");
+    uintptr_t addr = atomic_load_explicit(&cached, memory_order_acquire);
+    if (addr == 0) {
+        void *libc_handle = atomic_load_explicit(&shim_libc, memory_order_acquire);
+        if (!libc_handle) {
+            shim_open_handles();
+            libc_handle = atomic_load_explicit(&shim_libc, memory_order_acquire);
         }
-        __atomic_store_n(&looked_up, 1, __ATOMIC_RELEASE);
+        void *sym = libc_handle ? dlsym(libc_handle, "statx") : 0;
+        addr = sym ? (uintptr_t)sym : (uintptr_t)1;
+        atomic_store_explicit(&cached, addr, memory_order_release);
     }
-    if (real) return real(dirfd, path, flags, mask, out);
+    if (addr != (uintptr_t)1) return ((statx_fn)addr)(dirfd, path, flags, mask, out);
 
     struct stat st;
     /* The sync bits steer a network filesystem and mean nothing to fstatat,
@@ -991,8 +1022,12 @@ __attribute__((noreturn)) void __shim_untranslated(const char *name) {
 typedef uintptr_t (*shim_unwind_fn)(uintptr_t, uintptr_t, uintptr_t);
 
 static shim_unwind_fn shim_bionic_unwinder(const char *name) {
-    if (!shim_libc) shim_open_handles();
-    return shim_libc ? (shim_unwind_fn)dlsym(shim_libc, name) : 0;
+    void *libc_handle = atomic_load_explicit(&shim_libc, memory_order_acquire);
+    if (!libc_handle) {
+        shim_open_handles();
+        libc_handle = atomic_load_explicit(&shim_libc, memory_order_acquire);
+    }
+    return libc_handle ? (shim_unwind_fn)dlsym(libc_handle, name) : 0;
 }
 
 __attribute__((noreturn)) static void shim_no_unwinder(const char *name) {
@@ -1001,16 +1036,18 @@ __attribute__((noreturn)) static void shim_no_unwinder(const char *name) {
     abort();
 }
 
-#define SHIM_UNWINDER(name, without)                                 \
-    uintptr_t name(uintptr_t a, uintptr_t b, uintptr_t c) {          \
-        static shim_unwind_fn real;                                  \
-        static int looked_up;                                        \
-        if (!__atomic_load_n(&looked_up, __ATOMIC_ACQUIRE)) {        \
-            real = shim_bionic_unwinder(#name);                      \
-            __atomic_store_n(&looked_up, 1, __ATOMIC_RELEASE);       \
-        }                                                            \
-        if (real) return real(a, b, c);                              \
-        without;                                                     \
+/* 0 = unresolved, 1 = absent in Bionic, otherwise the resolved function address. */
+#define SHIM_UNWINDER(name, without)                                           \
+    uintptr_t name(uintptr_t a, uintptr_t b, uintptr_t c) {                    \
+        static _Atomic(uintptr_t) cached = 0;                                  \
+        uintptr_t addr = atomic_load_explicit(&cached, memory_order_acquire);  \
+        if (addr == 0) {                                                       \
+            shim_unwind_fn sym = shim_bionic_unwinder(#name);                  \
+            addr = sym ? (uintptr_t)sym : (uintptr_t)1;                        \
+            atomic_store_explicit(&cached, addr, memory_order_release);        \
+        }                                                                      \
+        if (addr != (uintptr_t)1) return ((shim_unwind_fn)addr)(a, b, c);      \
+        without;                                                               \
     }
 SHIM_UNWINDER(_Unwind_Backtrace, return SHIM_URC_END_OF_STACK)
 SHIM_UNWINDER(_Unwind_FindEnclosingFunction, return 0)
@@ -1028,18 +1065,42 @@ SHIM_UNWINDER(_Unwind_SetIP, shim_no_unwinder("_Unwind_SetIP"))
 /*
  * A stack-protector canary for objects that import one. Bionic keeps its own
  * private to libc, so this is a separate value; that is harmless, because the
- * check compares the prologue's copy against this same variable. It only has to
- * be non-zero and not derivable from the file.
+ * check compares the prologue's copy against this same variable. Initialized
+ * once via an atomic compare-exchange from OS entropy (never stdio fopen), with
+ * byte 0 masked to 0x00 so C-string over-reads cannot leak the canary.
  */
 unsigned long __shim_stack_guard(void) {
-    static unsigned long value;
-    if (!value) {
-        FILE *f = fopen("/dev/urandom", "rb");
-        if (f) {
-            if (fread(&value, sizeof(value), 1, f) != 1) value = 0;
-            fclose(f);
+    static _Atomic(unsigned long) guard = 0;
+    unsigned long current = atomic_load_explicit(&guard, memory_order_acquire);
+    if (current != 0) return current;
+
+    unsigned long candidate = 0;
+#if defined(__ANDROID__) || defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+    arc4random_buf(&candidate, sizeof(candidate));
+#else
+    size_t got = 0;
+    while (got < sizeof(candidate)) {
+        ssize_t n = getrandom((unsigned char *)&candidate + got, sizeof(candidate) - got, 0);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            candidate = 0;
+            break;
         }
-        if (!value) value = 0xff0a000000000000UL;  /* glibc's own fallback shape */
+        if (n == 0) {
+            candidate = 0;
+            break;
+        }
+        got += (size_t)n;
     }
-    return value;
+#endif
+    candidate &= ~(unsigned long)0xFF;
+    if (candidate == 0) candidate = 0xff0a000000000000UL;  /* glibc's own fallback shape */
+
+    unsigned long expected = 0;
+    if (atomic_compare_exchange_strong_explicit(
+            &guard, &expected, candidate,
+            memory_order_acq_rel, memory_order_acquire)) {
+        return candidate;
+    }
+    return expected;
 }
