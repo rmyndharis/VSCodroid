@@ -1738,10 +1738,11 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
 
         // Up before the provider is asked anything, and named from the tree URI
         // until it answers. Everything that used to run ahead of this dialog was a
-        // cross-process round trip: persistPermission resolves the display name and
-        // reads the persisted grants to prune the recent list, and getDisplayName
-        // queries the tree a second time. All three callers are on the thread that
-        // draws the screen (the picker result, the bridge through runOnUiThread, and
+        // cross-process round trip: queryDisplayName asks the provider for the
+        // folder's display name (passed into persistPermission below so the tree is
+        // queried once), and persistPermission reads the persisted grants to prune
+        // the recent list. All three callers are on the thread that draws the
+        // screen (the picker result, the bridge through runOnUiThread, and
         // onPageFinished through adoptWorkbenchFolder), so against a network- or
         // MTP-backed provider that was seconds of frozen editor with nothing on it
         // to say why. The real name replaces the placeholder below.
@@ -1803,11 +1804,12 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 // below must still be skipped in that case, which the ordinary hop
                 // after this one does by throwing.
                 val (answeredName, copyIsNew) = withContext(NonCancellable + Dispatchers.IO) {
-                    safManager.persistPermission(uri)
+                    val queriedName = safManager.queryDisplayName(uri)
+                    safManager.persistPermission(uri, queriedName)
                     // Asked before the sync below makes the copy. A copy older than this
                     // open may have been opened by its hash path, which the workbench
                     // keeps its own state under; see deviceFolderTarget.
-                    safManager.queryDisplayName(uri) to !safManager.getMirrorDir(uri).exists()
+                    queriedName to !safManager.getMirrorDir(uri).exists()
                 }
                 // The name the provider gave, or the tree's own last segment where it did
                 // not. The dialog says either, but only the first is a name: the second is
