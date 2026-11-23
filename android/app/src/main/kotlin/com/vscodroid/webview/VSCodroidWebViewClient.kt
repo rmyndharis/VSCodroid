@@ -1487,6 +1487,7 @@ class VSCodroidWebViewClient(
             val requested = nlsBundleRequested(request.url) ?: return null
             return interfaceBundleResponse(requested)
         }
+        interceptCrossPortLoopback(request, port)?.let { return it }
         val rules = resourceRules.current()
         return interceptCdnRequest(
             request, port, tokenWhileBound(port, connectionToken), rules.roots,
@@ -1919,6 +1920,7 @@ class VSCodroidWebViewClient(
                 swController.setServiceWorkerClient(object : ServiceWorkerClient() {
                     override fun shouldInterceptRequest(request: WebResourceRequest): WebResourceResponse? {
                         val port = allowedPort() ?: 0
+                        interceptCrossPortLoopback(request, port, allowDocumentRedirect = false)?.let { return it }
                         // Null once the screen these are read through is gone. No set to judge a folder
                         // by publishes no folder, rather than every folder.
                         val sensitive = sensitiveLocations()
@@ -1936,6 +1938,288 @@ class VSCodroidWebViewClient(
                 Logger.i(TAG, "ServiceWorkerClient registered for CDN interception")
             } catch (e: Exception) {
                 Logger.w(TAG, "Failed to set up ServiceWorkerClient: ${e.message}")
+            }
+        }
+
+        /**
+         * Isolates requests targeting `127.0.0.1` on another port, as well as
+         * non-canonical IPv4 and IPv6-mapped or IPv6-translated `127.0.0.1`
+         * host aliases on any port, from the editor's `127.0.0.1` cookie jar.
+         *
+         * RFC 6265 cookies are port-agnostic per host, so cookies scoped to
+         * `127.0.0.1` (including `vscode-tkn`, which workbench script reads via
+         * `document.cookie` and therefore cannot be `HttpOnly`) would otherwise
+         * accompany requests to other local ports and become readable from
+         * `allow-same-origin` iframes such as Simple Browser.
+         *
+         * Only canonical `"127.0.0.1"` is eligible for active `editorPort`
+         * pass-through and for safe subframe redirect to `http://localhost:<port>`.
+         * Because Android's `WebResourceResponse` throws `IllegalArgumentException`
+         * for any status code in `[300, 399]`, safe subframe `http` `GET` document
+         * navigations receive a static `200 OK` meta-refresh document
+         * (`Content-Security-Policy: default-src 'none'`) that moves the frame
+         * onto `http://localhost:<port>` without contacting `127.0.0.1:<port>`.
+         * Every other cross-port `127.0.0.1` request, every non-canonical IPv4
+         * or IPv6 `127.0.0.1` alias (even on `editorPort`), inactive editor
+         * ports, and all service worker fetches fail closed with `403 Forbidden`.
+         */
+        internal fun interceptCrossPortLoopback(
+            request: WebResourceRequest,
+            editorPort: Int,
+            allowDocumentRedirect: Boolean = true,
+        ): WebResourceResponse? {
+            val uri = request.url ?: return null
+            val rawHost = uri.host ?: return null
+            val isCanonicalIpv4Loopback = rawHost == "127.0.0.1"
+            val isAlias = !isCanonicalIpv4Loopback && isLoopback127Alias(rawHost)
+            if (!isCanonicalIpv4Loopback && !isAlias) return null
+
+            if (isCanonicalIpv4Loopback && editorPort > 0 && uri.port == editorPort) return null
+
+            if (isCanonicalIpv4Loopback && editorPort > 0 && allowDocumentRedirect) {
+                val targetUrl = safeLocalhostRedirectTarget(request, uri)
+                if (targetUrl != null) {
+                    val body = "<!doctype html><meta http-equiv=\"refresh\" content=\"0;url=${escapeHtmlAttribute(targetUrl)}\">"
+                    return WebResourceResponse(
+                        "text/html",
+                        "utf-8",
+                        200,
+                        "OK",
+                        mapOf(
+                            "Cache-Control" to "no-store",
+                            "Content-Security-Policy" to "default-src 'none'",
+                            "Referrer-Policy" to "no-referrer",
+                            "X-Content-Type-Options" to "nosniff",
+                        ),
+                        ByteArrayInputStream(body.toByteArray(Charsets.UTF_8)),
+                    )
+                }
+            }
+
+            Logger.d(TAG, "Refused cross-port loopback request: ${request.method} ${urlLogLabel(uri.toString())}")
+            return WebResourceResponse(
+                "text/plain",
+                "utf-8",
+                403,
+                "Forbidden",
+                mapOf("Cache-Control" to "no-store"),
+                ByteArrayInputStream(ByteArray(0)),
+            )
+        }
+
+        private val IPV6_MAPPED_127_0_0_1 = byteArrayOf(
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff.toByte(), 0xff.toByte(), 0x7f, 0, 0, 1,
+        )
+        private val IPV6_TRANSLATED_127_0_0_1 = byteArrayOf(
+            0, 0, 0, 0, 0, 0, 0, 0, 0xff.toByte(), 0xff.toByte(), 0, 0, 0x7f, 0, 0, 1,
+        )
+
+        private fun isLoopback127Alias(rawHost: String): Boolean {
+            val normalized = rawHost.trim().lowercase()
+            if (normalized.isEmpty()) return false
+            if (parseWhatwgIpv4(normalized) == 0x7F00_0001u) return true
+            val ipv6 = parseIpv6Bytes(normalized) ?: return false
+            return ipv6.contentEquals(IPV6_MAPPED_127_0_0_1) ||
+                ipv6.contentEquals(IPV6_TRANSLATED_127_0_0_1)
+        }
+
+        /**
+         * Pure-Kotlin WHATWG IPv4 numeric host parser (no DNS). Strips at most
+         * one trailing dot and parses 1 to 4 decimal, octal, or hexadecimal
+         * components with strict overflow and digit validation.
+         */
+        private fun parseWhatwgIpv4(host: String): UInt? {
+            val stripped = if (host.endsWith('.')) host.dropLast(1) else host
+            if (stripped.isEmpty()) return null
+            val parts = stripped.split('.')
+            if (parts.isEmpty() || parts.size > 4) return null
+            val numbers = ArrayList<ULong>(parts.size)
+            for (part in parts) {
+                if (part.isEmpty()) return null
+                val parsed = parseWhatwgIpv4Number(part) ?: return null
+                numbers.add(parsed)
+            }
+            for (i in 0 until numbers.size - 1) {
+                if (numbers[i] > 255uL) return null
+            }
+            val remainingBytes = 5 - numbers.size
+            val maxLast = 1uL shl (8 * remainingBytes)
+            val last = numbers.last()
+            if (last >= maxLast) return null
+            var ipv4 = last
+            for (i in 0 until numbers.size - 1) {
+                ipv4 += numbers[i] shl (8 * (3 - i))
+            }
+            return ipv4.toUInt()
+        }
+
+        private fun parseWhatwgIpv4Number(part: String): ULong? {
+            val radix: ULong
+            val digits: String
+            when {
+                part.startsWith("0x") -> {
+                    radix = 16uL
+                    digits = part.substring(2)
+                    if (digits.isEmpty()) return 0uL
+                }
+                part.length >= 2 && part[0] == '0' -> {
+                    radix = 8uL
+                    digits = part.substring(1)
+                }
+                else -> {
+                    radix = 10uL
+                    digits = part
+                }
+            }
+            var value = 0uL
+            for (c in digits) {
+                val digit = when (c) {
+                    in '0'..'9' -> (c - '0').toULong()
+                    in 'a'..'f' -> (10 + (c - 'a')).toULong()
+                    else -> return null
+                }
+                if (digit >= radix) return null
+                value = value * radix + digit
+                if (value > 0xFFFF_FFFFuL) return null
+            }
+            return value
+        }
+
+        /**
+         * Pure-Kotlin RFC 4291 16-byte IPv6 literal parser (no DNS). Supports
+         * optional matching brackets, `::` compression, leading-zero padding,
+         * mixed case, and trailing dotted-quad IPv4 suffix.
+         */
+        private fun parseIpv6Bytes(host: String): ByteArray? {
+            val literal = when {
+                host.startsWith('[') && host.endsWith(']') -> host.substring(1, host.length - 1)
+                host.startsWith('[') || host.endsWith(']') -> return null
+                else -> host
+            }
+            if (literal.isEmpty() || ':' !in literal || ":::" in literal) return null
+            val halves = literal.split("::")
+            if (halves.size > 2) return null
+
+            val hextets: List<Int> = if (halves.size == 1) {
+                val all = parseIpv6SegmentList(halves[0], allowTrailingIpv4 = true) ?: return null
+                if (all.size != 8) return null
+                all
+            } else {
+                val left = parseIpv6SegmentList(halves[0], allowTrailingIpv4 = false) ?: return null
+                val right = parseIpv6SegmentList(halves[1], allowTrailingIpv4 = true) ?: return null
+                val missing = 8 - (left.size + right.size)
+                if (missing < 1) return null
+                ArrayList<Int>(8).apply {
+                    addAll(left)
+                    repeat(missing) { add(0) }
+                    addAll(right)
+                }
+            }
+
+            val bytes = ByteArray(16)
+            for (i in 0 until 8) {
+                val h = hextets[i]
+                bytes[2 * i] = (h ushr 8).toByte()
+                bytes[2 * i + 1] = (h and 0xFF).toByte()
+            }
+            return bytes
+        }
+
+        private fun parseIpv6SegmentList(side: String, allowTrailingIpv4: Boolean): List<Int>? {
+            if (side.isEmpty()) return emptyList()
+            if (side.startsWith(':') || side.endsWith(':')) return null
+            val tokens = side.split(':')
+            val out = ArrayList<Int>(tokens.size + 1)
+            for (idx in tokens.indices) {
+                val token = tokens[idx]
+                if (token.isEmpty()) return null
+                if ('.' in token) {
+                    if (!allowTrailingIpv4 || idx != tokens.lastIndex) return null
+                    val ipv4 = parseStrictDottedQuadIpv4(token) ?: return null
+                    out.add(((ipv4 shr 16) and 0xFFFFu).toInt())
+                    out.add((ipv4 and 0xFFFFu).toInt())
+                } else {
+                    if (token.length > 4) return null
+                    var value = 0
+                    for (c in token) {
+                        val nibble = when (c) {
+                            in '0'..'9' -> c - '0'
+                            in 'a'..'f' -> 10 + (c - 'a')
+                            else -> return null
+                        }
+                        value = (value shl 4) or nibble
+                    }
+                    out.add(value)
+                }
+            }
+            return out
+        }
+
+        private fun parseStrictDottedQuadIpv4(token: String): UInt? {
+            val parts = token.split('.')
+            if (parts.size != 4) return null
+            var result = 0u
+            for (part in parts) {
+                if (part.isEmpty() || part.length > 3) return null
+                if (part.length > 1 && part[0] == '0') return null
+                var octet = 0
+                for (c in part) {
+                    if (c !in '0'..'9') return null
+                    octet = octet * 10 + (c - '0')
+                }
+                if (octet > 255) return null
+                result = (result shl 8) or octet.toUInt()
+            }
+            return result
+        }
+
+        private fun safeLocalhostRedirectTarget(request: WebResourceRequest, uri: Uri): String? {
+            if (request.isForMainFrame) return null
+            if (!uri.scheme.equals("http", ignoreCase = true)) return null
+            val method: String? = request.method
+            if (!method.equals("GET", ignoreCase = true)) return null
+            if (!uri.encodedUserInfo.isNullOrEmpty() || !uri.userInfo.isNullOrEmpty()) return null
+            if (uri.encodedAuthority?.contains('@') == true) return null
+
+            val headers: Map<String, String>? = request.requestHeaders
+            val secFetchMode = headerValue(headers, "Sec-Fetch-Mode")?.trim()
+            val isDocumentNavigation = if (secFetchMode != null) {
+                secFetchMode.equals("navigate", ignoreCase = true)
+            } else {
+                headerValue(headers, "Accept")?.contains("text/html", ignoreCase = true) == true
+            }
+            if (!isDocumentNavigation) return null
+
+            val port = uri.port
+            if (port != -1 && port !in 1..65535) return null
+            val portPart = if (port > 0) ":$port" else ""
+
+            val rawPath = uri.encodedPath ?: ""
+            if (rawPath.isNotEmpty() && !rawPath.startsWith("/")) return null
+            val rawQuery = uri.encodedQuery
+            val queryPart = if (rawQuery != null) "?$rawQuery" else ""
+
+            val target = "http://localhost$portPart$rawPath$queryPart"
+            if (!isSafeMetaRefreshUrl(target)) return null
+            return target
+        }
+
+        private fun isSafeMetaRefreshUrl(url: String): Boolean =
+            url.all { c ->
+                c.code in 0x21..0x7E &&
+                    c != '"' && c != '\'' && c != '<' && c != '>' && c != ';' && c != '\\'
+            }
+
+        private fun escapeHtmlAttribute(value: String): String = buildString(value.length) {
+            for (c in value) {
+                when (c) {
+                    '&' -> append("&amp;")
+                    '"' -> append("&quot;")
+                    '\'' -> append("&#39;")
+                    '<' -> append("&lt;")
+                    '>' -> append("&gt;")
+                    else -> append(c)
+                }
             }
         }
 
