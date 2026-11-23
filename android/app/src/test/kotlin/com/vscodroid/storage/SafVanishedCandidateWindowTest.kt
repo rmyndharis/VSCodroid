@@ -85,11 +85,11 @@ class SafVanishedCandidateWindowTest {
     private data class Departure(val notBefore: Long, val notAfter: Long)
 
     private fun directoryLeaves(name: String): Departure {
-        val notBefore = System.currentTimeMillis()
+        val notBefore = engine.monotonicClock()
         engine.handleMirrorEvent(
             FileObserver.MOVED_FROM or isDirFlag, File(mirror, name), mirror, treeUri
         )
-        val notAfter = System.currentTimeMillis()
+        val notAfter = engine.monotonicClock()
         assertTrue(
             engine.hasVanishedCandidate(notBefore),
             "the departure was not recorded, so nothing below is being tested",

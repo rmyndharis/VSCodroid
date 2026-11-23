@@ -422,7 +422,7 @@ class SafQueuedWriteBackTest {
         // Once the claim has taken the folder's entry, the next answer the provider gives is the old
         // name being resolved: the write-back thread takes the save there.
         onProviderCall = {
-            if (!taken && !engine.hasVanishedCandidate(System.currentTimeMillis())) {
+            if (!taken && !engine.hasVanishedCandidate(engine.monotonicClock())) {
                 taken = true
                 drain()
             }
@@ -1374,6 +1374,7 @@ class SafQueuedWriteBackTest {
         holdBackSave("old_dir/existing.txt")
         val held = File(filesDir, "renaming")
         assertTrue(File(mirror, "old_dir").renameTo(held))
+        clock = SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
         observe(FileObserver.MOVED_FROM or isDirFlag, "old_dir")
 
         clock = SafSyncEngine.HELD_BACK_RETRY_FIRST_MS + 1
@@ -1417,7 +1418,7 @@ class SafQueuedWriteBackTest {
         onDevice("old_dir/existing.txt", "old")
         inMirror("old_dir/existing.txt", "old")
         val stale = File(mirror, "old_dir/existing.txt").absolutePath
-        engine.session.recentDrops += stale to System.currentTimeMillis() - SafSyncEngine.RENAME_PAIR_WINDOW_MS - 1
+        engine.session.recentDrops += stale to engine.monotonicClock() - SafSyncEngine.RENAME_PAIR_WINDOW_MS - 1
 
         renameFolder("old_dir", "lib")
         drain()

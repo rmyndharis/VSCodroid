@@ -263,7 +263,7 @@ class SafUploadRecordRetirementTest {
         // own clock inside the call, so a bound taken on the other side of it is short by
         // however long the call took and the expiry never happens. Measured here once,
         // as SafVanishedCandidateWindowTest records measuring it.
-        val stampedBy = System.currentTimeMillis()
+        val stampedBy = engine.monotonicClock()
         assertFalse(
             noUploadsUnderMirror(),
             "the records were retired while a rename could still have claimed the " +
@@ -343,12 +343,12 @@ class SafUploadRecordRetirementTest {
             // the one that needs no folder switch. Its retirement pass runs here, and
             // keeps this file's line because the claim below it is live.
             engine.hasVanishedCandidate(
-                System.currentTimeMillis() + SafSyncEngine.RENAME_PAIR_WINDOW_MS + 1
+                engine.monotonicClock() + SafSyncEngine.RENAME_PAIR_WINDOW_MS + 1
             )
             // Both halves, because either one alone would be satisfied by the pass
             // never running at all: the departure is consumed, and the line it would
             // have retired is still standing.
-            val consumed = !engine.hasVanishedCandidate(System.currentTimeMillis())
+            val consumed = !engine.hasVanishedCandidate(engine.monotonicClock())
             deferred = consumed && file.absolutePath in engine.uploadsInFlight()
             throw IOException("no space left on device")
         }

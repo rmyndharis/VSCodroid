@@ -13,6 +13,7 @@ import java.nio.file.LinkOption.NOFOLLOW_LINKS
 import java.nio.file.Path
 import java.nio.file.SecureDirectoryStream
 import java.nio.file.attribute.BasicFileAttributeView
+import java.nio.file.attribute.BasicFileAttributes
 import java.util.Locale
 import android.annotation.SuppressLint
 
@@ -41,40 +42,56 @@ object StorageManager {
     fun getStorageBreakdown(context: Context): JSONObject {
         val filesDir = context.filesDir
         val cacheDir = context.cacheDir
+        val projectsDir = File(Environment.getProjectsDir(context))
+        val filesPrefix = filesDir.absolutePath + File.separator
+        val outsideFilesDir = !projectsDir.absolutePath.startsWith(filesPrefix)
+        val projectsRel = if (!outsideFilesDir) {
+            projectsDir.absolutePath
+                .removePrefix(filesPrefix)
+                .replace(File.separatorChar, '/')
+                .trimEnd('/')
+        } else {
+            null
+        }
+
+        // Map each tracked subtree under filesDir to its JSON key so one traversal produces
+        // both the per-category sizes and the overall filesDir total without re-walking subtrees.
+        // data/User rather than data/: logs are counted separately in data/logs.
+        val filesBuckets = LinkedHashMap<String, MutableList<String>>()
+        fun addFileBucket(relativePath: String, key: String) {
+            filesBuckets.getOrPut(relativePath) { ArrayList(1) }.add(key)
+        }
+        addFileBucket("server", "vscode_server")
+        addFileBucket("home/.vscodroid/extensions", "extensions")
+        addFileBucket("home/.vscodroid/data/User", "user_data")
+        addFileBucket("home/.vscodroid/data/logs", "logs")
+        addFileBucket("usr", "tools")
+        addFileBucket("saf-mirrors", "saf_mirrors")
+        if (!projectsRel.isNullOrEmpty()) {
+            addFileBucket(projectsRel, "projects")
+        }
+
+        val filesTotals = walkSizes(filesDir, filesBuckets)
+        val cacheBuckets = CLEARABLE_CACHE_DIRS.associateWith { listOf("cache") }
+        val cacheTotals = walkSizes(cacheDir, cacheBuckets)
+        val projectsBytes = when {
+            outsideFilesDir -> dirSize(projectsDir)
+            projectsRel.isNullOrEmpty() -> filesTotals.total
+            else -> filesTotals.buckets["projects"] ?: 0L
+        }
 
         return JSONObject().apply {
-            put("vscode_server", dirSize(File(filesDir, "server")))
-            put("extensions", dirSize(File(filesDir, "home/.vscodroid/extensions")))
-            // data/User, not the sibling User/: the server keeps globalStorage,
-            // History and workspaceStorage there. The directory this used to
-            // measure was this app's own and is now empty. Logs are counted
-            // separately below and live in data/logs, so this stays on data/User
-            // rather than data/ to avoid counting them twice.
-            put("user_data", dirSize(File(filesDir, "home/.vscodroid/data/User")))
-            put("logs", dirSize(File(filesDir, "home/.vscodroid/data/logs")))
-            put("tools", dirSize(File(filesDir, "usr")))
-            put("saf_mirrors", dirSize(File(filesDir, "saf-mirrors")))
-            // The user's own work, routinely the largest thing here and until now
-            // in no row. An install that keeps it under filesDir had it inside
-            // `total` with nothing to say so, so the rows did not add up to the
-            // figure above them; an install from a release that put it on shared
-            // storage had it in neither, so `total` disagreed with Android's own
-            // app-info screen by the size of the workspace. Environment decides
-            // which of the two this install uses, and nothing here second-guesses
-            // it.
-            val projectsDir = File(Environment.getProjectsDir(context))
-            val projectsBytes = dirSize(projectsDir)
+            put("vscode_server", filesTotals.buckets["vscode_server"] ?: 0L)
+            put("extensions", filesTotals.buckets["extensions"] ?: 0L)
+            put("user_data", filesTotals.buckets["user_data"] ?: 0L)
+            put("logs", filesTotals.buckets["logs"] ?: 0L)
+            put("tools", filesTotals.buckets["tools"] ?: 0L)
+            put("saf_mirrors", filesTotals.buckets["saf_mirrors"] ?: 0L)
             put("projects", projectsBytes)
-            put("cache", CLEARABLE_CACHE_DIRS.sumOf { dirSize(File(cacheDir, it)) })
-            // The whole cache directory, unlike the row above it: this is the disk
-            // the app occupies rather than a figure anyone is offered a button for.
-            // The workspace is added only when it lies outside the two walks, or a
-            // fresh install would be charged for it twice.
-            val outsideFilesDir =
-                !projectsDir.absolutePath.startsWith(filesDir.absolutePath + File.separator)
+            put("cache", cacheTotals.buckets["cache"] ?: 0L)
             put(
                 "total",
-                dirSize(filesDir) + dirSize(cacheDir) + if (outsideFilesDir) projectsBytes else 0L,
+                filesTotals.total + cacheTotals.total + if (outsideFilesDir) projectsBytes else 0L,
             )
             // Which of the keys above the clear action can reach. Sent rather
             // than duplicated on the JavaScript side: the two live in different
@@ -290,27 +307,163 @@ object StorageManager {
      * and the rule below is what keeps a link's target from being charged to a
      * directory that does not hold it.
      */
-    internal fun dirSize(dir: File): Long {
-        if (!dir.exists()) return 0
-        var size = 0L
-        val stack = ArrayDeque<File>()
-        stack.addLast(dir)
-        while (stack.isNotEmpty()) {
-            val f = stack.removeLast()
-            // A link contributes nothing and is not descended into: its target's bytes
-            // are not in the directory being measured. usr/ is where this shows: every
-            // launch relinks the tools into nativeLibraryDir, git-core alone is 146
-            // links to one libgit.so, and counting each target charged "tools" with
-            // several hundred MB of APK payload that does not sit in filesDir at all,
-            // several times its real size, and put the same figure into "total".
-            if (isLink(f)) continue
-            if (f.isFile) {
-                size += f.length()
-            } else if (f.isDirectory) {
-                f.listFiles()?.forEach { stack.addLast(it) }
+    internal fun dirSize(dir: File): Long = walkSizes(dir, emptyMap()).total
+
+    private class WalkTotals(val total: Long, val buckets: Map<String, Long>)
+
+    /**
+     * Walks [root] once without following symbolic links, summing regular-file bytes into
+     * [WalkTotals.total] and into every matching bucket declared in [bucketRoots].
+     *
+     * Uses [SecureDirectoryStream] when the filesystem provides it so subdirectory traversal
+     * stays anchored to open directory descriptors without following symlinks, and falls back
+     * to single-pass [Files.newDirectoryStream] + [NOFOLLOW_LINKS] attribute reads on hosts
+     * without [SecureDirectoryStream].
+     */
+    private fun walkSizes(root: File, bucketRoots: Map<String, List<String>>): WalkTotals {
+        val rootPath = root.toPath()
+        val rootAttrs = try {
+            Files.readAttributes(rootPath, BasicFileAttributes::class.java, NOFOLLOW_LINKS)
+        } catch (_: Exception) {
+            return WalkTotals(0L, emptyMap())
+        }
+        // A link contributes nothing and is not descended into: its target's bytes
+        // are not in the directory being measured (e.g. usr/bin symlinks into nativeLibraryDir).
+        if (rootAttrs.isSymbolicLink) return WalkTotals(0L, emptyMap())
+        if (rootAttrs.isRegularFile) return WalkTotals(rootAttrs.size(), emptyMap())
+        if (!rootAttrs.isDirectory) return WalkTotals(0L, emptyMap())
+
+        val ancestorPaths = buildSet {
+            for (path in bucketRoots.keys) {
+                var slash = path.indexOf('/')
+                while (slash >= 0) {
+                    add(path.substring(0, slash))
+                    slash = path.indexOf('/', slash + 1)
+                }
             }
         }
-        return size
+        val bucketTotals = HashMap<String, Long>()
+        var total = 0L
+
+        fun recordSize(size: Long, buckets: List<String>) {
+            total += size
+            for (bucket in buckets) {
+                bucketTotals[bucket] = (bucketTotals[bucket] ?: 0L) + size
+            }
+        }
+
+        fun resolveBuckets(
+            parentRel: String?,
+            parentBuckets: List<String>,
+            childName: String,
+        ): Pair<String?, List<String>> {
+            if (parentRel == null) return null to parentBuckets
+            val childRel = if (parentRel.isEmpty()) childName else "$parentRel/$childName"
+            val matched = bucketRoots[childRel]
+            val buckets = if (matched != null) parentBuckets + matched else parentBuckets
+            val nextRel = if (childRel in ancestorPaths) childRel else null
+            return nextRel to buckets
+        }
+
+        val rootStream = try {
+            Files.newDirectoryStream(rootPath)
+        } catch (_: Exception) {
+            return WalkTotals(0L, emptyMap())
+        }
+
+        if (rootStream is SecureDirectoryStream<Path>) {
+            class Frame(
+                val stream: SecureDirectoryStream<Path>,
+                val entries: Iterator<Path>,
+                val relPath: String?,
+                val buckets: List<String>,
+            )
+            val stack = ArrayDeque<Frame>()
+            try {
+                stack.addLast(Frame(rootStream, rootStream.iterator(), "", emptyList()))
+                while (stack.isNotEmpty()) {
+                    val frame = stack.last()
+                    val entry = try {
+                        if (frame.entries.hasNext()) frame.entries.next() else null
+                    } catch (_: DirectoryIteratorException) {
+                        null
+                    }
+                    if (entry == null) {
+                        runCatching { frame.stream.close() }
+                        stack.removeLast()
+                        continue
+                    }
+                    val childName = entry.fileName ?: continue
+                    val attrs = try {
+                        frame.stream.getFileAttributeView(
+                            childName, BasicFileAttributeView::class.java, NOFOLLOW_LINKS,
+                        )?.readAttributes()
+                    } catch (_: Exception) {
+                        null
+                    } ?: continue
+                    if (attrs.isSymbolicLink) continue
+                    val (nextRel, childBuckets) = resolveBuckets(
+                        frame.relPath, frame.buckets, childName.toString(),
+                    )
+                    if (attrs.isRegularFile) {
+                        recordSize(attrs.size(), childBuckets)
+                    } else if (attrs.isDirectory) {
+                        val sub = try {
+                            frame.stream.newDirectoryStream(childName, NOFOLLOW_LINKS)
+                        } catch (_: Exception) {
+                            null
+                        } ?: continue
+                        stack.addLast(Frame(sub, sub.iterator(), nextRel, childBuckets))
+                    }
+                }
+            } finally {
+                while (stack.isNotEmpty()) {
+                    runCatching { stack.removeLast().stream.close() }
+                }
+            }
+        } else {
+            class FallbackDir(
+                val path: Path,
+                val relPath: String?,
+                val buckets: List<String>,
+            )
+            val stack = ArrayDeque<FallbackDir>()
+            fun drainStream(stream: DirectoryStream<Path>, relPath: String?, buckets: List<String>) {
+                stream.use { dir ->
+                    try {
+                        for (child in dir) {
+                            val childName = child.fileName?.toString() ?: continue
+                            val attrs = try {
+                                Files.readAttributes(child, BasicFileAttributes::class.java, NOFOLLOW_LINKS)
+                            } catch (_: Exception) {
+                                continue
+                            }
+                            if (attrs.isSymbolicLink) continue
+                            val (nextRel, childBuckets) = resolveBuckets(relPath, buckets, childName)
+                            if (attrs.isRegularFile) {
+                                recordSize(attrs.size(), childBuckets)
+                            } else if (attrs.isDirectory) {
+                                stack.addLast(FallbackDir(child, nextRel, childBuckets))
+                            }
+                        }
+                    } catch (_: DirectoryIteratorException) {
+                        // Keep the bytes already summed if enumeration stops mid-directory.
+                    }
+                }
+            }
+            drainStream(rootStream, "", emptyList())
+            while (stack.isNotEmpty()) {
+                val next = stack.removeLast()
+                val stream = try {
+                    Files.newDirectoryStream(next.path)
+                } catch (_: Exception) {
+                    continue
+                }
+                drainStream(stream, next.relPath, next.buckets)
+            }
+        }
+
+        return WalkTotals(total, bucketTotals)
     }
 
     /** Unlinks one entry without descending into directories or following parent links. */
@@ -443,21 +596,6 @@ object StorageManager {
         } finally {
             parents.asReversed().forEach { try { it.close() } catch (_: IOException) {} }
         }
-    }
-
-    /**
-     * Whether [f] is a symbolic link, asked without following it.
-     *
-     * `isFile`, `isDirectory`, `length` and `listFiles` all resolve the target, so every
-     * one of them answers for something that may sit outside the directory being
-     * measured or cleared. A path this cannot answer for counts as a link: measuring
-     * then skips it and clearing then unlinks rather than descends, which is the
-     * direction to be wrong in.
-     */
-    private fun isLink(f: File): Boolean = try {
-        Files.isSymbolicLink(f.toPath())
-    } catch (e: Exception) {
-        true
     }
 
     /**
