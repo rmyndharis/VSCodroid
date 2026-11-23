@@ -10,6 +10,11 @@
          sits on it; this lighter tone is for text buttons and links, and measures
          5.43:1 and 4.99:1 on the same two grounds. -->
     <color name="colorPrimaryText">#3794FF</color>
+    <!-- AlertDialog action button text color. Material3 dialogs follow DayNight,
+         so light dialogs render on #ECE6F0 (5.80:1 here vs 3.68:1 for colorPrimary),
+         while values-night/colors.xml supplies #6CB6FF for dark dialogs (6.68:1 on
+         #2B2930 and 4.68:1 on #424242). Filled buttons outside dialogs keep colorPrimary. -->
+    <color name="colorDialogButtonText">#005A9E</color>
 
     <!-- Editor surface colors -->
     <color name="colorBackground">#1E1E1E</color>

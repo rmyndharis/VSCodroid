@@ -16,6 +16,8 @@
              visual-design decision rather than an accessibility fix, so it is
              raised rather than taken here. -->
         <item name="colorOnPrimary">@android:color/white</item>
+        <item name="alertDialogTheme">@style/ThemeOverlay.VSCodroid.AlertDialog</item>
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.VSCodroid.MaterialAlertDialog</item>
 
         <!-- Window background: VS Code dark editor -->
         <item name="android:windowBackground">@color/colorBackground</item>
@@ -62,6 +64,26 @@
              29, so no version-qualified copy is needed. -->
         <item name="android:enforceStatusBarContrast">false</item>
         <item name="android:enforceNavigationBarContrast">false</item>
+    </style>
+
+    <style name="ThemeOverlay.VSCodroid.AlertDialog" parent="ThemeOverlay.Material3.Dialog.Alert">
+        <item name="colorPrimary">@color/colorDialogButtonText</item>
+        <item name="colorAccent">@color/colorDialogButtonText</item>
+        <item name="buttonBarPositiveButtonStyle">@style/Widget.VSCodroid.Button.Dialog</item>
+        <item name="buttonBarNegativeButtonStyle">@style/Widget.VSCodroid.Button.Dialog</item>
+        <item name="buttonBarNeutralButtonStyle">@style/Widget.VSCodroid.Button.Dialog</item>
+    </style>
+
+    <style name="ThemeOverlay.VSCodroid.MaterialAlertDialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="colorPrimary">@color/colorDialogButtonText</item>
+        <item name="colorAccent">@color/colorDialogButtonText</item>
+        <item name="buttonBarPositiveButtonStyle">@style/Widget.VSCodroid.Button.Dialog</item>
+        <item name="buttonBarNegativeButtonStyle">@style/Widget.VSCodroid.Button.Dialog</item>
+        <item name="buttonBarNeutralButtonStyle">@style/Widget.VSCodroid.Button.Dialog</item>
+    </style>
+
+    <style name="Widget.VSCodroid.Button.Dialog" parent="Widget.Material3.Button.TextButton.Dialog">
+        <item name="android:textColor">@color/colorDialogButtonText</item>
     </style>
 
     <!-- The theme keepStartColor names for a light editor. Empty here on purpose:

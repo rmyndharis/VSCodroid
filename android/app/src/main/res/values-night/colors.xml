@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- AlertDialog action button text color on dark Material3 (#2B2930, 6.68:1)
+         and AppCompat (#424242, 4.68:1) dialog surfaces. -->
+    <color name="colorDialogButtonText">#6CB6FF</color>
+</resources>
