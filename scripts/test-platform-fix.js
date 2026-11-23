@@ -18,7 +18,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 
 const FIX = path.resolve(__dirname, '../android/app/src/main/assets/platform-fix.js');
 
@@ -83,7 +83,7 @@ function osSeenBy(modulePath) {
     return JSON.parse(execFileSync(
         process.execPath,
         ['--require', FAKE_ANDROID, '--require', FIX, main],
-        { encoding: 'utf8' },
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
     ));
 }
 const EXTENSIONS = path.join(tmp, 'home/.vscodroid/extensions');
@@ -91,7 +91,9 @@ const osCases = [
     ['the Jupyter bundle', `${EXTENSIONS}/ms-toolsai.jupyter-2025.9.1/dist/extension.node.js`, 'linux'],
     // Its zeromq loader picks a native build by platform and must see android.
     ['zeromq inside the Jupyter extension', `${EXTENSIONS}/ms-toolsai.jupyter-2025.9.1/dist/node_modules/@aminya/node-gyp-build/index.js`, 'android'],
-    ['another extension', `${EXTENSIONS}/ms-python.python-2026.1.0/out/client/extension.js`, 'android'],
+    ['the Python extension bundle', `${EXTENSIONS}/ms-python.python-2026.10.0-alpine-arm64/out/client/extension.js`, 'linux'],
+    ['another file inside the Python extension', `${EXTENSIONS}/ms-python.python-2026.10.0-alpine-arm64/out/client/helper.js`, 'android'],
+    ['another extension', `${EXTENSIONS}/esbenp.prettier-vscode-11.0.0/dist/extension.js`, 'android'],
     ['a user script named like the bundle, outside an extension', `${tmp}/home/dist/extension.node.js`, 'android'],
 ];
 for (const [label, modulePath, want] of osCases) {
@@ -103,22 +105,90 @@ for (const [label, modulePath, want] of osCases) {
     checked++;
 }
 
+// Open VSX auto-updates replace the bundled Python extension with an upstream
+// copy whose platform detector maps only /^linux/ to OSType.Linux and leaves
+// Android as OSType.Unknown. The preload rewrites that expression at compile
+// time for the Python extension bundle alone, leaving process.platform and
+// every other file untouched.
+const PY_UNPATCHED = [
+    "const OSType = { Windows: 'Windows', OSX: 'OSX', Linux: 'Linux', Unknown: 'Unknown' };",
+    'function detect(e = process.platform) {',
+    '    return /^win/.test(e)?OSType.Windows:/^darwin/.test(e)?OSType.OSX:/^linux/.test(e)?OSType.Linux:OSType.Unknown;',
+    '}',
+    "module.exports = { osType: detect(), os: require('os').platform(), real: process.platform };",
+    '',
+].join('\n');
+const PY_ALREADY_PATCHED = PY_UNPATCHED.replace(
+    '/^linux/.test(e)?OSType.Linux:OSType.Unknown',
+    '/^linux|^android/.test(e)?OSType.Linux:OSType.Unknown',
+);
+const PY_DOLLAR_NS_SPACED = [
+    "const n = { OSType: { Windows: 'Windows', OSX: 'OSX', Linux: 'Linux', Unknown: 'Unknown' } };",
+    'function detect($e = process.platform) {',
+    '    return /^win/.test($e) ? n.OSType.Windows : /^darwin/.test($e) ? n.OSType.OSX : /^linux/.test($e) ? n.OSType.Linux : n.OSType.Unknown;',
+    '}',
+    "module.exports = { osType: detect(), os: require('os').platform(), real: process.platform };",
+    '',
+].join('\n');
+const PY_DOTTED_TEST = "const i = { Linux: 'Linux', Unknown: 'Unknown' }; module.exports = { osType: /^linux/.test(process.platform)?i.Linux:i.Unknown, os: require('os').platform(), real: process.platform };\n";
+const PY_UNMATCHED = "module.exports = { osType: 'Unknown', os: require('os').platform(), real: process.platform };\n";
+function compiledAs(modulePath, source) {
+    fs.mkdirSync(path.dirname(modulePath), { recursive: true });
+    fs.writeFileSync(modulePath, source);
+    const main = path.join(tmp, 'load-python-ext.js');
+    fs.writeFileSync(main, `console.log(JSON.stringify(require(${JSON.stringify(modulePath)})));\n`);
+    const res = spawnSync(
+        process.execPath,
+        ['--require', FAKE_ANDROID, '--require', FIX, main],
+        { encoding: 'utf8' },
+    );
+    assert.strictEqual(res.status, 0, `compiledAs failed: ${res.stderr}`);
+    return { ...JSON.parse(res.stdout), stderr: res.stderr };
+}
+for (const [label, modulePath, source, wantOsType, wantOs, wantWarn] of [
+    ['unpatched updated Python extension bundle', `${EXTENSIONS}/ms-python.python-2026.10.0-alpine-arm64/out/client/extension.js`, PY_UNPATCHED, 'Linux', 'linux', false],
+    ['$-identifier, namespaced enum, and spaced ternary in Python bundle', `${EXTENSIONS}/ms-python.python-2026.11.0-alpine-arm64/out/client/extension.js`, PY_DOLLAR_NS_SPACED, 'Linux', 'linux', false],
+    ['inlined process.platform dotted test argument in Python bundle', `${EXTENSIONS}/ms-python.python-2026.13.0-alpine-arm64/out/client/extension.js`, PY_DOTTED_TEST, 'Linux', 'linux', false],
+    ['already-patched bundled Python extension', `${EXTENSIONS}/ms-python.python-2026.1.0/out/client/extension.js`, PY_ALREADY_PATCHED, 'Linux', 'linux', false],
+    ['unmatched Python extension bundle shape logs a warning', `${EXTENSIONS}/ms-python.python-2026.12.0-alpine-arm64/out/client/extension.js`, PY_UNMATCHED, 'Unknown', 'linux', true],
+    ['another extension with the same platform snippet', `${EXTENSIONS}/esbenp.prettier-vscode-11.0.0/out/client/extension.js`, PY_UNPATCHED, 'Unknown', 'android', false],
+    ['another file inside the Python extension', `${EXTENSIONS}/ms-python.python-2026.10.0-alpine-arm64/out/client/other.js`, PY_UNPATCHED, 'Unknown', 'android', false],
+    ['a user script with the same relative path outside extensions', `${tmp}/home/out/client/extension.js`, PY_UNPATCHED, 'Unknown', 'android', false],
+]) {
+    const got = compiledAs(modulePath, source);
+    assert.strictEqual(got.osType, wantOsType, `${label}: detected OSType came out ${got.osType}, wanted ${wantOsType}`);
+    assert.strictEqual(got.os, wantOs, `${label}: os.platform() came out ${got.os}, wanted ${wantOs}`);
+    assert.strictEqual(got.real, 'android', `${label}: process.platform changed to ${got.real}`);
+    if (wantWarn) {
+        assert.ok(
+            got.stderr.includes(modulePath),
+            `${label}: expected stderr warning naming ${modulePath}, got ${JSON.stringify(got.stderr)}`,
+        );
+    } else {
+        assert.strictEqual(got.stderr, '', `${label}: unexpected stderr output: ${JSON.stringify(got.stderr)}`);
+    }
+    checked++;
+}
+
 // The extension host is a worker started with the server's execArgv and an
 // environment VS Code has stripped of NODE_OPTIONS, which is why server.js
 // passes the preload there. A worker given it in execArgv has the hook.
 const workerMain = path.join(tmp, 'worker-host.js');
 const workerExt = `${EXTENSIONS}/ms-toolsai.jupyter-2025.9.1/dist/extension.node.js`;
+const workerPyExt = `${EXTENSIONS}/ms-python.python-2026.10.0-alpine-arm64/out/client/extension.js`;
 fs.writeFileSync(workerMain, `
 const { Worker } = require('worker_threads');
 const env = { ...process.env }; delete env.NODE_OPTIONS;
-const w = new Worker(${JSON.stringify(`const { parentPort } = require('worker_threads'); parentPort.postMessage(require(${JSON.stringify(workerExt)}));`)},
+const w = new Worker(${JSON.stringify(`const { parentPort } = require('worker_threads'); parentPort.postMessage({ jupyter: require(${JSON.stringify(workerExt)}), python: require(${JSON.stringify(workerPyExt)}) });`)},
     { eval: true, env, execArgv: ['--require', ${JSON.stringify(FAKE_ANDROID)}, '--require', ${JSON.stringify(FIX)}] });
 w.on('message', (m) => { console.log(JSON.stringify(m)); w.terminate(); });
 w.on('error', (e) => { console.error(e); process.exit(1); });
 `);
 const inWorker = JSON.parse(execFileSync(process.execPath, [workerMain], { encoding: 'utf8', env: { ...process.env, NODE_OPTIONS: '' } }));
-assert.strictEqual(inWorker.os, 'linux', `a worker with the preload in execArgv: os.platform() came out ${inWorker.os}`);
-checked++;
+assert.strictEqual(inWorker.jupyter.os, 'linux', `a worker with the preload in execArgv: Jupyter os.platform() came out ${inWorker.jupyter.os}`);
+assert.strictEqual(inWorker.python.osType, 'Linux', `a worker with the preload in execArgv: Python OSType came out ${inWorker.python.osType}`);
+assert.strictEqual(inWorker.python.real, 'android', `a worker with the preload in execArgv: process.platform came out ${inWorker.python.real}`);
+checked += 2;
 
 // The Codex extension starts its static musl engine, which Android cannot run,
 // with child_process.spawn on the path inside its own directory. While the
@@ -1023,22 +1093,24 @@ const AGY_NEXT = put(path.join(OFF_HOME, '.gemini/bin/agy.next'), elf64(BIONIC_L
 put(path.join(HUB_HOME, '.gemini/bin/agy.next'), elf64(BIONIC_LINKER));
 const LINK_TO_OFF_ENGINE = path.join(tmp, 'outside/gemini-engine-link');
 fs.symlinkSync(OFF_ENGINE, LINK_TO_OFF_ENGINE);
-for (const [label, call] of [
-    ['the hub as the extension starts it', [OFF_ENGINE, HUB_ARGS, SPAWN_OPTIONS]],
-    ['--hub=true', [OFF_ENGINE, ['--hub=true', '--hub-port=41000'], SPAWN_OPTIONS]],
-    ['single-dash flags', [OFF_ENGINE, ['-hub', '-hub-port=41000'], SPAWN_OPTIONS]],
-    ['the remote control mode', [OFF_ENGINE, ['--remote-control'], SPAWN_OPTIONS]],
-    ['no arguments', [OFF_ENGINE, SPAWN_OPTIONS]],
-    ['--version with more after it', [OFF_ENGINE, ['--version', '--hub'], SPAWN_OPTIONS]],
-    ['--version of another program in ~/.gemini, which is not the extension\'s check of the engine', [AGY_NEXT, ['--version'], SPAWN_OPTIONS]],
-    ['another program in ~/.gemini', [AGY_NEXT, HUB_ARGS, SPAWN_OPTIONS]],
-    ['a link from elsewhere that ends at the engine', [LINK_TO_OFF_ENGINE, HUB_ARGS, SPAWN_OPTIONS]],
+for (const [label, call, allowedWhenOn] of [
+    ['the hub as the extension starts it', [OFF_ENGINE, HUB_ARGS, SPAWN_OPTIONS], null],
+    ['--hub=true', [OFF_ENGINE, ['--hub=true', '--hub-port=41000'], SPAWN_OPTIONS], false],
+    ['single-dash flags', [OFF_ENGINE, ['-hub', '-hub-port=41000'], SPAWN_OPTIONS], false],
+    ['the remote control mode', [OFF_ENGINE, ['--remote-control'], SPAWN_OPTIONS], false],
+    ['no arguments', [OFF_ENGINE, SPAWN_OPTIONS], true],
+    ['--version with more after it', [OFF_ENGINE, ['--version', '--hub'], SPAWN_OPTIONS], false],
+    ['--version of another program in ~/.gemini, which is not the extension\'s check of the engine', [AGY_NEXT, ['--version'], SPAWN_OPTIONS], true],
+    ['another program in ~/.gemini', [AGY_NEXT, HUB_ARGS, SPAWN_OPTIONS], true],
+    ['a link from elsewhere that ends at the engine', [LINK_TO_OFF_ENGINE, HUB_ARGS, SPAWN_OPTIONS], null],
 ]) {
     assert.deepStrictEqual(spawnedUnder(call, { home: OFF_HOME }), call, `setting off, ${label}: the call was changed, so it runs`);
     // The start the relay knows is checked on its own below.
     const on = [call[0].replace(OFF_HOME, HUB_HOME), ...call.slice(1)];
-    if (call[0] !== LINK_TO_OFF_ENGINE && !(call[0] === OFF_ENGINE && call[1] === HUB_ARGS)) {
+    if (allowedWhenOn === true) {
         assert.deepStrictEqual(spawnedUnder(on, { home: HUB_HOME }), throughLinker(on, HUB_HOME), `setting on, ${label}: not started through the linker as it was written`);
+    } else if (allowedWhenOn === false) {
+        assert.deepStrictEqual(spawnedUnder(on, { home: HUB_HOME }), on, `setting on, ${label}: a disallowed listener form was started through the linker`);
     }
     checked++;
 }
@@ -1105,10 +1177,16 @@ const ALL_MAIN = path.join(tmp, 'all-main.js');
 fs.writeFileSync(
     ALL_MAIN,
     "const cp = require('child_process');\n" +
-        // { "@url": path } is that path as a file URL, { "@buffer": [bytes] } those bytes as a Buffer and
-        // { "@uint8": [bytes] } as a Uint8Array that is not one, all of which Node takes for a cwd.
+        // { "@url": path } is that path as a file URL, { "@buffer": [bytes] } those bytes as a Buffer,
+        // { "@uint8": [bytes] } as a Uint8Array that is not one, { "@toString": text } as a plain object
+        // that coerces to text, and { "@flip": [first, second] } as a stateful object whose toString changes
+        // between its first and second coercion.
         "const [how, call] = JSON.parse(process.argv[2], (k, v) => (v && typeof v['@url'] === 'string' ? require('url').pathToFileURL(v['@url'])\n" +
-        "    : v && Array.isArray(v['@buffer']) ? Buffer.from(v['@buffer']) : v && Array.isArray(v['@uint8']) ? Uint8Array.from(v['@uint8']) : v));\n" +
+        "    : v && Array.isArray(v['@buffer']) ? Buffer.from(v['@buffer']) : v && Array.isArray(v['@uint8']) ? Uint8Array.from(v['@uint8'])\n" +
+        "    : v && typeof v['@toString'] === 'string' ? { toString() { return v['@toString']; } }\n" +
+        "    : v && Array.isArray(v['@flip']) ? (() => { let n = 0; return { toString() { return v['@flip'][Math.min(n++, v['@flip'].length - 1)]; } }; })()\n" +
+        "    : v === '@symbol' ? Symbol('x') : v === '@nullproto' ? Object.create(null)\n" +
+        "    : v === '@throw' ? { toString() { throw new Error('boom'); } } : v));\n" +
         "const args = call.map((x) => (x === '@callback' ? function () {} : x === '@undefined' ? undefined : x));\n" +
         "if (how === 'promisified') require('util').promisify(cp.execFile)(...args); else cp[how](...args);\n",
 );
@@ -1157,7 +1235,7 @@ for (const [how, call, expected, home] of [
     ['execFile', [ENGINE, ['--version'], { argv0: 'tool' }, CALLBACK], [BIONIC_LINKER, [ENGINE, '--version'], { env: routedEnv(ENGINE) }, null]],
     ['execFileSync', [ENGINE, ['--version'], { argv0: 'tool' }], [BIONIC_LINKER, [ENGINE, '--version'], { env: routedEnv(ENGINE) }]],
     ['spawn', [BIONIC_LINKER, [ENGINE, ...TOOL_ARGS], { argv0: 'tool' }], [BIONIC_LINKER, [ENGINE, ...TOOL_ARGS], { env: routedEnv(ENGINE) }]],
-    ['spawn', [HUB_ENGINE, ['--remote-control'], { argv0: 'agy' }], [BIONIC_LINKER, [HUB_ENGINE, '--remote-control'], {}], HUB_HOME],
+    ['spawn', [HUB_ENGINE, ['--version'], { argv0: 'agy' }], [BIONIC_LINKER, [HUB_ENGINE, '--version'], {}], HUB_HOME],
     ['execFileSync', [HUB_ENGINE, ['--hub', '--hub-port=41000'], { argv0: 'agy' }], [BIONIC_LINKER, [HUB_ENGINE, '--hub', '--hub-port=41000'], {}], HUB_HOME],
 ]) {
     assert.deepStrictEqual(callUnder(how, call, home ? { home } : {}), [how, ...expected], `${how} of ${call[0]}: argv0 reached a start through the linker`);
@@ -1222,10 +1300,47 @@ for (const [how, call, expected] of [
     ['execFile', [BIONIC_LINKER, [OFF_ENGINE, '--hub'], CALLBACK], [OFF_ENGINE, ['--hub'], null]],
     ['promisified', [BIONIC_LINKER, [OFF_ENGINE, '--hub'], VERSION_OPTIONS], [OFF_ENGINE, ['--hub'], VERSION_OPTIONS]],
     ['execFileSync', [BIONIC_LINKER, [AGY_NEXT, '--version']], [AGY_NEXT, ['--version']]],
+    // Node coerces non-string argv entries (Buffer or objects with toString) to text before exec, so the linker
+    // gate must coerce rest[0][0] as well instead of treating only typeof === 'string' as linked.
+    ['spawn', [BIONIC_LINKER, [bytes(OFF_ENGINE), ...HUB_ARGS], SPAWN_OPTIONS], [OFF_ENGINE, HUB_ARGS, SPAWN_OPTIONS]],
+    ['spawn', [BIONIC_LINKER, [{ '@toString': OFF_ENGINE }, '--hub'], SPAWN_OPTIONS], [OFF_ENGINE, ['--hub'], SPAWN_OPTIONS]],
+    ['spawn', [BIONIC_LINKER, [bytes('./agy'), '--hub'], { cwd: OFF_BIN }], [OFF_ENGINE, ['--hub'], { cwd: OFF_BIN }]],
+    ['spawnSync', ['linker64', [bytes(OFF_ENGINE), '--remote-control']], [OFF_ENGINE, ['--remote-control']]],
+    // Non-string argv entries must be frozen into plain strings once so a stateful toString() cannot
+    // present a benign value during gate checks and mutate to the engine or a disallowed flag at exec.
+    ['spawn', [BIONIC_LINKER, [{ '@flip': ['/usr/bin/true', OFF_ENGINE] }, '--hub'], SPAWN_OPTIONS], [BIONIC_LINKER, ['/usr/bin/true', '--hub'], SPAWN_OPTIONS]],
+    ['spawn', [BIONIC_LINKER, [{ '@flip': ['--list', OFF_ENGINE] }, '--hub'], SPAWN_OPTIONS], [BIONIC_LINKER, ['--list', '--hub'], SPAWN_OPTIONS]],
+    // Async spawn and execFile do not throw on uncoercible argv elements (Symbol, null-prototype object,
+    // or throwing toString): Node's ProcessWrap turns them into '' and still executes, so the gate must
+    // substitute '' and refuse rather than bailing out.
+    ['spawn', [BIONIC_LINKER, [OFF_ENGINE, '--hub', '@symbol'], SPAWN_OPTIONS], [OFF_ENGINE, ['--hub', ''], SPAWN_OPTIONS]],
+    ['spawn', [BIONIC_LINKER, [OFF_ENGINE, '--hub', '@nullproto'], SPAWN_OPTIONS], [OFF_ENGINE, ['--hub', ''], SPAWN_OPTIONS]],
+    ['spawn', [BIONIC_LINKER, [OFF_ENGINE, '--hub', '@throw'], SPAWN_OPTIONS], [OFF_ENGINE, ['--hub', ''], SPAWN_OPTIONS]],
+    ['execFile', [BIONIC_LINKER, [OFF_ENGINE, '--hub', '@symbol'], CALLBACK], [OFF_ENGINE, ['--hub', ''], null]],
+    ['execFile', [BIONIC_LINKER, [OFF_ENGINE, '--hub', '@nullproto'], CALLBACK], [OFF_ENGINE, ['--hub', ''], null]],
+    ['execFile', [BIONIC_LINKER, [OFF_ENGINE, '--hub', '@throw'], CALLBACK], [OFF_ENGINE, ['--hub', ''], null]],
 ]) {
     assert.deepStrictEqual(callUnder(how, call, { home: OFF_HOME }), [how, ...expected], `setting off, ${how} of the linker with a program in ~/.gemini was not made without the linker`);
     checked++;
 }
+assert.deepStrictEqual(
+    callUnder('spawn', [HUB_ENGINE, [{ '@flip': ['--version', '--remote-control'] }], SPAWN_OPTIONS], { home: HUB_HOME }),
+    ['spawn', BIONIC_LINKER, [HUB_ENGINE, '--version'], SPAWN_OPTIONS],
+    'setting on, a stateful argv object was not frozen to its inspected string before passing to the linker',
+);
+for (const [how, call, expected] of [
+    ['spawn', [BIONIC_LINKER, [HUB_ENGINE, '--remote-control', '@symbol'], SPAWN_OPTIONS], [HUB_ENGINE, ['--remote-control', ''], SPAWN_OPTIONS]],
+    ['spawn', [BIONIC_LINKER, [HUB_ENGINE, '--hub', '--hub-port=41000', '@symbol'], SPAWN_OPTIONS], [HUB_ENGINE, ['--hub', '--hub-port=41000', ''], SPAWN_OPTIONS]],
+    ['execFile', [BIONIC_LINKER, [HUB_ENGINE, '--remote-control', '@symbol'], CALLBACK], [HUB_ENGINE, ['--remote-control', ''], null]],
+]) {
+    assert.deepStrictEqual(
+        callUnder(how, call, { home: HUB_HOME }),
+        [how, ...expected],
+        `setting on, ${how} with an uncoercible argv element bypassed hub validation`,
+    );
+    checked++;
+}
+checked++;
 for (const [how, call] of [
     ['spawnSync', [OFF_ENGINE, HUB_ARGS, SPAWN_OPTIONS]],
     ['execFileSync', [OFF_ENGINE, ['--remote-control']]],
@@ -1392,6 +1507,7 @@ const realUnder = (how, call, cwd = tmp) => JSON.parse(execFileSync(
 ).trim().split('\n').pop());
 for (const [how, call, cwd] of [
     ['spawn', [BIONIC_LINKER, [OFF_ENGINE, '--hub']]],
+    ['spawn', [BIONIC_LINKER, [bytes(OFF_ENGINE), '--hub']]],
     ['spawnSync', [BIONIC_LINKER, [OFF_ENGINE, '--hub']]],
     ['execFile', [BIONIC_LINKER, [OFF_ENGINE, '--hub']]],
     ['execFileSync', [BIONIC_LINKER, [OFF_ENGINE, '--hub'], { stdio: 'ignore' }]],
@@ -1859,13 +1975,90 @@ setTimeout(finish, 6000);
     console.log('skipped: ending an earlier engine reads /proc, which this system does not have');
 }
 
-// Only the engine's own launch is touched: another program with the same flags,
-// and the engine without a hub port, keep their arguments.
-const KEEP = [
+// Non-canonical paths to the engine (dot segments, a symlink inside ~/.gemini, or ~/.gemini/bin/agy
+// itself pointing to a versioned binary under ~/.gemini/versions/) must still pass through
+// antigravityHub: valid hub arguments get relayed and disallowed ones are refused.
+{
+    const HUB_ALIAS = path.join(HUB_HOME, '.gemini/bin/agy-alias');
+    fs.symlinkSync(HUB_ENGINE, HUB_ALIAS);
+    const VERSIONED_HOME = path.join(REAL_DATA, 'files', `home-${homes++}`);
+    const VERSIONED_TARGET = put(path.join(VERSIONED_HOME, '.gemini/versions/1.6.0/agy-bin'), elf64(BIONIC_LINKER));
+    const VERSIONED_AGY = path.join(VERSIONED_HOME, '.gemini/bin/agy');
+    fs.mkdirSync(path.dirname(VERSIONED_AGY), { recursive: true });
+    fs.symlinkSync(VERSIONED_TARGET, VERSIONED_AGY);
+    put(machineSettings(VERSIONED_HOME), SETTING_ON);
+    const VERSIONED_OFF_HOME = path.join(REAL_DATA, 'files', `home-${homes++}`);
+    const VERSIONED_OFF_TARGET = put(path.join(VERSIONED_OFF_HOME, '.gemini/versions/1.6.0/agy-bin'), elf64(BIONIC_LINKER));
+    const VERSIONED_OFF_AGY = path.join(VERSIONED_OFF_HOME, '.gemini/bin/agy');
+    fs.mkdirSync(path.dirname(VERSIONED_OFF_AGY), { recursive: true });
+    fs.symlinkSync(VERSIONED_OFF_TARGET, VERSIONED_OFF_AGY);
+
+    for (const [label, target, home] of [
+        ['dot segment', path.join(HUB_HOME, '.gemini/bin') + '/./agy', HUB_HOME],
+        ['parent segment', path.join(HUB_HOME, '.gemini/bin') + '/../bin/agy', HUB_HOME],
+        ['symlink inside ~/.gemini', HUB_ALIAS, HUB_HOME],
+        ['versioned symlink at ~/.gemini/bin/agy', VERSIONED_AGY, VERSIONED_HOME],
+        ['dot segment to versioned symlink', path.join(VERSIONED_HOME, '.gemini/bin') + '/./agy', VERSIONED_HOME],
+    ]) {
+        const relayed = spawnedUnder([target, HUB_ARGS, SPAWN_OPTIONS], { home });
+        assert.strictEqual(relayed[0], BIONIC_LINKER, `${label}: a valid hub start was not started through the linker`);
+        assert.ok(/^--hub-port=\d+$/.test(relayed[1][2]) && relayed[1][2] !== '--hub-port=41000',
+            `${label}: the hub port was not rewritten for the relay: ${relayed[1][2]}`);
+        const bad = [target, [...HUB_ARGS, '--remote-control'], SPAWN_OPTIONS];
+        assert.deepStrictEqual(spawnedUnder(bad, { home }), bad,
+            `${label}: a disallowed argument reached the linker through a non-canonical path`);
+        checked += 2;
+    }
+
+    // With setting OFF, normalized ~/.gemini/bin/./agy --version and versioned ~/.gemini/bin/agy --version
+    // remain allowed, while an external symlink outside ~/.gemini is still refused for --version.
+    const dotVersion = [path.join(OFF_HOME, '.gemini/bin') + '/./agy', ['--version'], SPAWN_OPTIONS];
+    assert.strictEqual(spawnedUnder(dotVersion, { home: OFF_HOME })[0], BIONIC_LINKER,
+        'setting off, ~/.gemini/bin/./agy --version was held back');
+    const verOffCall = [VERSIONED_OFF_AGY, ['--version'], SPAWN_OPTIONS];
+    assert.strictEqual(spawnedUnder(verOffCall, { home: VERSIONED_OFF_HOME })[0], BIONIC_LINKER,
+        'setting off, versioned ~/.gemini/bin/agy --version was held back');
+    const extLinkVersion = [LINK_TO_OFF_ENGINE, ['--version'], SPAWN_OPTIONS];
+    assert.deepStrictEqual(spawnedUnder(extLinkVersion, { home: OFF_HOME }), extLinkVersion,
+        'setting off, an external symlink to agy was allowed through for --version');
+    checked += 3;
+}
+
+// Disallowed hub and listener forms targeting the engine (missing, leading-zero, or out-of-range port,
+// Go flag variants, remote-control mode) are refused rather than started directly without a relay.
+// Non-hub engine invocations and other programs carrying the same flags still run through the linker
+// with their arguments untouched.
+const REFUSED_HUB = [
     ['the engine without a port', HUB_ENGINE, ['--hub', '--app_data_dir=antigravity']],
     ['the engine with port 0', HUB_ENGINE, ['--hub', '--hub-port=0']],
-    ['the engine without --hub', HUB_ENGINE, ['--hub-port=41000']],
+    ['the engine with all-zero port', HUB_ENGINE, ['--hub', '--hub-port=0000']],
+    ['the engine with leading-zero port', HUB_ENGINE, ['--hub', '--hub-port=01000']],
+    ['the engine with port 65536', HUB_ENGINE, ['--hub', '--hub-port=65536']],
     ['the engine with a port past 65535', HUB_ENGINE, ['--hub', '--hub-port=70000']],
+    ['the engine without --hub', HUB_ENGINE, ['--hub-port=41000']],
+    ['single-dash -hub', HUB_ENGINE, ['-hub', '--hub-port=41000']],
+    ['--hub=true', HUB_ENGINE, ['--hub=true', '--hub-port=41000']],
+    ['single-dash -hub-port=', HUB_ENGINE, ['--hub', '-hub-port=41000']],
+    ['space-separated --hub-port', HUB_ENGINE, ['--hub', '--hub-port', '9000']],
+    ['space-separated -hub-port', HUB_ENGINE, ['-hub', '-hub-port', '9000']],
+    ['--remote-control', HUB_ENGINE, ['--remote-control']],
+    ['single-dash -remote-control', HUB_ENGINE, ['-remote-control']],
+    ['--remote-control with value', HUB_ENGINE, ['--remote-control=true']],
+];
+for (const [label, file, args] of REFUSED_HUB) {
+    const call = [file, args, SPAWN_OPTIONS];
+    assert.deepStrictEqual(spawnedUnder(call, { home: HUB_HOME }), call, `${label}: a disallowed listener form was started`);
+    checked++;
+}
+assert.deepStrictEqual(
+    callUnder('execFileSync', [HUB_ENGINE, ['--hub', '--hub-port=01000'], SPAWN_OPTIONS], { home: HUB_HOME }),
+    ['execFileSync', HUB_ENGINE, ['--hub', '--hub-port=01000'], SPAWN_OPTIONS],
+    'execFileSync with a leading-zero hub port was not refused',
+);
+checked++;
+const KEEP = [
+    ['the engine checking its version', HUB_ENGINE, ['--version']],
+    ['the engine showing help', HUB_ENGINE, ['--help']],
     // Inside the data directory, so the loader rule applies and only the hub rule can be told apart by the arguments.
     ['another program in the data directory with the same flags', path.join(REAL_DATA, 'files/home/other-tool'), ['--hub', '--hub-port=41000']],
 ];
@@ -1873,6 +2066,7 @@ for (const [label, file, args] of KEEP) {
     if (!fs.existsSync(file)) put(file, elf64(BIONIC_LINKER));
     const inside = file.startsWith(REAL_DATA);
     const got = spawnedUnder([file, args, SPAWN_OPTIONS], { home: HUB_HOME });
+    assert.strictEqual(got[0], BIONIC_LINKER, `${label}: was not started through the linker`);
     assert.deepStrictEqual(got[1], inside ? [file, ...args] : args, `${label}: the arguments changed`);
     checked++;
 }

@@ -76,17 +76,42 @@ if (process.platform === 'android') {
   var Module = require('module');
   var realLoad = Module._load;
   var JUPYTER_BUNDLE = /[\\/]ms-toolsai\.jupyter-[^\\/]+[\\/]dist[\\/]extension\.node\.js$/;
-  var jupyterOs = null;
+  var PYTHON_BUNDLE = /[\\/]ms-python\.python-[^\\/]+[\\/]out[\\/]client[\\/]extension\.js$/;
+  var linuxOs = null;
   Module._load = function (request, parent) {
-    if ((request === 'os' || request === 'node:os') && parent && JUPYTER_BUNDLE.test(parent.filename || '')) {
-      if (!jupyterOs) {
-        jupyterOs = Object.assign({}, realLoad.apply(this, arguments), {
+    if ((request === 'os' || request === 'node:os') && parent &&
+        (JUPYTER_BUNDLE.test(parent.filename || '') || PYTHON_BUNDLE.test(parent.filename || ''))) {
+      if (!linuxOs) {
+        linuxOs = Object.assign({}, realLoad.apply(this, arguments), {
           platform: function () { return 'linux'; }
         });
       }
-      return jupyterOs;
+      return linuxOs;
     }
     return realLoad.apply(this, arguments);
+  };
+
+  // The Python extension checks process.platform against /^linux/ to set its
+  // OSType, which falls through to OSType.Unknown on Android. Open VSX updates
+  // replace the build-time patched copy with an upstream bundle, so rewrite
+  // that expression at compile time for this bundle alone while leaving
+  // process.platform and every other file untouched.
+  var PYTHON_PLATFORM_TEST = /\/\^linux\/\.test\(([\w$]+(?:\.[\w$]+)*)\)\s*\?\s*([\w$]+(?:\.[\w$]+)*)\.Linux\s*:\s*\2\.Unknown/g;
+  var PYTHON_PLATFORM_PATCHED = /\/\^linux\|\^android\/\.test\(([\w$]+(?:\.[\w$]+)*)\)\s*\?\s*([\w$]+(?:\.[\w$]+)*)\.Linux\s*:\s*\2\.Unknown/;
+  var realCompile = Module.prototype._compile;
+  Module.prototype._compile = function (content, filename) {
+    if (typeof filename === 'string' && PYTHON_BUNDLE.test(filename) && typeof content === 'string') {
+      var rewritten = content.replace(PYTHON_PLATFORM_TEST, function (_, arg, enumRef) {
+        return '/^linux|^android/.test(' + arg + ')?' + enumRef + '.Linux:' + enumRef + '.Unknown';
+      });
+      if (rewritten === content && !PYTHON_PLATFORM_PATCHED.test(content)) {
+        console.warn('[vscodroid] python platform check pattern not found in ' + filename);
+      }
+      var args = Array.prototype.slice.call(arguments);
+      args[0] = rewritten;
+      return realCompile.apply(this, args);
+    }
+    return realCompile.apply(this, arguments);
   };
 
   // The Codex extension ships its engine as a static musl executable, which
@@ -557,9 +582,19 @@ if (process.platform === 'android') {
   // a flag as well as in the environment (ANTIGRAVITY_SERVER_CSRF_TOKEN). It passes only with the value the
   // call's own environment carries: with a current engine the extension builds no such flag, so one that
   // arrives is a folder's, and would choose the token.
-  var HUB_ARGUMENT = /^--(?:hub|hub-port=\d{1,5}|app_data_dir=[\s\S]*|add-dir=[\s\S]*)$/;
+  var HUB_ARGUMENT = /^--(?:hub|hub-port=[1-9]\d{0,4}|app_data_dir=[\s\S]*|add-dir=[\s\S]*)$/;
+  var HUB_LISTENER_FLAG = /^--?(?:hub|hub-port|remote-control)(?:=|$)/;
   var TOKEN_FLAG = '--csrf_token=';
   var TOKEN_ENV = 'ANTIGRAVITY_SERVER_CSRF_TOKEN';
+
+  function canonicalPath(file) {
+    try { return realPathOf(file); } catch (e) { return path.resolve(file); }
+  }
+
+  function isEnginePath(file) {
+    if (!file) return false;
+    return ANTIGRAVITY_ENGINE.test(path.resolve(file)) || ANTIGRAVITY_ENGINE.test(canonicalPath(file));
+  }
 
   /**
    * A port nothing holds on 127.0.0.1 at this moment, other than `not`: bound without listening and let
@@ -593,12 +628,13 @@ if (process.platform === 'android') {
    * runs as an ordinary program would, with no relay and no note.
    */
   function antigravityHub(file, args, env) {
-    if (!ANTIGRAVITY_ENGINE.test(file)) return null;
+    if (!isEnginePath(file)) return null;
     // Node starts an argument that is not a string as its text, so it is read as that text.
     args = args.map(String);
-    if (args.indexOf('--hub') < 0) return null;
+    if (!args.some(function (arg) { return HUB_LISTENER_FLAG.test(arg); })) return null;
+    if (args.indexOf('--hub') < 0) return false;
     var ports = args.filter(function (arg) { return /^--hub-port=/.test(arg); });
-    if (!ports.length) return null;
+    if (!ports.length) return false;
     var token = env && typeof env === 'object' && typeof env[TOKEN_ENV] === 'string' ? env[TOKEN_ENV] : '';
     var seen = {};
     var refused = args.some(function (arg) {
@@ -612,7 +648,7 @@ if (process.platform === 'android') {
     });
     if (refused) return false;
     var front = Number(ports[0].slice('--hub-port='.length));
-    if (front === 0 || front > 65535) return null;
+    if (front === 0 || front > 65535) return false;
     var back = loopbackPortNow(front);
     if (back === null) {
       back = front;
@@ -773,7 +809,7 @@ if (process.platform === 'android') {
       var words = fs.readFileSync('/proc/' + pid + '/cmdline', 'latin1').split('\0');
       // The engine as this file starts it: the linker, the engine's path, then its arguments. A process
       // that only names the engine among its arguments is not it, whatever pid it was given.
-      if (words[0] === LINKER && ANTIGRAVITY_ENGINE.test(words[1] || '') && words.indexOf('--hub-port=' + note.port) >= 0) {
+      if (words[0] === LINKER && isEnginePath(words[1]) && words.indexOf('--hub-port=' + note.port) >= 0) {
         process.kill(pid, 'SIGTERM');
       }
     } catch (e) { /* no note, or that pid is gone */ }
@@ -856,7 +892,37 @@ if (process.platform === 'android') {
     }
     var cwd = cwdOf(tail[0], how);
     if (tail[0] && tail[0].shell) return shellCall(file, rest, tail, cwd);
-    return engineCall(file, rest, how === 'spawn', cwd);
+    return engineCall(file, rest, how === 'spawn', cwd, how === 'spawnSync' || how === 'execFileSync');
+  }
+
+  function argText(value) {
+    try { return '' + value; } catch (e) { return null; }
+  }
+
+  /**
+   * Freezes an argument array containing any non-string element into plain strings once,
+   * preventing stateful objects from returning a different value when Node coerces argv later.
+   * Returns null when every entry is already a string (or not an array). For synchronous and
+   * shell calls, where Node throws on uncoercible values, returns undefined so Node throws;
+   * for async non-shell spawn and execFile, substitutes '' to match ProcessWrap::Spawn.
+   */
+  function freezeArgs(list, throwOnUncoercible) {
+    if (!Array.isArray(list)) return null;
+    var hasNonString = false;
+    for (var i = 0; i < list.length; i++) {
+      if (typeof list[i] !== 'string') { hasNonString = true; break; }
+    }
+    if (!hasNonString) return null;
+    var out = new Array(list.length);
+    for (var j = 0; j < list.length; j++) {
+      var s = argText(list[j]);
+      if (s === null) {
+        if (throwOnUncoercible) return undefined;
+        s = '';
+      }
+      out[j] = s;
+    }
+    return out;
   }
 
   /**
@@ -868,24 +934,40 @@ if (process.platform === 'android') {
    * editor server's start and SIGTERM still do. `cwd` is where the command runs (cwdOf).
    */
   function shellCall(file, rest, tail, cwd) {
+    var frozen = freezeArgs(rest[0], true);
+    if (frozen === undefined) return {};
+    var argList = frozen !== null ? frozen : (Array.isArray(rest[0]) ? rest[0] : []);
     // A backslash before a line break joins the two lines, in a word as anywhere else, so the pair goes first.
-    var text = [file].concat(Array.isArray(rest[0]) ? rest[0] : []).join(' ').replace(/\\\n/g, '');
-    if (!/linker64/.test(text.replace(/["'\\]/g, ''))) return {};
+    var text = [file].concat(argList).join(' ').replace(/\\\n/g, '');
+    if (!/linker64/.test(text.replace(/["'\\]/g, ''))) {
+      return frozen !== null ? { call: [file, frozen].concat(tail) } : {};
+    }
     var named = geminiNamed(text.split(/[\s;&|()<>`]+/), tail[0], true, cwd);
-    if (!named || engineTurnedOn()) return {};
+    if (!named || engineTurnedOn()) {
+      return frozen !== null ? { call: [file, frozen].concat(tail) } : {};
+    }
     endEarlierHub();
     return { call: [named, []].concat(withOptions(tail, { shell: false })) };
   }
 
   /** startCall for a call made without a shell, from `cwd` (cwdOf). */
-  function engineCall(file, rest, relay, cwd) {
+  function engineCall(file, rest, relay, cwd, isSync) {
+    var origFile = file;
+    var origRest = rest;
+    var frozen = freezeArgs(rest[0], isSync);
+    if (frozen === undefined) return {};
+    if (frozen !== null) {
+      rest = [frozen].concat(rest.slice(1));
+      origRest = rest;
+    }
+    var isLinker = path.basename(file) === 'linker64';
     // `linker64 <program> <args>`, the linker written out by the caller, is a start of the program: the same rules
     // decide it, and a refusal is the program started without the linker. A loader option in front of the
     // program (--list) runs nothing.
-    var linked = path.basename(file) === 'linker64' && Array.isArray(rest[0]) && typeof rest[0][0] === 'string' &&
-      rest[0][0] !== '' && rest[0][0].charAt(0) !== '-';
+    var firstArg = isLinker && Array.isArray(rest[0]) && rest[0].length > 0 ? rest[0][0] : null;
+    var linked = firstArg !== null && firstArg !== '' && firstArg.charAt(0) !== '-';
     if (linked) {
-      file = cwd === null ? rest[0][0] : path.resolve(cwd, rest[0][0]);
+      file = cwd === null ? firstArg : path.resolve(cwd, firstArg);
       rest = [rest[0].slice(1)].concat(rest.slice(1));
     }
     // A program named from a directory that cannot be read as a path may be in ~/.gemini.
@@ -895,7 +977,7 @@ if (process.platform === 'android') {
     // The options are the first of what follows, or the second after an argument list, as in throughLinker.
     var options = Array.isArray(rest[0]) || rest[0] == null ? rest[1] : rest[0];
     var hub = on ? antigravityHub(file, args, options && options.env) : null;
-    var versionCheck = ANTIGRAVITY_ENGINE.test(file) && args.length === 1 && args[0] === '--version';
+    var versionCheck = path.isAbsolute(file) && ANTIGRAVITY_ENGINE.test(path.resolve(file)) && args.length === 1 && args[0] === '--version';
     var refused = (gemini && !on && !versionCheck) || hub === false;
     // An engine an earlier extension host started is ended as well, so that turning the setting off and
     // reloading the window leaves none running. The version check that is let through ends it too: the host
@@ -904,6 +986,9 @@ if (process.platform === 'android') {
     if (refused) return linked ? { call: [file].concat(rest) } : {};
     if (!relay) hub = null;
     var call = throughLinker(file, rest, hub ? function () { return hub.args; } : null, cwd);
+    if (!call && isLinker && frozen !== null) {
+      return { call: [origFile].concat(origRest) };
+    }
     return { call: call, hub: call && hub };
   }
 
