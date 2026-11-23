@@ -30,7 +30,7 @@ index 210c0a9c..a04232a6 100644
  		if (typeInput.replacePrevCharCnt || typeInput.replaceNextCharCnt || typeInput.positionDelta) {
  			viewController.compositionType(typeInput.text, typeInput.replacePrevCharCnt, typeInput.replaceNextCharCnt, typeInput.positionDelta);
 +		} else if (this._isPastedByInputMethod(typeInput.text)) {
-+			viewController.paste(typeInput.text, false, null, null);
++			viewController.paste(typeInput.text, false, null, null, false);
  		} else {
  			viewController.type(typeInput.text);
  		}
