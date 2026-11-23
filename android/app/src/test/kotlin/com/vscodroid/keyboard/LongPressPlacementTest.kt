@@ -128,10 +128,10 @@ class LongPressPlacementTest {
         // Dropping either one pins every popup to the top left corner of the
         // window, which is where a popup goes when the offset is computed but
         // never added.
-        // Both far enough from either edge that the clamp does not fire, which
+        // Both far enough from either edge that the clamps do not fire, which
         // is the property being measured here.
-        val atOrigin = LongPressPlacement.above(200, 0, anchorWidth, 300, 120, 8, PopupSpan(0, windowWidth))
-        val moved = LongPressPlacement.above(500, 900, anchorWidth, 300, 120, 8, PopupSpan(0, windowWidth))
+        val atOrigin = LongPressPlacement.above(200, 200, anchorWidth, 300, 120, 8, PopupSpan(0, windowWidth))
+        val moved = LongPressPlacement.above(500, 1100, anchorWidth, 300, 120, 8, PopupSpan(0, windowWidth))
 
         assertEquals(300, moved.x - atOrigin.x)
         assertEquals(900, moved.y - atOrigin.y)
@@ -255,14 +255,103 @@ class LongPressPlacementTest {
     }
 
     @Test
-    fun `from Android 15 the span is the whole window, wherever the row is`() {
-        // There the metrics are the window, and this is the span it always had.
+    fun `from Android 15 the span respects safe horizontal window insets`() {
         for (sdk in listOf(35, 36)) {
             assertEquals(
                 PopupSpan(0, 3120),
-                LongPressPlacement.span(sdk, displayMetricsWidthPx = 3120, rowLeftPx = 144, rowWidthPx = 2976),
+                LongPressPlacement.span(sdk, displayMetricsWidthPx = 3120, rowLeftPx = 0, rowWidthPx = 3120),
+            )
+            assertEquals(
+                PopupSpan(144, 3120),
+                LongPressPlacement.span(
+                    sdk,
+                    displayMetricsWidthPx = 3120,
+                    rowLeftPx = 144,
+                    rowWidthPx = 2976,
+                    leftInsetPx = 144,
+                    rightInsetPx = 0,
+                ),
+            )
+            assertEquals(
+                PopupSpan(144, 3024),
+                LongPressPlacement.span(
+                    sdk,
+                    displayMetricsWidthPx = 3120,
+                    rowLeftPx = 144,
+                    rowWidthPx = 2880,
+                    leftInsetPx = 144,
+                    rightInsetPx = 96,
+                ),
+            )
+            assertEquals(
+                PopupSpan(3120, 3120),
+                LongPressPlacement.span(
+                    sdk,
+                    displayMetricsWidthPx = 3120,
+                    rowLeftPx = 0,
+                    rowWidthPx = 0,
+                    leftInsetPx = 4000,
+                    rightInsetPx = 4000,
+                ),
             )
         }
+    }
+
+    @Test
+    fun `a popup near the top edge is clamped instead of returning a negative y`() {
+        val at = LongPressPlacement.above(
+            anchorLeft = anchorLeft,
+            anchorTop = 40,
+            anchorWidth = anchorWidth,
+            popupWidth = 300,
+            popupHeight = 120,
+            gapPx = 8,
+            span = PopupSpan(0, windowWidth),
+        )
+
+        assertEquals(0, at.y, "the popup top went negative (${at.y}) above the window top edge")
+    }
+
+    @Test
+    fun `a popup near the status bar or top cutout is clamped to the safe top inset`() {
+        val clamped = LongPressPlacement.above(
+            anchorLeft = anchorLeft,
+            anchorTop = 180,
+            anchorWidth = anchorWidth,
+            popupWidth = 300,
+            popupHeight = 120,
+            gapPx = 8,
+            span = PopupSpan(0, windowWidth),
+            topInsetPx = 96,
+        )
+        assertEquals(96, clamped.y, "the popup top intruded into the 96px top safe inset")
+
+        val clear = LongPressPlacement.above(
+            anchorLeft = anchorLeft,
+            anchorTop = 300,
+            anchorWidth = anchorWidth,
+            popupWidth = 300,
+            popupHeight = 120,
+            gapPx = 8,
+            span = PopupSpan(0, windowWidth),
+            topInsetPx = 96,
+        )
+        assertEquals(172, clear.y, "a popup with room below the top inset should not be shifted")
+    }
+
+    @Test
+    fun `the popup uses a transparent window background so rounded corners render cleanly`() {
+        val raw = SourceScan.read("src/main/kotlin/com/vscodroid/keyboard/LongPressPopup.kt")
+        assertTrue(
+            !raw.contains("import android.graphics.drawable.ColorDrawable"),
+            "unused ColorDrawable import is still present in LongPressPopup.kt",
+        )
+        val popup = SourceScan.withoutComments(raw).replace(Regex("\\s+"), " ")
+        assertTrue(
+            popup.contains("setBackgroundDrawable(Color.TRANSPARENT.toDrawable())") &&
+                !popup.contains("setBackgroundDrawable(context.getColor(R.color.colorPopupBg).toDrawable())"),
+            "PopupWindow background is still opaque colorPopupBg instead of Color.TRANSPARENT.toDrawable()",
+        )
     }
 
     @Test
@@ -271,13 +360,16 @@ class LongPressPlacementTest {
             .replace(Regex("\\s+"), " ")
         assertTrue(
             popup.contains("row.getLocationInWindow(rowLocation)") &&
+                popup.contains("ViewCompat.getRootWindowInsets(row)?.getInsets( WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout() )") &&
                 popup.contains(
                     "span = LongPressPlacement.span( sdkInt = Build.VERSION.SDK_INT, " +
                         "displayMetricsWidthPx = context.resources.displayMetrics.widthPixels, " +
-                        "rowLeftPx = rowLocation[0], rowWidthPx = row.width, )",
+                        "rowLeftPx = rowLocation[0], rowWidthPx = row.width, " +
+                        "leftInsetPx = safeInsets?.left ?: 0, rightInsetPx = safeInsets?.right ?: 0, ), " +
+                        "topInsetPx = safeInsets?.top ?: 0,",
                 ),
-            "LongPressPopup no longer keeps the popup inside the span of the row it was " +
-                "given, for the release the device runs",
+            "LongPressPopup no longer keeps the popup inside the safe span and top inset of " +
+                "the row it was given, for the release the device runs",
         )
         val row = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/keyboard/ExtraKeyRow.kt"))
         assertTrue(

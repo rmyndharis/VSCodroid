@@ -1,8 +1,8 @@
 package com.vscodroid.keyboard
 
 import android.content.Context
+import android.graphics.Color
 import android.graphics.Typeface
-import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.util.TypedValue
@@ -12,9 +12,11 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.PopupWindow
-import com.vscodroid.R
 import androidx.appcompat.widget.AppCompatTextView
 import androidx.core.graphics.drawable.toDrawable
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import com.vscodroid.R
 
 class LongPressPopup(
     private val context: Context,
@@ -112,6 +114,9 @@ class LongPressPopup(
         anchor.getLocationInWindow(location)
         val rowLocation = IntArray(2)
         row.getLocationInWindow(rowLocation)
+        val safeInsets = ViewCompat.getRootWindowInsets(row)?.getInsets(
+            WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+        )
         val at = LongPressPlacement.above(
             anchorLeft = location[0],
             anchorTop = location[1],
@@ -124,11 +129,14 @@ class LongPressPopup(
                 displayMetricsWidthPx = context.resources.displayMetrics.widthPixels,
                 rowLeftPx = rowLocation[0],
                 rowWidthPx = row.width,
+                leftInsetPx = safeInsets?.left ?: 0,
+                rightInsetPx = safeInsets?.right ?: 0,
             ),
+            topInsetPx = safeInsets?.top ?: 0,
         )
 
         popup = PopupWindow(container, popupWidth, popupHeight, true).apply {
-            setBackgroundDrawable(context.getColor(R.color.colorPopupBg).toDrawable())
+            setBackgroundDrawable(Color.TRANSPARENT.toDrawable())
             elevation = dpToPx(4).toFloat()
             isOutsideTouchable = true
             // The window takes input focus, which is what makes an alternate
