@@ -150,6 +150,55 @@ function networkAddresses() {
     return addresses.sort((a, b) => Number(b.name.startsWith('wlan')) - Number(a.name.startsWith('wlan')));
 }
 
+/**
+ * The preferred LAN IPv4 address to recommend binding to, or null when no
+ * interface address is available. Prefers a Wi-Fi (`wlan*`) address and falls
+ * back to the first resolved non-internal IPv4 address.
+ */
+function preferredBindAddress(addresses) {
+    if (!Array.isArray(addresses) || addresses.length === 0) return null;
+    const wifi = addresses.find(
+        (entry) => entry && typeof entry.name === 'string' && entry.name.startsWith('wlan') && entry.address,
+    );
+    if (wifi) return wifi.address;
+    const first = addresses.find((entry) => entry && entry.address);
+    return first ? first.address : null;
+}
+
+/**
+ * Quick Pick detail for a localhost-only port. Recommends binding to the
+ * specific LAN IPv4 address when resolved so the server stays off other
+ * interfaces such as VPN or mobile data, and falls back to 0.0.0.0 with an
+ * exposure note only when no interface address is available.
+ */
+function localOnlyDetail(addresses) {
+    const bindHost = preferredBindAddress(addresses);
+    const target = bindHost || '0.0.0.0';
+    const scope = bindHost
+        ? `bound to ${bindHost} (this network only)`
+        : 'bound to 0.0.0.0 (exposes the server on every active network interface)';
+    return (
+        'Answers on localhost alone, so other devices cannot reach it. If this is ' +
+        `your server, restart it ${scope}: Vite \`--host ${target}\`, ` +
+        `Next.js \`-H ${target}\`, Node \`server.listen(port, "${target}")\`, ` +
+        `Python \`--bind ${target}\`.`
+    );
+}
+
+/**
+ * Notice shown when a chosen or manually entered port only answers on localhost.
+ */
+function localOnlyMessage(addresses, port) {
+    const bindHost = preferredBindAddress(addresses);
+    const prefix = port !== undefined
+        ? `Port ${port} answers this device only.`
+        : 'That server only answers this device.';
+    if (bindHost) {
+        return `${prefix} Restart the server bound to ${bindHost} and run this again.`;
+    }
+    return `${prefix} Restart the server bound to 0.0.0.0 (this exposes it on every active network interface) and run this again.`;
+}
+
 /** Ports to probe: the common list, plus anything the user has asked about before. */
 function candidatePorts(extra) {
     const all = new Set(COMMON_DEV_PORTS);
@@ -231,11 +280,7 @@ function activate(context) {
         for (const port of localOnly) {
             items.push({
                 label: `$(circle-slash) port ${port}, this device only`,
-                detail:
-                    'Answers on localhost alone, so other devices cannot reach it. If this is ' +
-                    'your server, restart it bound to every interface: Vite `--host 0.0.0.0`, ' +
-                    'Next.js `-H 0.0.0.0`, Node `server.listen(port, "0.0.0.0")`, ' +
-                    'Python `--bind 0.0.0.0`.',
+                detail: localOnlyDetail(addresses),
                 url: null,
             });
         }
@@ -280,9 +325,7 @@ function activate(context) {
             }
             const answeredFrom = typed.get(port);
             if (answeredFrom.length === 0) {
-                vscode.window.showInformationMessage(
-                    `Port ${port} answers this device only. Restart the server bound to 0.0.0.0 and run this again.`,
-                );
+                vscode.window.showInformationMessage(localOnlyMessage(addresses, port));
                 return;
             }
             const url = `http://${answeredFrom[0]}:${port}`;
@@ -292,9 +335,7 @@ function activate(context) {
         }
 
         if (!picked.url) {
-            vscode.window.showInformationMessage(
-                'That server only answers this device. Restart it bound to 0.0.0.0 and run this again.',
-            );
+            vscode.window.showInformationMessage(localOnlyMessage(addresses));
             return;
         }
 
@@ -313,4 +354,14 @@ function deactivate() {}
 // an address that refuses them, and the opposite hides a server that works. Which
 // of this device's addresses answered is the same question one interface further
 // on, and has the same property.
-module.exports = { activate, deactivate, scanPorts, candidatePorts, COMMON_DEV_PORTS };
+module.exports = {
+    activate,
+    deactivate,
+    scanPorts,
+    candidatePorts,
+    networkAddresses,
+    preferredBindAddress,
+    localOnlyDetail,
+    localOnlyMessage,
+    COMMON_DEV_PORTS,
+};

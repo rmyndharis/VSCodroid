@@ -26,6 +26,7 @@
 
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const Module = require('module');
 
@@ -189,6 +190,70 @@ function defaultsAreSane() {
     }
 }
 
+function bindGuidancePrefersSpecificLanAddress() {
+    assert.strictEqual(typeof ext.preferredBindAddress, 'function', 'preferredBindAddress helper must be exported');
+    assert.strictEqual(typeof ext.localOnlyDetail, 'function', 'localOnlyDetail helper must be exported');
+    assert.strictEqual(typeof ext.localOnlyMessage, 'function', 'localOnlyMessage helper must be exported');
+
+    const withWifi = [
+        { name: 'tun0', address: VPN },
+        { name: 'wlan0', address: LAN },
+    ];
+    assert.strictEqual(ext.preferredBindAddress(withWifi), LAN, 'wlan* address should be preferred over VPN');
+    assert.strictEqual(
+        ext.preferredBindAddress([{ name: 'eth0', address: '192.168.10.4' }]),
+        '192.168.10.4',
+        'non-wlan LAN IPv4 address should be used when no wlan* interface exists',
+    );
+    assert.strictEqual(ext.preferredBindAddress([]), null, 'empty address list yields null');
+
+    const lanDetail = ext.localOnlyDetail(withWifi);
+    assert.ok(lanDetail.includes(LAN), `localOnlyDetail should recommend ${LAN}: ${lanDetail}`);
+    assert.ok(!lanDetail.includes('0.0.0.0'), `localOnlyDetail should not advise 0.0.0.0 when LAN IP is known: ${lanDetail}`);
+
+    const lanPickedMsg = ext.localOnlyMessage(withWifi);
+    assert.ok(lanPickedMsg.includes(LAN) && !lanPickedMsg.includes('0.0.0.0'),
+        `localOnlyMessage should recommend ${LAN}: ${lanPickedMsg}`);
+
+    const lanTypedMsg = ext.localOnlyMessage(withWifi, 5173);
+    assert.ok(lanTypedMsg.includes('5173') && lanTypedMsg.includes(LAN) && !lanTypedMsg.includes('0.0.0.0'),
+        `localOnlyMessage for typed port should recommend ${LAN}: ${lanTypedMsg}`);
+
+    const fallbackDetail = ext.localOnlyDetail([]);
+    assert.ok(fallbackDetail.includes('0.0.0.0') && /every active network interface/i.test(fallbackDetail),
+        `fallback localOnlyDetail must mention 0.0.0.0 and exposure scope: ${fallbackDetail}`);
+
+    const fallbackMsg = ext.localOnlyMessage([], 3000);
+    assert.ok(fallbackMsg.includes('0.0.0.0') && /every active network interface/i.test(fallbackMsg),
+        `fallback localOnlyMessage must mention 0.0.0.0 and exposure scope: ${fallbackMsg}`);
+
+    // networkAddresses() puts wlan* first and activate() routes all localhost-only guidance through the helpers.
+    const realIfaces = os.networkInterfaces;
+    try {
+        os.networkInterfaces = () => ({
+            lo: [{ family: 'IPv4', internal: true, address: '127.0.0.1' }],
+            tun0: [{ family: 'IPv4', internal: false, address: VPN }],
+            wlan0: [{ family: 'IPv4', internal: false, address: LAN }],
+        });
+        const resolved = ext.networkAddresses();
+        assert.deepStrictEqual(
+            resolved.map((e) => `${e.name}:${e.address}`),
+            [`wlan0:${LAN}`, `tun0:${VPN}`],
+            'networkAddresses() should place wlan* before non-wifi interfaces',
+        );
+        assert.strictEqual(ext.preferredBindAddress(resolved), LAN);
+    } finally {
+        os.networkInterfaces = realIfaces;
+    }
+
+    const src = fs.readFileSync(extensionPath(), 'utf8');
+    const activateBody = src.slice(src.indexOf('function activate('), src.indexOf('function deactivate('));
+    assert.ok(activateBody.includes('localOnlyDetail(addresses)'), 'activate() must use localOnlyDetail(addresses)');
+    assert.ok(activateBody.includes('localOnlyMessage(addresses, port)'), 'activate() must use localOnlyMessage(addresses, port)');
+    assert.ok(activateBody.includes('localOnlyMessage(addresses)'), 'activate() must use localOnlyMessage(addresses)');
+    assert.ok(!activateBody.includes('0.0.0.0'), 'activate() should not hardcode 0.0.0.0 outside the fallback helpers');
+}
+
 async function main() {
     await reachableWhenBothAnswer();
     await localOnlyWhenLanRefuses();
@@ -199,11 +264,13 @@ async function main() {
     await noLanAddressMeansLocalOnly();
     candidatesMergeAndSort();
     defaultsAreSane();
+    bindGuidancePrefersSpecificLanAddress();
 
     say(
         `  ok     reachable/local-only split holds over ${ext.COMMON_DEV_PORTS.length} default ports, ` +
             'each address is judged on its own probe, a server bound only to the LAN ' +
-            'address is found, and a port is dropped only once every probe has refused\n',
+            'address is found, a port is dropped only once every probe has refused, and ' +
+            'local-only bind guidance prefers the resolved LAN address over 0.0.0.0\n',
     );
 }
 

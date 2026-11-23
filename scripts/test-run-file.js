@@ -12,17 +12,17 @@ const extension = path.join(newestExtensionDir('vscodroid.vscodroid-saf-bridge-'
 const source = fs.readFileSync(extension, 'utf8');
 const home = '/data/user/0/com.vscodroid/files/home';
 
-async function run(code, { language = 'javascript', file = '/work/a.js', dirty = false,
+async function run(code, { language = 'javascript', file = '/work/a.js', scheme = 'file', dirty = false,
     saved = true, schedule, read, choose, save, installed = '[{"name":"java"},{"name":"ruby"},{"name":"cpp"}]', readError } = {}) {
     const commands = new Map();
     const events = [];
     class Uri {
-        constructor(value) { this.path = value; }
-        static joinPath(base, ...parts) { return new Uri(path.posix.join(base.path, ...parts)); }
-        toString() { return `file://${this.path}`; }
+        constructor(value, uriScheme = 'file') { this.path = value; this.scheme = uriScheme; }
+        static joinPath(base, ...parts) { return new Uri(path.posix.join(base.path, ...parts), base.scheme); }
+        toString() { return `${this.scheme}://${this.path}`; }
     }
     const document = {
-        uri: new Uri(file), languageId: language, isUntitled: false, isDirty: dirty,
+        uri: new Uri(file, scheme), languageId: language, isUntitled: false, isDirty: dirty,
         async save() { events.push('save'); if (save) return save(this); this.isDirty = !saved; return saved; },
     };
     const disposable = () => ({ dispose() {} });
@@ -94,6 +94,18 @@ async function checks(code) {
     assert.ok(unknown.some((event) => event[0] === 'line'));
     const absent = await run(code, { language: 'ruby', readError: { code: 'FileNotFound' } });
     assert.ok(!absent.some((event) => event[0] === 'terminal'));
+    // Local files arrive under 'file' or 'vscode-remote' (the web workbench's remote server on this device).
+    const remoteFile = await run(code, { file: '/work/remote.js', scheme: 'vscode-remote' });
+    assert.ok(remoteFile.some((event) => event[0] === 'line' && event[1] === "node '/work/remote.js'"));
+    // Non-disk virtual schemes must be refused with a clear message before saving or opening a terminal.
+    for (const virtualScheme of ['git', 'vscode-userdata', 'vscode-vfs', 'output', 'inmemory', 'http']) {
+        const blocked = await run(code, { file: '/work/a.js', scheme: virtualScheme, dirty: true });
+        assert.ok(blocked.some((event) => event[0] === 'info'), 'virtual scheme was not refused with a message: ' + virtualScheme);
+        assert.ok(
+            !blocked.some((event) => event[0] === 'terminal' || event[0] === 'line' || event === 'save'),
+            'virtual scheme reached save or terminal: ' + virtualScheme,
+        );
+    }
 }
 
 function deferred() {
@@ -155,13 +167,14 @@ async function orderingChecks(code) {
         assert.equal(terminal.disposed, true);
         assert.deepEqual(lines(events), ["node '/work/a.js'", "node '/work/b.js'"]);
     } });
-    for (const invalid of ['unsupported', 'untitled']) {
+    for (const invalid of ['unsupported', 'untitled', 'virtual']) {
         const gate = deferred();
         await run(code, { save: async document => { await gate.promise; document.isDirty = false; return true; },
             schedule: async ({ commands, document, events, vscode, Uri }) => {
                 const old = commands.get('vscodroid.runFile')();
                 const other = another(document, Uri, 'other.js', invalid === 'unsupported' ? 'plaintext' : 'javascript');
                 other.isUntitled = invalid === 'untitled';
+                if (invalid === 'virtual') other.uri = new Uri('/work/other.js', 'git');
                 vscode.window.activeTextEditor = { document: other };
                 await commands.get('vscodroid.runFile')();
                 gate.resolve(); await old;
@@ -197,6 +210,12 @@ async function orderingChecks(code) {
 }
 
 (async () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(path.dirname(extension), 'package.json'), 'utf8'));
+    for (const menu of ['editor/title/run', 'commandPalette']) {
+        const entry = manifest.contributes.menus[menu].find((item) => item.command === 'vscodroid.runFile');
+        assert.ok(entry && /resourceScheme\s*=~\s*\/\^\(file\|vscode-remote\)\$\//.test(entry.when),
+            `${menu} when clause must gate on file or vscode-remote scheme: ${entry && entry.when}`);
+    }
     await checks(source);
     await orderingChecks(source);
     for (const [before, after] of [

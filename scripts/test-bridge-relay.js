@@ -1911,6 +1911,104 @@ async function main() {
     state.delete(DECLINED); state.delete(CARRIED);
     infoChoice = null; directories = new Map(); tabGroups = { all: [], activeTabGroup: undefined };
 
+    // Isolated lifecycle checks for the bridge BroadcastChannel request map:
+    // prototype property names in replies must not throw, replies must cancel
+    // their timeout handle, and deactivate() must reject pending requests and
+    // cancel their timers before closing the channel.
+    {
+        const extPath = bridgeExtension();
+        const extSrc = fs.readFileSync(extPath, 'utf8');
+        const activeTimers = new Map();
+        let nextTimerId = 1;
+        let channelInstance = null;
+        let posted = [];
+        let closed = false;
+        const localCommands = new Map();
+        const localWarnings = [];
+        const localErrors = [];
+        class FakeBroadcastChannel {
+            constructor(name) {
+                this.name = name;
+                this.onmessage = null;
+                channelInstance = this;
+            }
+            postMessage(msg) { posted.push(msg); }
+            close() { closed = true; }
+        }
+        const localVscode = {
+            commands: {
+                registerCommand: (id, fn) => { localCommands.set(id, fn); return { dispose() {} }; },
+                executeCommand: async () => {},
+            },
+            window: {
+                showWarningMessage: (m) => { localWarnings.push(m); },
+                showErrorMessage: (m) => { localErrors.push(m); },
+                showInformationMessage: async () => undefined,
+                createStatusBarItem: () => ({ show() {}, hide() {}, dispose() {} }),
+                terminals: [],
+                tabGroups: { all: [], activeTabGroup: undefined },
+            },
+            workspace: {
+                workspaceFolders: [],
+                textDocuments: [],
+                notebookDocuments: [],
+                onDidChangeWorkspaceFolders: () => ({ dispose() {} }),
+                onDidCloseTextDocument: () => ({ dispose() {} }),
+            },
+            Uri: class {},
+            FileType: { Unknown: 0, File: 1, Directory: 2, SymbolicLink: 64 },
+            TabInputText: class {},
+        };
+        const sandbox = {
+            require: (name) => (name === 'vscode' ? localVscode : require(name)),
+            module: { exports: {} },
+            BroadcastChannel: FakeBroadcastChannel,
+            setTimeout: (fn, ms) => {
+                const handle = nextTimerId++;
+                activeTimers.set(handle, { fn, ms });
+                return handle;
+            },
+            clearTimeout: (handle) => { activeTimers.delete(handle); },
+            TextDecoder,
+        };
+        vm.runInNewContext(extSrc, sandbox, { filename: extPath });
+        sandbox.module.exports.activate({
+            subscriptions: [],
+            globalState: { get: (_, fallback) => fallback, update: async () => {} },
+        });
+
+        // 1. A normal reply must clear its timeout handle immediately.
+        const openPromise = localCommands.get('vscodroid.openFolderFromDevice')();
+        assert.strictEqual(posted.length, 1, 'openFolderFromDevice did not post to BroadcastChannel');
+        assert.strictEqual(activeTimers.size, 1, 'pending bridge command did not register a timeout timer');
+        channelInstance.onmessage({ data: { id: posted[0].id, ok: true, data: '' } });
+        await openPromise;
+        assert.strictEqual(activeTimers.size, 0, 'timeout timer was not cleared after bridge reply arrived');
+
+        // 2. Replies carrying Object.prototype property names must be ignored cleanly.
+        for (const protoId of ['toString', 'constructor', '__proto__', 'valueOf']) {
+            assert.doesNotThrow(
+                () => channelInstance.onmessage({ data: { id: protoId, ok: true, data: '' } }),
+                `BroadcastChannel reply with id=${protoId} threw on prototype lookup`,
+            );
+        }
+
+        // 3. deactivate() must clear all pending timers, reject pending commands, and close the channel.
+        posted = [];
+        localErrors.length = 0;
+        const aboutPromise = localCommands.get('vscodroid.about')();
+        assert.strictEqual(posted.length, 1, 'about did not post to BroadcastChannel');
+        assert.strictEqual(activeTimers.size, 1, 'pending about command did not register a timeout timer');
+        sandbox.module.exports.deactivate();
+        await aboutPromise;
+        assert.strictEqual(activeTimers.size, 0, 'deactivate() left pending timeout timers active');
+        assert.strictEqual(closed, true, 'deactivate() did not close BroadcastChannel');
+        assert.ok(
+            localErrors.length === 1 && /Extension deactivated/.test(localErrors[0]),
+            'deactivate() did not reject pending bridge promise with Extension deactivated: ' + JSON.stringify(localErrors),
+        );
+    }
+
     const unused = coverage.unused.length
         ? `; ${coverage.unused.length} relay branches have no sender (${coverage.unused.join(', ')})`
         : '';

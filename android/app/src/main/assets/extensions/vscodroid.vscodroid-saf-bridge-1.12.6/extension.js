@@ -36,8 +36,8 @@ const vscode = require('vscode');
 /** @type {BroadcastChannel | undefined} */
 let _channel;
 
-/** @type {Record<string, {resolve: Function, reject: Function}>} */
-const _pending = {};
+/** @type {Map<string, {resolve: Function, reject: Function, timer?: ReturnType<typeof setTimeout>}>} */
+const _pending = new Map();
 
 /**
  * Returns the shared BroadcastChannel, creating it on first call.
@@ -48,9 +48,10 @@ function getChannel() {
     _channel = new BroadcastChannel('vscodroid-bridge');
     _channel.onmessage = (e) => {
         const { id, ok, data, error } = e.data || {};
-        const cb = _pending[id];
+        const cb = _pending.get(id);
         if (!cb) return;
-        delete _pending[id];
+        _pending.delete(id);
+        clearTimeout(cb.timer);
         if (ok) cb.resolve(data);
         else cb.reject(new Error(error || 'Bridge error'));
     };
@@ -79,19 +80,22 @@ const DISK_WALK_TIMEOUT_MS = 120000;
 function sendBridgeCommand(cmd, extra = {}, timeoutMs = BRIDGE_TIMEOUT_MS) {
     return new Promise((resolve, reject) => {
         const id = Math.random().toString(36).slice(2);
-        _pending[id] = { resolve, reject };
+        /** @type {{resolve: Function, reject: Function, timer?: ReturnType<typeof setTimeout>}} */
+        const entry = { resolve, reject };
+        _pending.set(id, entry);
 
         try {
             getChannel().postMessage({ cmd, id, ...extra });
         } catch (/** @type {*} */ err) {
-            delete _pending[id];
+            _pending.delete(id);
             reject(err);
             return;
         }
 
-        setTimeout(() => {
-            if (_pending[id]) {
-                delete _pending[id];
+        if (!_pending.has(id)) return;
+
+        entry.timer = setTimeout(() => {
+            if (_pending.delete(id)) {
                 const error = new Error('Bridge timeout: is the app running on Android?');
                 error.name = 'BridgeTimeoutError';
                 reject(error);
@@ -907,6 +911,10 @@ function activate(context) {
             vscode.window.showInformationMessage('Save the file before running it.');
             return;
         }
+        if (document.uri.scheme !== 'file' && document.uri.scheme !== 'vscode-remote') {
+            vscode.window.showInformationMessage('Only files saved on disk can be run.');
+            return;
+        }
         // A control character reaches the terminal as a keystroke: Ctrl-U and Ctrl-C act on the line
         // being typed, so the rest of the name would run as a command of its own, and quoting
         // cannot stop that. Such a name is refused before anything is saved or started.
@@ -976,6 +984,11 @@ function activate(context) {
 
 function deactivate() {
     actionGeneration++;
+    for (const entry of _pending.values()) {
+        clearTimeout(entry.timer);
+        entry.reject(new Error('Extension deactivated'));
+    }
+    _pending.clear();
     if (_channel) {
         _channel.close();
         _channel = undefined;

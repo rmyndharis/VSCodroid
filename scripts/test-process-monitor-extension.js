@@ -805,6 +805,53 @@ assert.ok(
     'host\'s item: ' + JSON.stringify(statusItemArgs[0]),
 );
 
+// Zero-block filesystems (or virtual filesystems reporting totalMB === 0) must not
+// produce NaN% in the storage tooltip.
+{
+    const tmp = fs.mkdtempSync(path.join(BASE_TMP, 'vscodroid-statfs-'));
+    const originalStatfs = fs.statfsSync;
+    const originalItem = vscodeStub.window.createStatusBarItem;
+    const originalTmp = process.env.TMPDIR;
+    const originalHome = process.env.HOME;
+    const renderTooltip = (statResult) => {
+        let item;
+        fs.statfsSync = () => statResult;
+        vscodeStub.window.createStatusBarItem = (...args) => (item = originalItem(...args));
+        process.env.TMPDIR = tmp;
+        process.env.HOME = tmp;
+        fs.writeFileSync(path.join(tmp, 'vscodroid-processes.json'), JSON.stringify(snapshot(3, 1, 0)));
+        delete require.cache[require.resolve(EXTENSION)];
+        const extension = require(EXTENSION);
+        extension.activate({ subscriptions: [] });
+        extension.deactivate();
+        return item.tooltip;
+    };
+    try {
+        const zeroBlocks = renderTooltip({ blocks: 0, bavail: 0, bsize: 4096 });
+        assert.ok(
+            !zeroBlocks.includes('NaN'),
+            `zero-block statfs produced NaN in tooltip: ${zeroBlocks}`,
+        );
+        assert.match(
+            zeroBlocks, /Storage: 0 MB free \(0% used\)/,
+            `zero-block statfs did not format storage usage as 0%: ${zeroBlocks}`,
+        );
+        const normal = renderTooltip({ blocks: 100000, bavail: 25000, bsize: 4096 });
+        assert.match(
+            normal, /Storage: 102 MB free \(75% used\)/,
+            `positive-block statfs did not format storage usage accurately: ${normal}`,
+        );
+    } finally {
+        fs.statfsSync = originalStatfs;
+        vscodeStub.window.createStatusBarItem = originalItem;
+        if (originalTmp === undefined) delete process.env.TMPDIR;
+        else process.env.TMPDIR = originalTmp;
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+        fs.rmSync(tmp, { recursive: true, force: true });
+    }
+}
+
 // The Antigravity engine is off until the person turns on a machine setting, and the extension's own
 // failure with the setting off is a spawn error that names no setting. So the offer is made when the
 // extension is installed and the setting is off, once per window, also when the extension is installed
