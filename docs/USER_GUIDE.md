@@ -431,7 +431,7 @@ git --version     # Git 2.x
 bash --version    # Bash 5.3.x
 tmux -V           # tmux 3.x
 make --version    # GNU Make 4.4.x
-ssh -V            # OpenSSH 10.x client
+ssh -V            # OpenSSH 10.x (ssh, scp, sftp, ssh-keygen)
 rg --version      # ripgrep (powers VS Code search)
 ```
 
@@ -815,12 +815,13 @@ Host myserver
     User deploy
 ```
 
-The terminal's `ssh` reads this file because `ssh` there is a shell function that adds
-`-F ~/.ssh/config`. The bundled OpenSSH looks for `~` in a place that does not exist on
-Android, so without the function it would miss the config, the default key and `known_hosts`,
-and print `Failed to add the host to the list of known hosts`. A `-F` you type yourself takes
-over, and `command ssh` runs the bare program. In a config, name any other key by its absolute
-path: run `echo ~/.ssh/work_key` and use what it prints.
+In the terminal, `ssh`, `scp`, and `sftp` read this file because each is a shell function
+that adds `-F ~/.ssh/config`. The bundled OpenSSH looks for `~` in a place that does not
+exist on Android, so without those functions it would miss the config, the default key and
+`known_hosts`, and print `Failed to add the host to the list of known hosts`. A `-F` you
+type yourself takes over, and `command ssh` (or `command scp`, `command sftp`) runs the
+bare program. In a config, name any other key by its absolute path: run
+`echo ~/.ssh/work_key` and use what it prints.
 
 git reads the same file. When `~/.ssh/config` cannot be read, for example because it is a link
 into a folder that is gone, git gives ssh the defaults above instead, so a clone, fetch or push
@@ -839,11 +840,12 @@ For key authentication, generate a key as described above and append the output 
 `cat ~/.ssh/id_ed25519.pub` to `~/.ssh/authorized_keys` on the server. The first connection
 saves the server's host key in `~/.ssh/known_hosts`, and later ones check it.
 
-`scp` and `sftp` are not bundled. To copy one file, pipe it through `ssh`:
+`scp` and `sftp` are bundled for copying files and transferring directories:
 
 ```bash
-ssh myserver 'cat /path/on/server/file' > file
-ssh myserver 'cat > /path/on/server/file' < file
+scp file myserver:/path/on/server/
+scp myserver:/path/on/server/file .
+sftp myserver
 ```
 
 ### Editing Files on a Server

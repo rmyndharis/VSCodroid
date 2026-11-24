@@ -1295,7 +1295,7 @@ val verifyBundledBinaries = tasks.register<Exec>("verifyBundledBinaries") {
 //   * Environment.kt names libnode.so, libbash.so, libgit.so, libldmusl.so and
 //     libexec-trampoline.so directly;
 //   * FirstRunSetup.setupToolSymlinks() maps bash, git, node, python3, python,
-//     rg, tmux, make, ssh and ssh-keygen onto their lib*.so, and
+//     rg, tmux, make, ssh, ssh-keygen, scp and sftp onto their lib*.so, and
 //     setupGitCore() maps every git-remote-<protocol> onto libgit-remote-curl.so.
 // A missing one is not a degraded feature: the symlink resolves to nothing, and
 // a PATH lookup for the command fails with ENOENT, which on a device is
@@ -1321,7 +1321,9 @@ val requiredJniLibs = listOf(
     "libnode.so",
     "libpython.so",
     "libripgrep.so",
+    "libscp.so",
     "libseccomp-shim.so",
+    "libsftp.so",
     "libssh.so",
     "libssh-keygen.so",
     "libtmux.so",
@@ -1341,7 +1343,9 @@ val jniLibProducers = mapOf(
     "libnode.so" to "scripts/download-node.sh",
     "libpython.so" to "scripts/download-python.sh",
     "libripgrep.so" to "scripts/fetch-vscode-oss.sh",
+    "libscp.so" to "scripts/download-termux-tools.sh",
     "libseccomp-shim.so" to "scripts/build-claude-shim.sh",
+    "libsftp.so" to "scripts/download-termux-tools.sh",
     "libssh.so" to "scripts/download-termux-tools.sh",
     "libssh-keygen.so" to "scripts/download-termux-tools.sh",
     "libtmux.so" to "scripts/download-termux-tools.sh",
@@ -1420,6 +1424,32 @@ val verifyBundledShellPaths = tasks.register<Exec>("verifyBundledShellPaths") {
             "\n" +
             "In CI this most likely means a cached jniLibs restored a binary\n" +
             "placed before that rewrite existed: bust the assets cache."
+    )
+}
+
+val verifyBundledSshProgramPaths = tasks.register<Exec>("verifyBundledSshProgramPaths") {
+    group = "verification"
+    description = "Checks no bundled binary names an app-data directory as its ssh program."
+
+    val jniLibsDir = appJniLibsDir
+    val stubCeiling = jniLibsStubCeiling
+
+    workingDir = rootProject.projectDir.parentFile
+    commandLine(
+        "python3", "scripts/patch-ssh-program.py",
+        "--check", "android/app/src/main/jniLibs/arm64-v8a",
+    )
+
+    onlyIf { PackagingChecks.jniLibsHoldsRealBinary(jniLibsDir, stubCeiling) }
+
+    failOnExit(
+        "A bundled OpenSSH helper names an ssh executable inside an app\n" +
+            "data directory. The FAIL line above names the file. Because the\n" +
+            "path contains '/', execvp() skips PATH and fails with ENOENT on\n" +
+            "a device.\n" +
+            "\n" +
+            "Re-run scripts/download-termux-tools.sh, which rewrites\n" +
+            "_PATH_SSH_PROGRAM to PATH lookup before verifying ELFs."
     )
 }
 
@@ -1749,9 +1779,10 @@ val verifyCppPackShellPaths = tasks.register<Exec>("verifyCppPackShellPaths") {
 // the state the check exists to make impossible.
 val packagingGates = listOf(
     checkPatchFingerprints, verifyServerTree, verifyBundledBinaries,
-    verifyRequiredBinaries, verifyBundledShellPaths, verifyRubyPackShellPaths,
-    verifyCppPackShellPaths, verifyNativeAddons, verifyPackagedAlignment,
-    checkPackOverlap, verifyPythonPlatform, verifyVenvHome, verifyNlsParity,
+    verifyRequiredBinaries, verifyBundledShellPaths, verifyBundledSshProgramPaths,
+    verifyRubyPackShellPaths, verifyCppPackShellPaths, verifyNativeAddons,
+    verifyPackagedAlignment, checkPackOverlap, verifyPythonPlatform,
+    verifyVenvHome, verifyNlsParity,
 )
 
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }

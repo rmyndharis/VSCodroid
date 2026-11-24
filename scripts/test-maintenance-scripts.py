@@ -2169,6 +2169,58 @@ class BuildAndDeviceScriptsTest(unittest.TestCase):
         self.assertIn(b"pre\0/system/bin/sh\0", after)
         self.assertIn(b"/data/data/com.termux/files/usr/bin/shred\0post", after)
 
+    # -- patch-ssh-program.py --------------------------------------------
+
+    def test_ssh_program_paths_rewrite_in_place_and_check_refuses_app_data_paths(self):
+        script = SOURCE / "scripts/patch-ssh-program.py"
+        termux_ssh = b"/data/data/com.termux/files/usr/bin/ssh"
+        expected_new = b"ssh" + b"\0" * (len(termux_ssh) - len(b"ssh") + 1)
+
+        # --check admits clean files and longer sibling binary names, refuses app-data ssh paths
+        cases = {
+            "siblings-only": (
+                b"pre\0/data/data/com.termux/files/usr/bin/ssh-keygen\0"
+                b"/data/data/com.termux/files/usr/bin/sshd\0post",
+                0,
+            ),
+            "termux-ssh": (b"pre\0" + termux_ssh + b"\0post", 1),
+            "user-zero": (b"pre\0/data/user/0/com.vscodroid/files/usr/bin/ssh\0post", 1),
+            "user-de": (b"pre\0/data/user_de/0/com.example/files/usr/bin/ssh\0post", 1),
+        }
+        for label, (body, status) in cases.items():
+            with self.subTest(label=label):
+                directory = self.root / f"ssh-{label}"
+                directory.mkdir()
+                (directory / "libsample.so").write_bytes(body)
+                result = run([sys.executable, "-I", str(script), "--check", str(directory)], self.root)
+                self.assertEqual(status, result["status"], result)
+
+        # Rewrite preserves length, pads with NUL, leaves ssh-keygen untouched, and is idempotent
+        blob = b"pre\0" + termux_ssh + b"\0/data/data/com.termux/files/usr/bin/ssh-keygen\0post"
+        target = self.root / "libscp.so"
+        target.write_bytes(blob)
+        result = run([sys.executable, "-I", str(script), str(target)], self.root)
+        self.assertEqual(0, result["status"], result)
+        after = target.read_bytes()
+        self.assertEqual(len(blob), len(after))
+        self.assertIn(b"pre\0" + expected_new, after)
+        self.assertIn(b"/data/data/com.termux/files/usr/bin/ssh-keygen\0post", after)
+
+        rerun = run([sys.executable, "-I", str(script), str(target)], self.root)
+        self.assertEqual(0, rerun["status"], rerun)
+        self.assertEqual(after, target.read_bytes())
+
+        # Fails closed on zero matches (neither old path nor patched marker) and multiple matches
+        missing = self.root / "libnone.so"
+        missing.write_bytes(b"pre\0ssh-keygen\0post")
+        missing_res = run([sys.executable, "-I", str(script), str(missing)], self.root)
+        self.assertEqual(1, missing_res["status"], missing_res)
+
+        dup = self.root / "libdup.so"
+        dup.write_bytes(termux_ssh + b"\0mid\0" + termux_ssh + b"\0")
+        dup_res = run([sys.executable, "-I", str(script), str(dup)], self.root)
+        self.assertEqual(1, dup_res["status"], dup_res)
+
     # -- docker/codeoss-build.Dockerfile ---------------------------------
 
     def test_codeoss_build_image_pins_its_base_and_the_node_it_runs(self):

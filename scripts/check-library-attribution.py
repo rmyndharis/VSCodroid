@@ -194,6 +194,8 @@ LIBRARIES = {
     "libtmux.so": ("tmux", "ISC"),
     "libssh.so": ("OpenSSH", "BSD"),
     "libssh-keygen.so": ("OpenSSH", "BSD"),
+    "libscp.so": ("OpenSSH", "BSD"),
+    "libsftp.so": ("OpenSSH", "BSD"),
     "libldmusl.so": ("musl libc", "MIT"),
     "libandroid-support.so": ("libandroid-support", "Apache-2.0, MIT"),
     "libandroid-glob.so": ("libandroid-glob", "BSD-3-Clause"),

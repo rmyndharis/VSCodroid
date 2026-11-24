@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Bundled OpenSSH `scp` and `sftp` alongside `ssh` and `ssh-keygen`, configured to use `~/.ssh/config` and resolve the bundled `ssh` binary through `PATH`.
+
 ## [1.11.0] - 2026-11-24
 
 ### Added

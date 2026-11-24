@@ -21,7 +21,7 @@ not a candidate. Its absolute path is not knowable here (it carries the Android
 user id), and `sh` under it already resolves through PATH, which ends in
 /system/bin (see Environment.buildProcessEnvironment).
 
-Measured on the shipped set: six of the binaries in jniLibs name it (fifteen
+Measured on the shipped set: seven of the binaries in jniLibs name it (seventeen
 are required there today; `requiredJniLibs` in android/app/build.gradle.kts is
 the list), and the environment rescues none of them fully:
 
@@ -33,6 +33,8 @@ the list), and the environment rescues none of them fully:
     code, so neither is covered by fixing the other;
   * ssh compiles it as _PATH_BSHELL, which runs ProxyCommand and LocalCommand.
     Neither is configured by default here, so this one is latent;
+  * sftp compiles it as _PATH_BSHELL, which runs its `!` local shell escape;
+  * sftp compiles it as _PATH_BSHELL, which runs its `!` local shell escape;
   * tmux reads $SHELL for `default-shell` and this app exports it, so the
     constant is the fallback taken when that lookup fails checkshell() rather
     than the usual path;

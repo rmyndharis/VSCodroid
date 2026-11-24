@@ -104,7 +104,7 @@ flowchart TD
       GATEWAY["EditorGateway (app process lifetime)<br/>127.0.0.1:PORT"]
     end
 
-    LIBS["Native Libraries (jniLibs)<br/>libnode.so, libpython.so, libgit.so, libgit-remote-curl.so,<br/>libbash.so, libtmux.so, libmake.so, libripgrep.so,<br/>libssh.so, libssh-keygen.so, libldmusl.so, libexec-trampoline.so,<br/>libclaude-launch.so, libseccomp-shim.so, libmove-noreplace.so"]
+    LIBS["Native Libraries (jniLibs)<br/>libnode.so, libpython.so, libgit.so, libgit-remote-curl.so,<br/>libbash.so, libtmux.so, libmake.so, libripgrep.so,<br/>libssh.so, libssh-keygen.so, libscp.so, libsftp.so, libldmusl.so, libexec-trampoline.so,<br/>libclaude-launch.so, libseccomp-shim.so, libmove-noreplace.so"]
   end
 
   EXTRAROW --> WEBVIEW
@@ -464,7 +464,7 @@ flowchart TD
   D --> D5["libtmux.so"]
   D --> D6["libmake.so"]
   D --> D7["libripgrep.so"]
-  D --> D8["libssh.so, libssh-keygen.so"]
+  D --> D8["libssh.so, libssh-keygen.so, libscp.so, libsftp.so"]
   D --> D9["libldmusl.so (musl loader)"]
   D --> D10["libexec-trampoline.so (starts a toolchain command)"]
   D --> D11["libclaude-launch.so, libseccomp-shim.so (start the Claude Code CLI)"]

@@ -25,7 +25,7 @@
 #
 # It needs a device or emulator, and nothing runs it automatically. That is a
 # measured conclusion rather than an omission: GitHub's arm64 runners expose no
-# /dev/kvm, and twelve of the fifteen bundled binaries ask for
+# /dev/kvm, and fourteen of the seventeen bundled binaries ask for
 # /system/bin/linker64, so executing them anywhere needs an Android system image
 # -- 2.1 GB, inside a partitioned disk image. The issue tracker carries the
 # evidence and the options.
@@ -1021,6 +1021,9 @@ check_symlink "git"     "libgit.so"
 check_symlink "python3" "libpython.so"
 check_symlink "rg"      "libripgrep.so"
 check_symlink "ssh"     "libssh.so"
+check_symlink "ssh-keygen" "libssh-keygen.so"
+check_symlink "scp"     "libscp.so"
+check_symlink "sftp"    "libsftp.so"
 
 # The bundle git reads. A certificate count checks availability, not whether
 # every platform trust decision was preserved. Raw system files include roots
@@ -1245,6 +1248,22 @@ elif [ -z "$HELPER_OUT" ]; then
     fail "git_remote_helper" "no output at all (rc=$HELPER_RC); the helper did not run"
 else
     pass "git_remote_helper (executed, rc=$HELPER_RC)"
+fi
+
+# Test 19e: scp executes bundled ssh via PATH (not Termux's hardcoded prefix)
+SCP_PROBE=$(run_tool "files/usr/bin/scp" -v -P 1 -oBatchMode=yes -oConnectTimeout=1 127.0.0.1:/dev/null /dev/null 2>&1 || true)
+if echo "$SCP_PROBE" | grep -q "Executing: program ssh " && echo "$SCP_PROBE" | grep -q "OpenSSH_"; then
+    pass "tool_scp (executes bundled ssh via PATH)"
+else
+    fail "tool_scp" "scp did not resolve bundled ssh via PATH: $SCP_PROBE"
+fi
+
+# Test 19f: sftp loads libedit.so and executes bundled ssh via PATH
+SFTP_PROBE=$(run_tool "files/usr/bin/sftp" -b /dev/null -v -P 1 -oBatchMode=yes -oConnectTimeout=1 127.0.0.1 2>&1 || true)
+if echo "$SFTP_PROBE" | grep -q "OpenSSH_" && ! echo "$SFTP_PROBE" | grep -q "/data/data/com.termux/files/usr/bin/ssh"; then
+    pass "tool_sftp (executes bundled ssh via PATH)"
+else
+    fail "tool_sftp" "sftp did not resolve bundled ssh via PATH: $SFTP_PROBE"
 fi
 
 # ═══════════════════════════════════════════════════════════════════
