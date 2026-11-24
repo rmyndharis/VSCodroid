@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-11-24
+
 ### Added
 
 - The process monitor warns, naming the file, when Settings shows **Vscodroid > Antigravity: Run Engine** on but the settings file keeps it off: an error VS Code works around, over 1 MiB, or nesting past 64 levels.
@@ -1684,7 +1686,8 @@ This release represents the cumulative work across milestones M0 through M5, bri
 - Health check polling for server readiness
 - Android intent handling for "Open with VSCodroid"
 
-[Unreleased]: https://github.com/rmyndharis/VSCodroid/compare/v1.10.1...HEAD
+[Unreleased]: https://github.com/rmyndharis/VSCodroid/compare/v1.11.0...HEAD
+[1.11.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.10.1...v1.11.0
 [1.10.1]: https://github.com/rmyndharis/VSCodroid/compare/v1.10.0...v1.10.1
 [1.10.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.8.0...v1.9.0
