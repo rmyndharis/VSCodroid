@@ -50,6 +50,8 @@ class SshShellFunctionTest {
     private lateinit var bashrc: File
 
     private val header = "# ssh: shell function."
+    private val scpHeader = "# scp: shell function."
+    private val sftpHeader = "# sftp: shell function."
 
     @BeforeEach
     fun setUp() {
@@ -91,8 +93,27 @@ class SshShellFunctionTest {
 
         val written = bashrc.readText()
         assertEquals(1, written.windowed(header.length).count { it == header }, "the block was appended more than once")
+        assertEquals(1, written.windowed(scpHeader.length).count { it == scpHeader }, "the scp block was appended more than once")
+        assertEquals(1, written.windowed(sftpHeader.length).count { it == sftpHeader }, "the sftp block was appended more than once")
         assertTrue(written.contains("ssh() {"), "the function is not there")
+        assertTrue(written.contains("scp() {"), "the scp function is not there")
+        assertTrue(written.contains("sftp() {"), "the sftp function is not there")
         assertTrue(written.startsWith("alias ll='ls -la'\n# a note of mine\n"), "the user's lines were disturbed")
+    }
+
+    @Test
+    fun `an existing bashrc with ssh alone receives scp and sftp on upgrade`() {
+        bundleNpm()
+        bashrc.writeText(
+            "$header existing\nssh() {\n    command ssh \"\$@\"\n}\n",
+        )
+
+        FirstRunSetup(context).createNpmWrappers()
+
+        val written = bashrc.readText()
+        assertEquals(1, written.windowed(header.length).count { it == header }, "ssh block was duplicated on upgrade")
+        assertEquals(1, written.windowed(scpHeader.length).count { it == scpHeader }, "scp block was not added on upgrade")
+        assertEquals(1, written.windowed(sftpHeader.length).count { it == sftpHeader }, "sftp block was not added on upgrade")
     }
 
     /** Whoever wrote an `ssh` keeps it: bash takes the last definition, so appending ours would replace it. */
@@ -104,7 +125,38 @@ class SshShellFunctionTest {
 
         FirstRunSetup(context).createNpmWrappers()
 
-        assertFalse(bashrc.readText().contains(header), "a block was appended after the user's own ssh: $definition")
+        val written = bashrc.readText()
+        assertFalse(written.contains(header), "a block was appended after the user's own ssh: $definition")
+        assertTrue(written.contains(scpHeader), "user's ssh blocked scp wrapper unnecessarily")
+        assertTrue(written.contains(sftpHeader), "user's ssh blocked sftp wrapper unnecessarily")
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["scp() { echo mine; }", "scp () { echo mine; }", "function scp { echo mine; }", "function scp() { echo mine; }"])
+    fun `a user scp function is not replaced`(definition: String) {
+        bundleNpm()
+        bashrc.writeText("$definition\n")
+
+        FirstRunSetup(context).createNpmWrappers()
+
+        val written = bashrc.readText()
+        assertFalse(written.contains(scpHeader), "scp block appended after user's own scp: $definition")
+        assertTrue(written.contains(header), "user's scp blocked ssh wrapper")
+        assertTrue(written.contains(sftpHeader), "user's scp blocked sftp wrapper")
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["sftp() { echo mine; }", "sftp () { echo mine; }", "function sftp { echo mine; }", "function sftp() { echo mine; }"])
+    fun `a user sftp function is not replaced`(definition: String) {
+        bundleNpm()
+        bashrc.writeText("$definition\n")
+
+        FirstRunSetup(context).createNpmWrappers()
+
+        val written = bashrc.readText()
+        assertFalse(written.contains(sftpHeader), "sftp block appended after user's own sftp: $definition")
+        assertTrue(written.contains(header), "user's sftp blocked ssh wrapper")
+        assertTrue(written.contains(scpHeader), "user's sftp blocked scp wrapper")
     }
 
     @Test
@@ -113,17 +165,21 @@ class SshShellFunctionTest {
 
         val written = File(Environment.getBashEnvPath(context)).readText()
         assertTrue(written.contains("ssh() {"), "a task, a script or an extension's shell has no ssh function")
-        assertTrue(written.contains("-F \"\$HOME/.ssh/config\""), "the function does not name the app's config")
+        assertTrue(written.contains("scp() {"), "a task, a script or an extension's shell has no scp function")
+        assertTrue(written.contains("sftp() {"), "a task, a script or an extension's shell has no sftp function")
+        assertTrue(written.contains("-F \"\$HOME/.ssh/config\""), "the functions do not name the app's config")
     }
 
     private val home get() = File(filesDir, "home")
 
-    /** An `ssh` that only prints its arguments, found first on PATH, so the function's `command ssh` reaches it. */
+    /** Stand-in `ssh`, `scp`, and `sftp` that only print their arguments, found first on PATH. */
     private fun standInSsh(): File {
         val bin = File(filesDir, "fakebin").apply { mkdirs() }
-        val ssh = File(bin, "ssh")
-        ssh.writeText("#!/bin/sh\nprintf 'ARGS:%s\\n' \"\$*\"\n")
-        assertTrue(ssh.setExecutable(true), "the stand-in cannot be executed")
+        for (cmd in listOf("ssh", "scp", "sftp")) {
+            val binary = File(bin, cmd)
+            binary.writeText("#!/bin/sh\nprintf 'ARGS:%s\\n' \"\$*\"\n")
+            assertTrue(binary.setExecutable(true), "the stand-in $cmd cannot be executed")
+        }
         return bin
     }
 
@@ -179,6 +235,20 @@ class SshShellFunctionTest {
             listOf("ARGS:-F ${home.path}/.ssh/config -F /tmp/other host true"),
             out,
             "the user's -F does not come after the function's, so it would be the one ignored",
+        )
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["ssh", "scp", "sftp"])
+    fun `bash runs ssh, scp, and sftp consistently with and without config`(cmd: String) {
+        assertEquals(listOf("ARGS:host"), runBash("$cmd host"))
+
+        File(home, ".ssh").mkdirs()
+        File(home, ".ssh/config").writeText("Host srv\n    HostName 10.0.2.2\n")
+        assertEquals(listOf("ARGS:-F ${home.path}/.ssh/config srv"), runBash("$cmd srv"))
+        assertEquals(
+            listOf("ARGS:-F ${home.path}/.ssh/config -F /tmp/other srv"),
+            runBash("$cmd -F /tmp/other srv"),
         )
     }
 }

@@ -135,7 +135,7 @@ RENAMED = {
     "bash": ("libbash.so",),
     "git": ("libgit.so", "libgit-remote-curl.so"),
     "make": ("libmake.so",),
-    "openssh": ("libssh.so", "libssh-keygen.so"),
+    "openssh": ("libssh.so", "libssh-keygen.so", "libscp.so", "libsftp.so"),
     "tmux": ("libtmux.so",),
     # download-node.sh names its package in a bare variable rather than in a
     # REQUIRED_PACKAGES array, so this row is also what puts it in the subject

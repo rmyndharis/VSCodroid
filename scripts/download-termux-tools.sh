@@ -227,23 +227,46 @@ else
     exit 1
 fi
 
+# scp
+SCP_BIN="extracted/openssh/data/data/com.termux/files/usr/bin/scp"
+if [ -f "$SCP_BIN" ]; then
+    cp "$SCP_BIN" "$JNILIBS_DIR/libscp.so"
+    echo "  libscp.so ($(du -sh "$JNILIBS_DIR/libscp.so" | cut -f1))"
+else
+    echo "  ERROR: scp binary not found at $SCP_BIN"
+    find "extracted/openssh" -name "scp" -type f 2>/dev/null || true
+    exit 1
+fi
+
+# sftp
+SFTP_BIN="extracted/openssh/data/data/com.termux/files/usr/bin/sftp"
+if [ -f "$SFTP_BIN" ]; then
+    cp "$SFTP_BIN" "$JNILIBS_DIR/libsftp.so"
+    echo "  libsftp.so ($(du -sh "$JNILIBS_DIR/libsftp.so" | cut -f1))"
+else
+    echo "  ERROR: sftp binary not found at $SFTP_BIN"
+    find "extracted/openssh" -name "sftp" -type f 2>/dev/null || true
+    exit 1
+fi
+
 # --- Step 4b: Point the compiled-in default shell at one this app can run ---
 #
-# Termux builds these for its own prefix, so each of the five carries
+# Termux builds these for its own prefix, so each of the six carries
 # /data/data/com.termux/files/usr/bin/sh as a compiled-in constant. That
 # directory belongs to another application and this one cannot reach it, so
 # every make recipe line, every git hook, `!` alias, clean/smudge filter and
-# pager, and ssh's ProxyCommand run a shell that is not there. $SHELL does not
-# rescue them: make ignores it by design and git does not consult it for
-# run-command at all.
+# pager, ssh's ProxyCommand and sftp's `!` local shell escape run a shell that
+# is not there. $SHELL does not rescue them: make ignores it by design and git
+# does not consult it for run-command at all.
 #
 # Before step 8's ELF gate, so what that gate examines is what ships. The
 # rewrite is length-preserving and fails closed: if a package changes where its
 # default shell comes from and the string stops matching, the build stops here
 # rather than shipping a binary whose shell nobody has established.
 #
-# Not libbash.so and not libssh-keygen.so: neither carries the path, and handing
-# them to the script would fail for the right reason at the wrong file.
+# Not libbash.so, libssh-keygen.so, or libscp.so: none of them carries the
+# path, and handing them to the script would fail for the right reason at the
+# wrong file.
 echo ""
 echo "Pointing compiled-in default shells at /system/bin/sh..."
 python3 "$SCRIPT_DIR/patch-default-shell.py" \
@@ -251,7 +274,20 @@ python3 "$SCRIPT_DIR/patch-default-shell.py" \
     "$JNILIBS_DIR/libgit-remote-curl.so" \
     "$JNILIBS_DIR/libtmux.so" \
     "$JNILIBS_DIR/libmake.so" \
-    "$JNILIBS_DIR/libssh.so"
+    "$JNILIBS_DIR/libssh.so" \
+    "$JNILIBS_DIR/libsftp.so"
+
+# --- Step 4c: Point OpenSSH helper ssh program path at PATH lookup ---
+#
+# Termux compiles /data/data/com.termux/files/usr/bin/ssh (_PATH_SSH_PROGRAM)
+# into scp and sftp, which pass it to execvp(). Because that string contains
+# '/', execvp() skips PATH and fails with ENOENT on Android. Replacing it
+# in place with NUL-padded 'ssh' makes execvp() resolve usr/bin/ssh on PATH.
+echo ""
+echo "Pointing compiled-in ssh program paths at PATH lookup..."
+python3 "$SCRIPT_DIR/patch-ssh-program.py" \
+    "$JNILIBS_DIR/libscp.so" \
+    "$JNILIBS_DIR/libsftp.so"
 
 # --- Step 5: Place shared libraries in assets/usr/lib/ ---
 echo ""
@@ -656,7 +692,7 @@ echo "=== Verifying placed binaries ==="
 # verifying earlier would be verifying a directory still being built.
 
 JNILIBS_BINARIES=(libbash.so libgit.so libgit-remote-curl.so libtmux.so libmake.so
-                  libssh.so libssh-keygen.so)
+                  libssh.so libssh-keygen.so libscp.so libsftp.so)
 
 verify_failures=0
 verify_checked=0

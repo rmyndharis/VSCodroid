@@ -515,7 +515,7 @@ files that carry terms of their own changes.
 | [nghttp3](https://github.com/ngtcp2/nghttp3) | MIT | no | `libnghttp3.so` |
 | [ngtcp2](https://github.com/ngtcp2/ngtcp2) | MIT | no | `libngtcp2.so`, `libngtcp2_crypto_ossl.so` |
 | [Node.js](https://nodejs.org) | MIT | no | `libnode.so` |
-| [OpenSSH](https://www.openssh.com) | BSD | no | `libssh-keygen.so`, `libssh.so` |
+| [OpenSSH](https://www.openssh.com) | BSD | no | `libscp.so`, `libsftp.so`, `libssh-keygen.so`, `libssh.so` |
 | [OpenSSL](https://www.openssl.org) | Apache-2.0 | no | `libcrypto.so.3`, `libssl.so.3` |
 | [PCRE2](https://www.pcre.org) | BSD-3-Clause | no | `libpcre2-8.so` |
 | [Python](https://www.python.org) | PSF-2.0 | no | `libpython.so`, `libpython3.14.so` |
@@ -817,4 +817,4 @@ For questions about licenses, trademarks, or legal notices:
 
 ---
 
-_This document was last updated on November 22, 2026._
+_This document was last updated on November 24, 2026._
