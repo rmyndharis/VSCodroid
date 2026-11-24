@@ -2221,6 +2221,11 @@ class BuildAndDeviceScriptsTest(unittest.TestCase):
         dup_res = run([sys.executable, "-I", str(script), str(dup)], self.root)
         self.assertEqual(1, dup_res["status"], dup_res)
 
+        mixed = self.root / "libmixed.so"
+        mixed.write_bytes(expected_new + b"mid\0/data/user/0/com.vscodroid/files/usr/bin/ssh\0post")
+        mixed_res = run([sys.executable, "-I", str(script), str(mixed)], self.root)
+        self.assertEqual(1, mixed_res["status"], mixed_res)
+
     # -- docker/codeoss-build.Dockerfile ---------------------------------
 
     def test_codeoss_build_image_pins_its_base_and_the_node_it_runs(self):

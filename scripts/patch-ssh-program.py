@@ -69,6 +69,11 @@ def patch(path: pathlib.Path) -> bool:
 
     found = len(TERMUX_SSH_RE.findall(data))
     if found == 0:
+        unrunnable = carries_unrunnable_ssh_program(data)
+        if unrunnable:
+            print(f"  ERROR: {path} names unrunnable app-data ssh path {unrunnable.decode()}",
+                  file=sys.stderr)
+            return False
         if NEW in data:
             print(f"  {path.name}: ssh program -> ssh (PATH lookup, already applied)")
             return True

@@ -104,7 +104,7 @@ verbatim; `docs/LEGAL_NOTICES.md` records which text covers which component.
 | libc++ | NCSA | ICU, Node.js, and the on-demand C/C++ toolchain |
 | libcrypt | BSD-2-Clause | bundled tool in its own right |
 | libcurl | MIT | Git |
-| libedit | BSD-3-Clause | bundled tool in its own right |
+| libedit | BSD-3-Clause | OpenSSH |
 | libevent | BSD-3-Clause | tmux |
 | libffi | MIT | Python, and the on-demand C/C++ toolchain |
 | libiconv | LGPL-2.1, GPL-3.0 | Bash, Git, and the on-demand C/C++ toolchain through libxml2 |
