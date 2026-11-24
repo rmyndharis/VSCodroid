@@ -1773,8 +1773,10 @@ $header The bundled OpenSSH finds ~ at the prefix Termux compiled in, not at thi
 # app's home, so run bare it never reads ~/.ssh/config, looks for the key in a path
 # that is not there and cannot save known_hosts. The app's config names every path
 # absolutely, so read it explicitly. A -F typed after this one wins; with no config
-# the bare command runs, because -F on a missing file is an error.
-$command() {
+# the bare command runs, because -F on a missing file is an error. Using the
+# `function` keyword avoids interactive bash alias expansion turning a user's
+# `alias $command=...` into a syntax error in .bashrc.
+function $command {
     if [ -r "${'$'}HOME/.ssh/config" ]; then
         command $command -F "${'$'}HOME/.ssh/config" "${'$'}@"
     else

@@ -5,7 +5,7 @@
  *
  * Node's "open a browser" helpers spawn the LITERAL command `xdg-open` on Linux,
  * and Android counts as Linux to every one of them. Nothing on this device's PATH
- * answered to that name: `setupToolSymlinks` puts ten commands in `usr/bin` and
+ * answered to that name: `setupToolSymlinks` puts twelve commands in `usr/bin` and
  * none of them opens anything. So a preview server printed its own abort line and
  * the user copied the address into a browser by hand.
  *

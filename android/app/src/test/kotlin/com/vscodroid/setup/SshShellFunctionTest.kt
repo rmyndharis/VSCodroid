@@ -95,9 +95,9 @@ class SshShellFunctionTest {
         assertEquals(1, written.windowed(header.length).count { it == header }, "the block was appended more than once")
         assertEquals(1, written.windowed(scpHeader.length).count { it == scpHeader }, "the scp block was appended more than once")
         assertEquals(1, written.windowed(sftpHeader.length).count { it == sftpHeader }, "the sftp block was appended more than once")
-        assertTrue(written.contains("ssh() {"), "the function is not there")
-        assertTrue(written.contains("scp() {"), "the scp function is not there")
-        assertTrue(written.contains("sftp() {"), "the sftp function is not there")
+        assertTrue(written.contains("function ssh {"), "the function is not there")
+        assertTrue(written.contains("function scp {"), "the scp function is not there")
+        assertTrue(written.contains("function sftp {"), "the sftp function is not there")
         assertTrue(written.startsWith("alias ll='ls -la'\n# a note of mine\n"), "the user's lines were disturbed")
     }
 
@@ -164,9 +164,9 @@ class SshShellFunctionTest {
         FirstRunSetup(context).createBashEnvFile()
 
         val written = File(Environment.getBashEnvPath(context)).readText()
-        assertTrue(written.contains("ssh() {"), "a task, a script or an extension's shell has no ssh function")
-        assertTrue(written.contains("scp() {"), "a task, a script or an extension's shell has no scp function")
-        assertTrue(written.contains("sftp() {"), "a task, a script or an extension's shell has no sftp function")
+        assertTrue(written.contains("function ssh {"), "a task, a script or an extension's shell has no ssh function")
+        assertTrue(written.contains("function scp {"), "a task, a script or an extension's shell has no scp function")
+        assertTrue(written.contains("function sftp {"), "a task, a script or an extension's shell has no sftp function")
         assertTrue(written.contains("-F \"\$HOME/.ssh/config\""), "the functions do not name the app's config")
     }
 
@@ -249,6 +249,45 @@ class SshShellFunctionTest {
         assertEquals(
             listOf("ARGS:-F ${home.path}/.ssh/config -F /tmp/other srv"),
             runBash("$cmd -F /tmp/other srv"),
+        )
+    }
+
+    /** Interactive bash expands aliases on `cmd() {` headers, breaking .bashrc; `function cmd {` does not. */
+    @Test
+    fun `user aliases for ssh, scp, and sftp do not break interactive bashrc sourcing`() {
+        val bash = File("/bin/bash")
+        assumeTrue(bash.canExecute(), "no /bin/bash on this host to ask")
+        bundleNpm()
+        File(home, ".ssh").mkdirs()
+        File(home, ".ssh/config").writeText("Host srv\n    HostName 10.0.2.2\n")
+        bashrc.writeText(
+            """
+            alias ssh='ssh -v'
+            alias scp='scp -r'
+            alias sftp='sftp -C'
+            """.trimIndent() + "\n",
+        )
+        FirstRunSetup(context).createNpmWrappers()
+
+        val builder = ProcessBuilder(
+            "/bin/bash", "--rcfile", bashrc.path, "-i", "-c",
+            "ssh srv; scp a srv:b; sftp srv",
+        ).directory(filesDir).redirectErrorStream(true)
+        builder.environment().apply {
+            put("HOME", home.path)
+            put("PATH", standInSsh().path + File.pathSeparator + (get("PATH") ?: "/usr/bin:/bin"))
+        }
+        val (status, out) = finishTestProcess(builder.start())
+        assertEquals(0, status, "interactive bash failed with: $out")
+        assertFalse(out.contains("syntax error"), "wrapper header expanded user alias into syntax error: $out")
+        val lines = out.lines().map { it.trim() }.filter { it.startsWith("ARGS:") }
+        assertEquals(
+            listOf(
+                "ARGS:-F ${home.path}/.ssh/config -v srv",
+                "ARGS:-F ${home.path}/.ssh/config -r a srv:b",
+                "ARGS:-F ${home.path}/.ssh/config -C srv",
+            ),
+            lines,
         )
     }
 }
